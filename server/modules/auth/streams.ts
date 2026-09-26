@@ -150,7 +150,7 @@ function openStream(ctx: Context, reply: FastifyReply, spec: Omit<Stream, "res" 
 
 function memberStream(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
   const member: Member = requireMember(ctx, req);
-  const token = req.cookies[sessionCookie(ctx)];
+  const token = req.cookies[sessionCookie(ctx, req)];
   const tab = tabOf(req);
   const renew = () => {
     if (tab) ctx.transfers.renewTab(tab, member);

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { api, call, type Link } from "../../api";
 import { date, until } from "../../lib/format";
 import { notifyChange } from "../../lib/live";
-import { keepOptions } from "../../lib/options";
+import { days, keepOptions } from "../../lib/options";
+import { useSession } from "../../app/session";
 import { Button, Modal, Segmented, toast, useCloseModal } from "../../components/ui";
 import { LinkOptionsFields, linkChoiceProblem, type LinkChoice } from "../../components/LinkOptions";
 import { errorToast } from "./actions";
@@ -20,6 +21,7 @@ export function KeepDialog({ item, onClose }: { item: Kept; onClose: () => void 
 }
 function KeepBody({ item }: { item: Kept }) {
   const close = useCloseModal();
+  const { me } = useSession();
   // Only the date is stored, and a new choice counts from now, so a dated item has no chosen
   // duration to show: its date is shown instead, and any choice replaces it.
   const current = item.expires ? null : 0;
@@ -37,7 +39,7 @@ function KeepBody({ item }: { item: Kept }) {
           : value
             ? `Moves to Trash on ${date(Date.now() + value * DAY)}, counted from now.`
             : "Kept until you delete it."}{" "}
-        Items in Trash are deleted forever after 30 days, and their links stop working.
+        Items in Trash are deleted forever after {days(me.user.trashDays)}, and their links stop working.
       </p>
       <Segmented label="Keep for" value={value ?? -1} options={options} onChange={setValue} />
       <div className="row end">

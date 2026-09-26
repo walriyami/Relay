@@ -1,8 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { api } from "../shared/api.ts";
 import { DEFAULTS } from "../shared/model.ts";
 import { addressKey } from "../server/modules/auth/limits.ts";
@@ -21,29 +18,6 @@ const status = async (promise: Promise<unknown>) => {
 
 /** Activity shows every group until the member turns one off. */
 const ALL_ACTIVITY = { received: true, requests: true, links: true, security: true, members: true };
-
-test("the first start creates the administrator, and refuses to start without a usable password", async () => {
-  const instance = await start();
-  try {
-    const client = await admin(instance);
-    const me = await client.call(api.session.get);
-    assert.equal(me.user.username, "admin");
-    assert.equal(me.user.admin, true);
-    assert.equal(me.device.name, "Test browser");
-    assert.deepEqual(me.prefs, { linkDays: 7, autoCopyLink: true, activity: ALL_ACTIVITY });
-    assert.deepEqual(me.usage, { used: 0, reserved: 0, quota: me.user.quota });
-  } finally {
-    await instance.close();
-  }
-  for (const adminPassword of [undefined, "short"]) {
-    const root = await mkdtemp(join(tmpdir(), "relay-test-"));
-    try {
-      await assert.rejects(start({ adminPassword }, root), /RELAY_ADMIN_PASSWORD/);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }
-});
 
 test("password sign-in and sign-out", async () => {
   const instance = await start();

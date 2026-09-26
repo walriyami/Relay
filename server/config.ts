@@ -3,10 +3,11 @@ import { resolve } from "node:path";
 export type Config = {
   /** Data directory: relay.sqlite, blobs/, uploads/, thumbnails/, secret.key. */
   root: string;
-  /** Public origin, e.g. https://relay.example.com. Unsafe requests must come from it. */
-  origin: string;
-  /** Bootstrap password for the first administrator; used only when there are no users. */
-  adminPassword?: string;
+  /**
+   * Pins the public origin, e.g. https://relay.example.com: unsafe requests must come from it and
+   * passkeys belong to it. Unset, Relay serves whatever host it is opened at (see lib/auth.ts).
+   */
+  origin?: string;
   /** Link/request token key. Without it a key is generated in <root>/secret.key. */
   secret?: string;
   trustProxy: string[];
@@ -20,11 +21,9 @@ export type Config = {
 };
 
 export function configFromEnv(env = process.env): Config {
-  const port = Number(env.PORT || 3090);
   return {
     root: resolve(env.RELAY_DATA || ".data"),
-    origin: env.RELAY_ORIGIN || `http://localhost:${port}`,
-    adminPassword: env.RELAY_ADMIN_PASSWORD,
+    origin: env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined,
     secret: env.RELAY_SECRET,
     trustProxy: (env.RELAY_TRUST_PROXY || "127.0.0.1,::1").split(",").map((s) => s.trim()),
     tabLeaseMs: 5 * 60_000,
@@ -32,4 +31,17 @@ export function configFromEnv(env = process.env): Config {
     logger: true,
     serveClient: true,
   };
+}
+
+/** "https://relay.example.com" exactly as browsers send it in Origin, or a startup error naming the variable. */
+function pinnedOrigin(value: string) {
+  let url: URL | undefined;
+  try {
+    url = new URL(value);
+  } catch {
+    // Reported below.
+  }
+  if (!url || !/^https?:$/.test(url.protocol) || url.pathname !== "/" || url.search || url.hash || url.username)
+    throw new Error(`RELAY_ORIGIN must be a web address such as https://relay.example.com, with no path.`);
+  return url.origin;
 }

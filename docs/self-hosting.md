@@ -22,25 +22,16 @@ Relay runs as one container with one data volume. This guide covers a production
 ```sh
 git clone https://github.com/walriyami/Relay.git relay
 cd relay
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```sh
-RELAY_ORIGIN=https://relay.example.com
-RELAY_ADMIN_PASSWORD=<a long password for the first account>
-RELAY_SECRET=<output of: openssl rand -base64 48>
-```
-
-Then build and start it:
-
-```sh
 docker compose up -d --build
 docker compose ps        # wait for "healthy"
 ```
 
+No settings are needed. Every [setting](#configuration) is optional; to change one, copy `.env.example` to `.env` and edit it.
+
 Relay now listens on `127.0.0.1:3090`, which only this machine can reach. Put a reverse proxy in front of it to share it.
+
+> [!IMPORTANT]
+> Until setup is finished, whoever opens Relay first creates the administrator account. Finish setup as soon as Relay is reachable: open it on this machine, through your HTTPS address as soon as the proxy is up, or on a remote server through an SSH tunnel (`ssh -L 3090:localhost:3090 your-server`, then open http://localhost:3090).
 
 The container runs as an unprivileged user with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Only the data volume is writable.
 
@@ -51,10 +42,10 @@ The container runs as an unprivileged user with a read-only root filesystem, no 
 
 Any reverse proxy works. It must:
 
-1. Serve Relay on the exact origin in `RELAY_ORIGIN`. Unsafe requests from any other origin are rejected.
+1. Pass the original `Host` header through, as proxies do by default. Unsafe requests must come from the address they were sent to. If you set `RELAY_ORIGIN`, serve Relay on exactly that origin.
 2. Allow request bodies of at least **32 MiB**. Uploads arrive in 8 MiB chunks.
 3. Not buffer responses. Live updates use Server-Sent Events, and downloads stream.
-4. Send `X-Forwarded-For` from an address listed in `RELAY_TRUST_PROXY`, so rate limits see real client addresses.
+4. Send `X-Forwarded-For` and `X-Forwarded-Proto` from an address listed in `RELAY_TRUST_PROXY`, so rate limits see real client addresses and cookies are marked secure.
 
 ### Caddy
 
@@ -112,38 +103,38 @@ Tunnels such as Cloudflare Tunnel work the same way. Route the public host name 
 
 Relay reads its configuration from environment variables. With Docker Compose, set them in `.env`.
 
-| Variable               | Default                 | Description                                                                                                                                        |
-| ---------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RELAY_ORIGIN`         | `http://localhost:3090` | The exact URL people open, without a trailing slash. Passkeys require a host name, not an IP address.                                              |
-| `RELAY_ADMIN_PASSWORD` | none                    | Password for the first account, `admin`. Only read while the database has no accounts. Required by `compose.yaml`.                                 |
-| `RELAY_SECRET`         | generated               | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`. Required by `compose.yaml`. |
-| `RELAY_TRUST_PROXY`    | `127.0.0.1,::1`         | Comma-separated addresses or CIDR ranges of trusted proxies. `compose.yaml` adds `172.16.0.0/12`.                                                  |
-| `RELAY_DATA`           | `.data`                 | Data directory. Set to `/data` in the image.                                                                                                       |
-| `HOST`                 | `127.0.0.1`             | Listen address. Set to `0.0.0.0` in the image.                                                                                                     |
-| `PORT`                 | `3090`                  | Listen port.                                                                                                                                       |
+| Variable            | Default         | Description                                                                                                                                                                                                 |
+| ------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_ORIGIN`      | none            | Pins the exact URL people open, without a trailing slash. Unset, Relay answers at whatever address it's opened at. Set it once Relay has a permanent address. Passkeys need a host name, not an IP address. |
+| `RELAY_SECRET`      | generated       | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`.                                                                                      |
+| `RELAY_TRUST_PROXY` | `127.0.0.1,::1` | Comma-separated addresses or CIDR ranges of trusted proxies. `compose.yaml` adds `172.16.0.0/12`.                                                                                                           |
+| `RELAY_DATA`        | `.data`         | Data directory. Set to `/data` in the image.                                                                                                                                                                |
+| `HOST`              | `127.0.0.1`     | Listen address. Set to `0.0.0.0` in the image.                                                                                                                                                              |
+| `PORT`              | `3090`          | Listen port.                                                                                                                                                                                                |
 
 An invalid value stops Relay at startup with a message naming the variable.
 
 > [!WARNING]
 > Keep `RELAY_SECRET` with your data. Moving the data to a different key keeps every file, but all existing share and request links stop working.
 
-## First sign-in and members
+## First start and members
 
-1. Open your origin and sign in as `admin` with `RELAY_ADMIN_PASSWORD`. Change the password in **Settings**.
-2. Invite people from **Admin → Invitations**. Each invitation is a one-time link, QR code or short code.
+1. Open Relay. Setup asks for your username and password, which makes you the administrator. Then it asks what everyone gets: space per person, how long uploads stay, how long links work, how long Trash keeps things, and the total for everyone. It suggests a total from the free disk space.
+2. Setup offers to create your first invitation. Invite more people any time from **Admin → Invitations**. Each invitation is a one-time link, QR code or short code.
 3. Members can add a passkey in **Settings**. They can also sign in on a new device with a code shown on a device where they're already signed in.
 
-Administrators set each member's storage quota, the service capacity and the length of short codes (four or six digits). They cannot see members' files, links or activity.
+Administrators can change any member's name, username, storage, upload, link and Trash settings, set a new password or suspend them. They also set what new members start with, the service capacity and the length of short codes (four or six digits). They cannot see members' files, links or activity.
 
 ## Limits and storage
 
-| Setting            | Default                               | Where to change it     |
-| ------------------ | ------------------------------------- | ---------------------- |
-| Storage per member | 100 GiB                               | Admin → Members        |
-| Service capacity   | 500 GiB                               | Admin → Limits         |
-| Trash retention    | 30 days                               | Fixed                  |
-| New link lifetime  | 7 days                                | Each member's settings |
-| Unfinished uploads | While the tab is open, then 5 minutes | Fixed                  |
+| Setting            | Default                               | Where to change it                                    |
+| ------------------ | ------------------------------------- | ----------------------------------------------------- |
+| Storage per member | 100 GiB                               | Admin → New members, or per member in Admin → Members |
+| Service capacity   | Most of the free disk space           | Admin → Limits                                        |
+| Upload retention   | Forever                               | Admin, and each member's Settings                     |
+| Trash retention    | 30 days                               | Admin, and each member's Settings                     |
+| New link lifetime  | 7 days                                | Admin, and each member's Settings                     |
+| Unfinished uploads | While the tab is open, then 5 minutes | Fixed                                                 |
 
 Relay stores each unique file once, identified by its SHA-256 hash. Quotas still count everything a member saved. Relay accepts an upload only when the member's quota, the service capacity and the actual free disk space all allow it. It always keeps 256 MiB of disk free.
 
@@ -165,11 +156,7 @@ Relay needs Node.js 24 or later and a local filesystem.
 ```sh
 npm ci
 npm run build
-RELAY_ORIGIN=https://relay.example.com \
-RELAY_ADMIN_PASSWORD='a-long-first-start-password' \
-RELAY_SECRET="$(openssl rand -base64 48)" \
-RELAY_DATA=/var/lib/relay \
-npm start
+RELAY_DATA=/var/lib/relay npm start
 ```
 
 Run it under a process manager such as systemd, and give it the same reverse proxy setup as above. `npm start` serves both the API and the built web app.

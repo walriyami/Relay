@@ -45,7 +45,7 @@ Uploads belong to the browser tab that started them. The tab holds a lease throu
 
 - **Content-addressed files.** Each unique file is stored once under `blobs/`, named by its SHA-256. Several items can share the same bytes, and quotas still count each owner's saved size.
 - **Library.** Items hold a tree of folders, files and text. Items are never edited in place. They can be renamed and have files added, and nothing inside is replaced or removed.
-- **Trash.** Deleted and expired items stay in Trash for 30 days. Their links stop working immediately, and restoring an item doesn't bring its links back.
+- **Trash.** Deleted and expired items stay in Trash for as many days as their owner chooses (30 unless changed). Their links stop working immediately, and restoring an item doesn't bring its links back.
 - **Schema.** `server/db/schema.sql` creates a new database on first start. The database records its schema version, and Relay refuses to open one from a different version.
 
 ## Downloads
@@ -56,9 +56,9 @@ Uploads belong to the browser tab that started them. The tab holds a lease throu
 
 ## Accounts and access
 
-- Accounts are created by invitation only. The first account, `admin`, is bootstrapped from `RELAY_ADMIN_PASSWORD`.
+- Accounts are created by invitation only. The first account is created in the browser during setup: whoever finishes that step first becomes the administrator, and setup then closes for good.
 - People sign in with a password (hashed with scrypt), a passkey (WebAuthn), or a one-time code shown on another of their signed-in devices.
-- Sessions use `HttpOnly`, `SameSite` cookies (`__Host-` prefixed over HTTPS). Every unsafe request is checked against `RELAY_ORIGIN` and a CSRF token.
+- Sessions use `HttpOnly`, `SameSite` cookies (`__Host-` prefixed over HTTPS). Every unsafe request must come from the address it was sent to (exactly `RELAY_ORIGIN`, when set) and carry a CSRF token.
 - Link, request and invitation tokens are derived from their ids with an HMAC key (`RELAY_SECRET`). The database stores only hashes of those tokens.
 - Short numeric codes (four or six digits) are rate-limited per address and across the service. A retired code is never reassigned.
 - Every content and archive route checks authorization. Administrators manage accounts and limits, but they can't read members' files, links or activity.

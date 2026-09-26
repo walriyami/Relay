@@ -5,7 +5,6 @@ export function testConfig(root: string, overrides: Partial<Config> = {}): Confi
   return {
     root,
     origin: "http://relay.test",
-    adminPassword: "Test-admin-password-only",
     secret: "test-secret-key-that-is-long-enough-000",
     trustProxy: ["127.0.0.1"],
     tabLeaseMs: 5 * 60_000,

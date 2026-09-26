@@ -7,6 +7,7 @@ import { hashPassword } from "../../lib/secrets.ts";
 import { checkPassword } from "./passwords.ts";
 import { readPrefs, toUser, USER_COLUMNS, type UserRow } from "./sessions.ts";
 import { streamsOf } from "./streams.ts";
+import { renameUser, setMemberValues } from "./users.ts";
 
 export function registerAccount(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.account.update, ({ member, body }) => {
@@ -17,13 +18,10 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
           body.name?.normalize("NFC") || null,
           member.userId,
         );
-      if (body.username !== undefined && body.username !== member.username) {
-        const taken = ctx.db.get("SELECT 1 FROM users WHERE username = ? AND id != ?", body.username, member.userId);
-        if (taken) fail(409, "That username is taken.");
-        ctx.db.run("UPDATE users SET username = ? WHERE id = ?", body.username, member.userId);
-      }
-      if (body.retentionDays !== undefined)
-        ctx.db.run("UPDATE users SET retention_days = ? WHERE id = ?", body.retentionDays, member.userId);
+      if (body.username !== undefined && body.username !== member.username)
+        renameUser(ctx, member.userId, body.username);
+      // Members choose their own times; only the administrator changes their storage.
+      setMemberValues(ctx, member.userId, { retentionDays: body.retentionDays, trashDays: body.trashDays });
       if (body.prefs) {
         const current = readPrefs(ctx.db.value<string>("SELECT prefs FROM users WHERE id = ?", member.userId)!);
         const { activity, ...rest } = body.prefs;

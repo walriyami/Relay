@@ -81,6 +81,19 @@ export class Session {
   }
 }
 
+/**
+ * Sets up a first start as a person would in the browser: the administrator "admin", with the
+ * built-in member values, then signs out. Does nothing once Relay is set up.
+ */
+export async function setUpAdmin(origin: string, password: string) {
+  const session = new Session(origin);
+  if ((await session.call(api.setup.status)).state !== "account") return;
+  await session.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup" } });
+  const { defaults, limits } = await session.call(api.admin.overview);
+  await session.call(api.setup.finish, { body: { ...defaults, capacity: limits.capacity } });
+  await session.call(api.session.signOut);
+}
+
 /** Expects `promise` to fail with `status`; returns the server's message. */
 export async function rejects(promise: Promise<unknown>, status: number): Promise<string> {
   try {
@@ -522,7 +535,6 @@ export async function startServer(options: {
       PORT: String(options.port),
       RELAY_DATA: options.root,
       RELAY_ORIGIN: origin,
-      RELAY_ADMIN_PASSWORD: LOCAL_PASSWORD,
       RELAY_SECRET: LOCAL_SECRET,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -536,6 +548,7 @@ export async function startServer(options: {
   child.once("close", () => log.end());
   try {
     await waitForHealth(origin, 30_000, () => !exited);
+    await setUpAdmin(origin, LOCAL_PASSWORD);
   } catch (error) {
     child.kill("SIGKILL");
     await exit;

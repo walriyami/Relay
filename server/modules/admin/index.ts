@@ -8,9 +8,12 @@ import { route } from "../../lib/http.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { hashPassword, sha256 } from "../../lib/secrets.ts";
 import { codeLengthOf, getPickupCode, issuePickupCode, rotatePickupCodes } from "../../lib/pickup-codes.ts";
-import { DAY_MS, usageOf } from "../auth/sessions.ts";
+import { DAY_MS, readPrefs, usageOf } from "../auth/sessions.ts";
 import { streamsOf } from "../auth/streams.ts";
-import { limitsOf, setLimits } from "./settings.ts";
+import { renameUser, setMemberValues } from "../auth/users.ts";
+import { limitsOf, memberDefaultsOf, setLimits, setMemberDefaults } from "./settings.ts";
+
+const MEMBER_COLUMNS = "id, username, display_name, admin, disabled, quota, retention_days, trash_days, prefs, created";
 
 type MemberRow = {
   id: string;
@@ -20,20 +23,19 @@ type MemberRow = {
   disabled: number;
   quota: number;
   retention_days: number | null;
+  trash_days: number;
+  prefs: string;
   created: number;
 };
 
 export function registerAdmin(app: FastifyInstance, ctx: Context) {
   const member = (id: string) =>
-    ctx.db.get<MemberRow>(
-      "SELECT id, username, display_name, admin, disabled, quota, retention_days, created FROM users WHERE id = ?",
-      id,
-    ) ?? notFound("That member");
+    ctx.db.get<MemberRow>(`SELECT ${MEMBER_COLUMNS} FROM users WHERE id = ?`, id) ?? notFound("That member");
 
   route(app, ctx, api.admin.overview, async () => {
     const members = ctx.db
       .all<MemberRow & { signed_in: number }>(
-        `SELECT id, username, display_name, admin, disabled, quota, retention_days, created,
+        `SELECT ${MEMBER_COLUMNS},
            (SELECT COUNT(DISTINCT device_id) FROM sessions s WHERE s.user_id = users.id AND s.expires > ?) AS signed_in
          FROM users ORDER BY created`,
         Date.now(),
@@ -45,6 +47,8 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         admin: !!row.admin,
         quota: row.quota,
         retentionDays: row.retention_days,
+        linkDays: readPrefs(row.prefs).linkDays,
+        trashDays: row.trash_days,
         disabled: !!row.disabled,
         created: row.created,
         usage: usageOf(ctx, row.id),
@@ -70,6 +74,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         trashItems: ctx.db.value<number>("SELECT COUNT(*) FROM items WHERE trashed IS NOT NULL")!,
       },
       limits,
+      defaults: memberDefaultsOf(ctx),
       activity: {
         activeUploads: ctx.transfers.activeUploads(),
         receivedBytesLastHour: ctx.transfers.receivedBytesSince(hourAgo),
@@ -133,16 +138,18 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.admin.updateMember, ({ params, body }) => {
     const target = member(params.id);
     if (target.admin && body.disabled) fail(409, "The administrator account cannot be disabled.");
+    const { name, username, disabled, ...values } = body;
     ctx.db.tx(() => {
-      if (body.quota !== undefined) ctx.db.run("UPDATE users SET quota = ? WHERE id = ?", body.quota, target.id);
-      if (body.retentionDays !== undefined)
-        ctx.db.run("UPDATE users SET retention_days = ? WHERE id = ?", body.retentionDays, target.id);
-      if (body.disabled !== undefined) {
-        ctx.db.run("UPDATE users SET disabled = ? WHERE id = ?", body.disabled ? 1 : 0, target.id);
-        if (body.disabled) ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
+      if (name !== undefined)
+        ctx.db.run("UPDATE users SET display_name = ? WHERE id = ?", name?.normalize("NFC") || null, target.id);
+      if (username !== undefined && username !== target.username) renameUser(ctx, target.id, username);
+      setMemberValues(ctx, target.id, values);
+      if (disabled !== undefined) {
+        ctx.db.run("UPDATE users SET disabled = ? WHERE id = ?", disabled ? 1 : 0, target.id);
+        if (disabled) ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       }
     });
-    if (body.disabled) streamsOf(ctx).recheck();
+    if (disabled) streamsOf(ctx).recheck();
     ctx.events.publish(target.id, "account", "devices");
     return { ok: true as const };
   });
@@ -162,9 +169,10 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   });
 
   route(app, ctx, api.admin.settings, ({ body }) => {
-    const { codeLength, ...limits } = body;
+    const { codeLength, defaults, ...limits } = body;
     if (codeLength !== undefined) rotatePickupCodes(ctx, codeLength);
     setLimits(ctx, limits);
+    if (defaults) setMemberDefaults(ctx, defaults);
     return { ok: true as const };
   });
 }

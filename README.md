@@ -56,7 +56,7 @@ Every share gets a link, a QR code and a short numeric code. Links can expire, n
 
 ### 🗂️ A library that keeps everything
 
-Every completed upload is saved first, whether you shared it or not. Search, sort and preview images, video, audio, PDFs and text. Download any folder as a ZIP. Deleted items wait in Trash for 30 days.
+Every completed upload is saved first, whether you shared it or not. Search, sort and preview images, video, audio, PDFs and text. Download any folder as a ZIP. Deleted items wait in Trash for 30 days, or as long as each person chooses.
 
 </td>
 </tr>
@@ -114,19 +114,13 @@ You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose.
 ```sh
 git clone https://github.com/walriyami/Relay.git relay
 cd relay
-cp .env.example .env
-```
-
-In `.env`, set `RELAY_ADMIN_PASSWORD` to a long password and `RELAY_SECRET` to a random key (`openssl rand -base64 48`). Then start Relay:
-
-```sh
 docker compose up -d --build
 ```
 
-Open **http://localhost:3090** and sign in as `admin`. Invite everyone else from **Admin → Invitations**.
+Open **http://localhost:3090**. Relay walks you through the rest in about a minute: create your administrator account, choose how much space and time everyone gets, and invite your first person. There's nothing to configure first.
 
 > [!TIP]
-> To share Relay beyond your own machine, put it behind HTTPS and set `RELAY_ORIGIN` to its public URL. The [self-hosting guide](docs/self-hosting.md) covers reverse proxies, every setting and updates.
+> To share Relay beyond your own machine, put it behind HTTPS. The [self-hosting guide](docs/self-hosting.md) covers reverse proxies, optional settings and updates.
 
 ## Documentation
 

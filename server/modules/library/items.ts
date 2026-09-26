@@ -1,5 +1,4 @@
 import {
-  DEFAULTS,
   type ItemDetail,
   type ItemPage,
   type ItemSummary,
@@ -317,7 +316,7 @@ export function purge(ctx: Context, itemId: string) {
   ctx.events.publish(owner, "items", "links", "deliveries");
 }
 
-/** Expired items move to Trash; Trash is emptied after DEFAULTS.trashDays. */
+/** Expired items move to Trash; each member's Trash is emptied after their own `trash_days`. */
 export function sweep(ctx: Context, now: number) {
   for (const item of ctx.db.all<{ id: string; owner: string }>(
     "SELECT id, owner FROM items WHERE trashed IS NULL AND expires IS NOT NULL AND expires <= ?",
@@ -325,8 +324,9 @@ export function sweep(ctx: Context, now: number) {
   ))
     trashItem(ctx, item.owner, item.id);
   for (const item of ctx.db.all<{ id: string }>(
-    "SELECT id FROM items WHERE trashed IS NOT NULL AND trashed <= ?",
-    now - DEFAULTS.trashDays * DAY_MS,
+    "SELECT i.id FROM items i JOIN users u ON u.id = i.owner WHERE i.trashed IS NOT NULL AND i.trashed <= ? - u.trash_days * ?",
+    now,
+    DAY_MS,
   ))
     purge(ctx, item.id);
 }

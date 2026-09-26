@@ -317,6 +317,47 @@ function JoinForm({
   onSignedIn: (me: Me) => void;
   footer: ReactNode;
 }) {
+  return (
+    <AuthFrame
+      title="Create your account"
+      subtitle={`${invite.invitedBy} invited you to Relay. This invitation works once, until ${dateTime(invite.expires)}.`}
+    >
+      <AccountForm
+        id="join"
+        submitLabel="Create account"
+        create={async (account) => {
+          const me = await call(api.session.join, { body: { token, ...account, deviceName: browserName() } });
+          navigate("/", true);
+          onSignedIn(me);
+        }}
+        onError={(e) => {
+          if (!(e instanceof ApiError && e.status === 410)) return false;
+          onGone();
+          return true;
+        }}
+      />
+      {footer}
+    </AuthFrame>
+  );
+}
+
+/**
+ * A new account's username and password, checked as far as the browser can before `create` runs.
+ * A taken username is shown under the username; `onError` may take other failures instead.
+ */
+export function AccountForm({
+  id,
+  submitLabel,
+  create,
+  onError,
+}: {
+  /** Prefixes the form's element ids. */
+  id: string;
+  submitLabel: string;
+  create: (account: { username: string; password: string }) => Promise<void>;
+  /** Handles a failure the form can't show itself; returns whether it did. */
+  onError?: (error: unknown) => boolean;
+}) {
   const [username, setUsername] = useState("");
   const [usernameNote, setUsernameNote] = useState("");
   useEffect(() => {
@@ -337,111 +378,102 @@ function JoinForm({
   const usernameError = error?.field === "username" ? error.message : "";
   // The rule stays under the field; a problem replaces it until the name is edited.
   const usernameHint = usernameError || (usernameNote ? `${usernameNote} ${USERNAME_RULE}` : "");
-  const errorId = "join-error";
+  const hintId = `${id}-username-hint`;
+  const errorId = `${id}-error`;
   const fieldProps = (field: "password" | "confirm") =>
     describedBy(error?.field === field, error?.field === field && errorId);
   return (
-    <AuthFrame
-      title="Create your account"
-      subtitle={`${invite.invitedBy} invited you to Relay. This invitation works once, until ${dateTime(invite.expires)}.`}
+    <form
+      className="stack"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError(null);
+        const name = username.trim();
+        const problem = usernameProblem(name);
+        if (problem) return setError({ field: "username", message: problem });
+        if (password !== confirm) return setError({ field: "confirm", message: "The passwords don’t match." });
+        setBusy(true);
+        try {
+          await create({ username: name, password });
+        } catch (e) {
+          if (onError?.(e)) return;
+          if (e instanceof ApiError && e.status === 409) setError({ field: "username", message: e.message });
+          else setError({ field: "password", message: signInError(e) });
+        } finally {
+          setBusy(false);
+        }
+      }}
     >
-      <form
-        className="stack"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setError(null);
-          const name = username.trim();
-          const problem = usernameProblem(name);
-          if (problem) return setError({ field: "username", message: problem });
-          if (password !== confirm) return setError({ field: "confirm", message: "The passwords don’t match." });
-          setBusy(true);
-          try {
-            const me = await call(api.session.join, {
-              body: { token, username: name, password, deviceName: browserName() },
-            });
-            navigate("/", true);
-            onSignedIn(me);
-          } catch (e) {
-            if (e instanceof ApiError && e.status === 410) return onGone();
-            if (e instanceof ApiError && e.status === 409) setError({ field: "username", message: e.message });
-            else setError({ field: "password", message: signInError(e) });
-          } finally {
-            setBusy(false);
-          }
-        }}
+      <Field
+        label="Username"
+        after={
+          <span
+            id={hintId}
+            className={usernameHint ? "field-error" : "field-hint"}
+            role={usernameError ? "alert" : undefined}
+            aria-live={usernameError ? undefined : "polite"}
+          >
+            {usernameHint || USERNAME_RULE}
+          </span>
+        }
       >
-        <Field
-          label="Username"
-          after={
-            <span
-              id="join-username-hint"
-              className={usernameHint ? "field-error" : "field-hint"}
-              role={usernameError ? "alert" : undefined}
-              aria-live={usernameError ? undefined : "polite"}
-            >
-              {usernameHint || USERNAME_RULE}
-            </span>
-          }
-        >
-          <input
-            ref={fields.username}
-            className="input"
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            autoFocus
-            required
-            maxLength={32}
-            value={username}
-            onChange={(e) => {
-              const typed = e.target.value.toLowerCase();
-              const kept = [...typed].filter((c) => USERNAME_CHAR.test(c)).join("");
-              // The note stays a few seconds, so it isn't wiped by the very next keystroke.
-              if (kept !== typed) setUsernameNote(describeRefused(typed));
-              else if (!kept) setUsernameNote("");
-              if (error?.field === "username") setError(null);
-              setUsername(kept);
-            }}
-            {...describedBy(!!usernameError, "join-username-hint")}
-          />
-        </Field>
-        <Field label="Password" hint={`At least ${LIMITS.passwordMin} characters`}>
-          <input
-            ref={fields.password}
-            className="input"
-            type="password"
-            autoComplete="new-password"
-            minLength={LIMITS.passwordMin}
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            {...fieldProps("password")}
-          />
-        </Field>
-        <Field label="Confirm password">
-          <input
-            ref={fields.confirm}
-            className="input"
-            type="password"
-            autoComplete="new-password"
-            minLength={LIMITS.passwordMin}
-            required
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            {...fieldProps("confirm")}
-          />
-        </Field>
-        {error && error.field !== "username" && (
-          <p id={errorId} className="field-error" role="alert">
-            {error.message}
-          </p>
-        )}
-        <Button type="submit" variant="primary" busy={busy}>
-          Create account
-        </Button>
-      </form>
-      {footer}
-    </AuthFrame>
+        <input
+          ref={fields.username}
+          className="input"
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          autoFocus
+          required
+          maxLength={32}
+          value={username}
+          onChange={(e) => {
+            const typed = e.target.value.toLowerCase();
+            const kept = [...typed].filter((c) => USERNAME_CHAR.test(c)).join("");
+            // The note stays a few seconds, so it isn't wiped by the very next keystroke.
+            if (kept !== typed) setUsernameNote(describeRefused(typed));
+            else if (!kept) setUsernameNote("");
+            if (error?.field === "username") setError(null);
+            setUsername(kept);
+          }}
+          {...describedBy(!!usernameError, hintId)}
+        />
+      </Field>
+      <Field label="Password" hint={`At least ${LIMITS.passwordMin} characters`}>
+        <input
+          ref={fields.password}
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          minLength={LIMITS.passwordMin}
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          {...fieldProps("password")}
+        />
+      </Field>
+      <Field label="Confirm password">
+        <input
+          ref={fields.confirm}
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          minLength={LIMITS.passwordMin}
+          required
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          {...fieldProps("confirm")}
+        />
+      </Field>
+      {error && error.field !== "username" && (
+        <p id={errorId} className="field-error" role="alert">
+          {error.message}
+        </p>
+      )}
+      <Button type="submit" variant="primary" busy={busy}>
+        {submitLabel}
+      </Button>
+    </form>
   );
 }
 

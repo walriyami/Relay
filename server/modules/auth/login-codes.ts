@@ -119,7 +119,7 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
         max: 10,
         timeWindow: "1 minute",
         keyGenerator: (req) => {
-          const member = memberFromToken(ctx, req.cookies?.[sessionCookie(ctx)]);
+          const member = memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]);
           return member ? `login-code:${member.userId}` : addressKey(req.ip);
         },
       },

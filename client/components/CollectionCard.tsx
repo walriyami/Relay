@@ -45,10 +45,9 @@ import { ItemShareDialog } from "../features/library/ItemShareDialog";
 import { Thumbnail } from "./Thumbnail";
 import { Menu, type MenuItem } from "./ui";
 
-const TRASH_DAYS = 30;
-/** "Gone in 12 days": Trash keeps items for 30 days. */
-function trashLeft(trashed: number) {
-  const days = Math.ceil((trashed + TRASH_DAYS * 86400000 - Date.now()) / 86400000);
+/** "Gone in 12 days": Trash keeps items for the owner's chosen number of days. */
+function trashLeft(trashed: number, trashDays: number) {
+  const days = Math.ceil((trashed + trashDays * 86400000 - Date.now()) / 86400000);
   const text = days <= 0 ? "Gone today" : days === 1 ? "Gone in 1 day" : `Gone in ${days} days`;
   return { text, soon: days < 3 };
 }
@@ -128,6 +127,7 @@ export function CollectionCard({
   // arrived, so its name and counts don't grow file by file. Files added to an item already there
   // only move the progress; its name and counts stay what they are until the files arrive.
   const found = useLocalTransfer(listed);
+  const { me } = useSession();
   const local = found && !trash ? found : undefined;
   const item: ItemSummary =
     local && !local.adding
@@ -149,7 +149,7 @@ export function CollectionCard({
       ? "A guest is uploading"
       : "Uploading from another tab or device"
     : itemMeta(item);
-  const left = trash && item.trashed ? trashLeft(item.trashed) : null;
+  const left = trash && item.trashed ? trashLeft(item.trashed, me.user.trashDays) : null;
   // Still uploading: say so, so nobody shares half of it by mistake.
   const detail = progress
     ? progress.text

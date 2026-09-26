@@ -18,6 +18,7 @@ import {
 import { undoKey } from "./actions";
 import { plural } from "../../lib/format";
 import { KEEP_DAYS, days as dayLabel } from "../../lib/options";
+import { useSession } from "../../app/session";
 import { CollectionModal, itemAddress } from "./CollectionModal";
 
 type Sort = "new" | "old" | "name" | "size";
@@ -126,6 +127,7 @@ const searchParam = () => new URLSearchParams(location.search).get("q") ?? "";
 
 export function FilesPage({ trash = false }: { trash?: boolean }) {
   const page = trash ? "/trash" : "/files";
+  const { me } = useSession();
   const [query, setQuery] = useState(searchParam);
   const [debounced, setDebounced] = useState(() => searchParam().trim());
   const [sort, setSort] = useState<Sort>(() => savedSort());
@@ -309,7 +311,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       operation === "trash" &&
       !(await confirmDialog({
         title: `Move ${plural(ids.length, "item")} to Trash?`,
-        body: `${plural(ids.length, "item")} will move to Trash. You can restore them for 30 days; their links will stop working.`,
+        body: `${plural(ids.length, "item")} will move to Trash. You can restore them for ${dayLabel(me.user.trashDays)}; their links will stop working.`,
         confirm: "Move to Trash",
         danger: true,
       }))
@@ -375,7 +377,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           <h1>{trash ? "Trash" : "Files"}</h1>
           <p className="muted">
             {trash
-              ? "Items in Trash are deleted forever after 30 days. Their links no longer work."
+              ? `Items in Trash are deleted forever after ${dayLabel(me.user.trashDays)}. Their links no longer work.`
               : total
                 ? debounced
                   ? plural(total, "match", "matches")

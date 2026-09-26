@@ -4,13 +4,44 @@ import type { Auth, Context, Grant, Member } from "../context.ts";
 import { fail } from "./errors.ts";
 import { sha256 } from "./secrets.ts";
 
+/**
+ * Relay answers on whatever address it is opened at, so nobody has to tell it its own address.
+ * RELAY_ORIGIN pins one instead. Otherwise the scheme is the one the connection (or a trusted
+ * proxy's X-Forwarded-Proto) reports, and the host is the one the browser addressed.
+ */
+const secure = (ctx: Context, req: FastifyRequest) =>
+  ctx.config.origin ? ctx.config.origin.startsWith("https:") : req.protocol === "https";
+
+/**
+ * The origin this request was made to. On unsafe requests that is the browser's Origin header,
+ * which `checkCsrf` has already matched to this server.
+ */
+export function requestOrigin(ctx: Context, req: FastifyRequest) {
+  if (ctx.config.origin) return ctx.config.origin;
+  const origin = req.headers.origin;
+  return origin && sameHost(origin, req) ? origin : `${req.protocol}://${req.host}`;
+}
+
+/**
+ * An Origin naming the host this request was sent to. Only the host is compared: a proxy that
+ * doesn't report https still serves the right site, and another site always has another host.
+ */
+function sameHost(origin: string, req: FastifyRequest) {
+  try {
+    return new URL(origin).host === req.host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 // On https the __Host- prefix stops sibling subdomains from planting or shadowing these cookies.
-const cookiePrefix = (ctx: Context) => (ctx.config.origin.startsWith("https:") ? "__Host-" : "");
-export const sessionCookie = (ctx: Context) => `${cookiePrefix(ctx)}relay`;
-const guestCookiePrefix = (ctx: Context) => `${cookiePrefix(ctx)}relay_guest_`;
-export const guestCookie = (ctx: Context, requestId: string) => guestCookiePrefix(ctx) + requestId;
+const cookiePrefix = (ctx: Context, req: FastifyRequest) => (secure(ctx, req) ? "__Host-" : "");
+export const sessionCookie = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay`;
+const guestCookiePrefix = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay_guest_`;
+export const guestCookie = (ctx: Context, req: FastifyRequest, requestId: string) =>
+  guestCookiePrefix(ctx, req) + requestId;
 /** Tells one person opening shared links from another; it grants nothing by itself. */
-export const visitorCookie = (ctx: Context) => `${cookiePrefix(ctx)}relay_visitor`;
+export const visitorCookie = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay_visitor`;
 
 const cache = new WeakMap<FastifyRequest, Auth>();
 
@@ -90,13 +121,13 @@ export function authOf(ctx: Context, req: FastifyRequest): Auth {
   let auth = cache.get(req);
   if (auth) return auth;
   const grants: Grant[] = [];
-  const prefix = guestCookiePrefix(ctx);
+  const prefix = guestCookiePrefix(ctx, req);
   for (const [name, value] of Object.entries(req.cookies)) {
     if (!value || !name.startsWith(prefix)) continue;
     const grant = grantFromToken(ctx, name.slice(prefix.length), value);
     if (grant) grants.push(grant);
   }
-  auth = { member: memberFromToken(ctx, req.cookies[sessionCookie(ctx)]), grants };
+  auth = { member: memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)]), grants };
   cache.set(req, auth);
   return auth;
 }
@@ -120,14 +151,16 @@ export function principalFor(ctx: Context, req: FastifyRequest, key: string): Me
 }
 
 /**
- * Cross-site request protection for unsafe methods: the Origin must be ours, Fetch Metadata must
+ * Cross-site request protection for unsafe methods: the Origin must be ours (RELAY_ORIGIN when
+ * set, else this request's own host; see `requestOrigin`), Fetch Metadata must
  * not say cross-site, and, unless the route opts out, X-Relay-CSRF must match the token of the
  * credential the route acts on: the session's for member and admin routes, the session's or a
  * guest grant's for routes open to both.
  */
 export function checkCsrf(ctx: Context, req: FastifyRequest, route: { csrf?: boolean; auth?: AuthKind }) {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
-  if (req.headers.origin && req.headers.origin !== ctx.config.origin)
+  const origin = req.headers.origin;
+  if (origin && (ctx.config.origin ? origin !== ctx.config.origin : !sameHost(origin, req)))
     fail(403, "Cross-origin requests are not allowed.");
   if (req.headers["sec-fetch-site"] === "cross-site") fail(403, "Cross-site requests are not allowed.");
   if (route.csrf === false) return;
@@ -142,15 +175,15 @@ export function checkCsrf(ctx: Context, req: FastifyRequest, route: { csrf?: boo
   if (!valid) fail(403, "Your session has changed. Refresh and retry.");
 }
 
-export function cookieOptions(ctx: Context, maxAgeMs: number) {
+export function cookieOptions(ctx: Context, req: FastifyRequest, maxAgeMs: number) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: ctx.config.origin.startsWith("https:"),
+    secure: secure(ctx, req),
     path: "/",
     maxAge: Math.max(1, Math.floor(maxAgeMs / 1000)),
   };
 }
 export function clearCookie(ctx: Context, reply: FastifyReply, name: string) {
-  reply.clearCookie(name, { ...cookieOptions(ctx, 1), maxAge: undefined });
+  reply.clearCookie(name, { ...cookieOptions(ctx, reply.request, 1), maxAge: undefined });
 }

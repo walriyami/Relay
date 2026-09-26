@@ -95,10 +95,10 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
     api.requests.start,
     ({ params, req, reply }) => {
       const request = openRequest(ctx, params.token);
-      const cookie = guestCookie(ctx, request.id);
+      const cookie = guestCookie(ctx, req, request.id);
       // A browser session can outlast the original deadline when the owner extends the request.
       // The current request and grant expiry in the database still authorize every operation.
-      const options = { ...cookieOptions(ctx, 1), maxAge: undefined };
+      const options = { ...cookieOptions(ctx, req, 1), maxAge: undefined };
       const held = grantFor(ctx, req, request.id);
       if (held) {
         reply.setCookie(cookie, req.cookies[cookie]!, options);

@@ -77,6 +77,10 @@ const deviceName = z.optional(name);
 const password = text(LIMITS.passwordMin, 256);
 const days = int(1, LIMITS.linkDaysMax);
 const retentionDays = z.nullable(int(1, LIMITS.retentionDaysMax));
+const trashDays = int(1, LIMITS.trashDaysMax);
+const quota = int(1, Number.MAX_SAFE_INTEGER);
+const displayName = z.nullable(z.string().check(z.trim(), z.maxLength(LIMITS.displayNameLength)));
+const username = z.string().check(z.trim(), z.toLowerCase(), z.regex(USERNAME));
 const requestMessage = z._default(text(0, LIMITS.requestMessageLength), "");
 const requestBytes = int(1, 1024 ** 4);
 const path = text(1, 2048);
@@ -88,6 +92,8 @@ const ok = endpoint<{ ok: true }>();
 const linkDays = z.nullable(days);
 const linkPassword = z.nullable(text(LIMITS.linkPasswordMin, LIMITS.linkPasswordMax));
 const visitorLimit = z.nullable(int(1, LIMITS.linkVisitorsMax));
+/** Every member value the administrator chooses, for members to come or for one member. */
+const memberValues = { quota, retentionDays, linkDays, trashDays };
 const linkNote = z.string().check(z.trim(), z.maxLength(LIMITS.linkNoteLength));
 /** A new link's settings; anything left out is open to anyone, with no note. */
 const linkSettings = {
@@ -171,6 +177,22 @@ export const api = {
     signOut: ok("DELETE", "/api/session", { auth: "member" }),
   },
 
+  /** First start: the administrator's account, then what members get. See SetupState. */
+  setup: {
+    status: endpoint<{ state: M.SetupState }>()("GET", "/api/setup", { auth: "public" }),
+    /** Creates the administrator and signs them in; refused once anyone has an account. */
+    account: endpoint<M.Me>()("POST", "/api/setup/account", {
+      auth: "public",
+      csrf: false,
+      body: z.object({ username, password, deviceName }),
+    }),
+    /** Saves what members get, applies it to the administrator too, and finishes setup. */
+    finish: ok("POST", "/api/setup/finish", {
+      auth: "admin",
+      body: z.object({ ...memberValues, capacity: quota }),
+    }),
+  },
+
   pickup: {
     /** Refresh an owned handoff after a deployment-wide code rotation. */
     current: endpoint<{ code: string | null }>()("POST", "/api/pickup/current", {
@@ -191,10 +213,11 @@ export const api = {
       auth: "member",
       body: z.object({
         /** The name other people see; null or blank shows the username. */
-        name: z.optional(z.nullable(z.string().check(z.trim(), z.maxLength(LIMITS.displayNameLength)))),
+        name: z.optional(displayName),
         /** Signing in uses the new username from then on; sessions and passkeys keep working. */
-        username: z.optional(z.string().check(z.trim(), z.toLowerCase(), z.regex(USERNAME))),
+        username: z.optional(username),
         retentionDays: z.optional(retentionDays),
+        trashDays: z.optional(trashDays),
         prefs: z.optional(
           z.object({
             linkDays: z.optional(linkDays),
@@ -426,17 +449,30 @@ export const api = {
     updateMember: ok("PATCH", "/api/admin/members/:id", {
       auth: "admin",
       body: z.object({
-        quota: z.optional(int(1, Number.MAX_SAFE_INTEGER)),
-        disabled: z.optional(z.boolean()),
+        name: z.optional(displayName),
+        username: z.optional(username),
+        quota: z.optional(quota),
         retentionDays: z.optional(retentionDays),
+        linkDays: z.optional(linkDays),
+        trashDays: z.optional(trashDays),
+        disabled: z.optional(z.boolean()),
       }),
     }),
     resetPassword: ok("POST", "/api/admin/members/:id/password", { auth: "admin", body: z.object({ password }) }),
     settings: ok("PATCH", "/api/admin/settings", {
       auth: "admin",
       body: z.strictObject({
-        capacity: z.optional(int(1, Number.MAX_SAFE_INTEGER)),
+        capacity: z.optional(quota),
         codeLength: z.optional(z.union([z.literal(4), z.literal(6)])),
+        /** What members who join from now on get. Only the values given change. */
+        defaults: z.optional(
+          z.strictObject({
+            quota: z.optional(quota),
+            retentionDays: z.optional(retentionDays),
+            linkDays: z.optional(linkDays),
+            trashDays: z.optional(trashDays),
+          }),
+        ),
       }),
     }),
   },

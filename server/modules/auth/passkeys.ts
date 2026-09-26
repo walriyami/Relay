@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import type { Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
@@ -8,6 +8,7 @@ import type { Passkey } from "../../../shared/model.ts";
 // would otherwise print warnings at every server start.
 const webauthn = () => import("@simplewebauthn/server");
 import { isUniqueViolation } from "../../db/database.ts";
+import { requestOrigin } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken } from "../../lib/secrets.ts";
@@ -78,7 +79,11 @@ export function challengesOf(ctx: Context): Challenges {
   return challenges;
 }
 
-const relyingParty = (ctx: Context) => ({ rpID: new URL(ctx.config.origin).hostname, origin: ctx.config.origin });
+/** Passkeys belong to the host they were made on, so each works at the address it was added from. */
+const relyingParty = (ctx: Context, req: FastifyRequest) => {
+  const origin = requestOrigin(ctx, req);
+  return { rpID: new URL(origin).hostname, origin };
+};
 
 function registrationStillAuthorized(ctx: Context, challenge: Challenge, userId: string): boolean {
   return (
@@ -144,7 +149,7 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
         passwordHash: current,
         expires: Date.now() + CHALLENGE_MS,
       };
-      const { rpID } = relyingParty(ctx);
+      const { rpID } = relyingParty(ctx, req);
       const existing = ctx.db.all<{ id: string; transports: string }>(
         "SELECT id, transports FROM passkeys WHERE user_id = ?",
         member.userId,
@@ -171,10 +176,10 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
     { rateLimit: perAddress(10, "1 minute") },
   );
 
-  route(app, ctx, api.account.addPasskey, async ({ member, body }) => {
+  route(app, ctx, api.account.addPasskey, async ({ member, body, req }) => {
     const authorization = challenges.take(body.challenge, "register", member.userId, member.sessionHash);
     if (!registrationStillAuthorized(ctx, authorization, member.userId)) fail(403, "Current password is incorrect.");
-    const { rpID, origin } = relyingParty(ctx);
+    const { rpID, origin } = relyingParty(ctx, req);
     const { verifyRegistrationResponse } = await webauthn();
     const result = await verified(() =>
       verifyRegistrationResponse({
@@ -232,7 +237,7 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
     async ({ req }) => {
       const options = await (
         await webauthn()
-      ).generateAuthenticationOptions({ rpID: relyingParty(ctx).rpID, userVerification: "required" });
+      ).generateAuthenticationOptions({ rpID: relyingParty(ctx, req).rpID, userVerification: "required" });
       const challenge = challenges.issue({
         challenge: options.challenge,
         kind: "signin",
@@ -251,7 +256,7 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
     app,
     ctx,
     api.session.passkey,
-    async ({ body, reply }) => {
+    async ({ body, req, reply }) => {
       const expectedChallenge = challenges.take(body.challenge, "signin", null).challenge;
       const response = body.response as unknown as AuthenticationResponseJSON;
       type Row = { id: string; user_id: string; public_key: Uint8Array; counter: number; transports: string };
@@ -264,7 +269,7 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
             )
           : undefined;
       if (!stored) fail(401, "This passkey is not registered with Relay.");
-      const { rpID, origin } = relyingParty(ctx);
+      const { rpID, origin } = relyingParty(ctx, req);
       const { verifyAuthenticationResponse } = await webauthn();
       const result = await verified(() =>
         verifyAuthenticationResponse({

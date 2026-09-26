@@ -19,12 +19,13 @@ import { createLibrary, registerLibrary } from "./modules/library/index.ts";
 import { createTransfers, registerTransfers } from "./modules/transfers/index.ts";
 import { registerDownloads } from "./modules/downloads/index.ts";
 import { addressKey } from "./modules/auth/limits.ts";
-import { ensureAdmin, registerAuth, sweepAuth } from "./modules/auth/index.ts";
+import { registerAuth, sweepAuth } from "./modules/auth/index.ts";
 import { createLinks, registerLinks } from "./modules/links/index.ts";
 import { registerCodes } from "./modules/codes/index.ts";
 import { createDeliveries, registerDeliveries } from "./modules/deliveries/index.ts";
 import { registerRequests } from "./modules/requests/index.ts";
 import { registerAdmin } from "./modules/admin/index.ts";
+import { registerSetup } from "./modules/setup/index.ts";
 import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { Operations } from "./lib/operations.ts";
 
@@ -57,7 +58,6 @@ export async function buildApp(config: Config): Promise<App> {
   ctx.links = createLinks(ctx);
   ctx.deliveries = createDeliveries(ctx);
   ctx.activity = createActivity(ctx);
-  await ensureAdmin(ctx);
 
   await app.register(cookie);
   await app.register(rateLimit, {
@@ -66,7 +66,7 @@ export async function buildApp(config: Config): Promise<App> {
     // One bucket per IPv4 address or IPv6 /64, so an IPv6 host cannot rotate addresses.
     keyGenerator: (req) => addressKey(req.ip),
     // Signed-in members are trusted; the limit protects anonymous surfaces.
-    allowList: (req) => !!memberFromToken(ctx, req.cookies?.[sessionCookie(ctx)]),
+    allowList: (req) => !!memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]),
   });
 
   app.addHook("onRequest", async (req, reply) => {
@@ -123,6 +123,7 @@ export async function buildApp(config: Config): Promise<App> {
   registerDeliveries(app, ctx);
   registerRequests(app, ctx);
   registerAdmin(app, ctx);
+  registerSetup(app, ctx);
   registerActivity(app, ctx);
 
   let sweeping: Promise<void> | null = null;

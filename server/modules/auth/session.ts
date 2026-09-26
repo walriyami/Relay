@@ -1,8 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
-import { DEFAULTS } from "../../../shared/model.ts";
-import { uuidv7 } from "../../../shared/ids.ts";
 import { clearCookie, sessionCookie } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
@@ -11,6 +9,8 @@ import { perAddress } from "./limits.ts";
 import { checkPassword } from "./passwords.ts";
 import { DEFAULT_DEVICE_NAME, finishSignIn, insertSession, me } from "./sessions.ts";
 import { streamsOf } from "./streams.ts";
+import { insertUser } from "./users.ts";
+import { memberDefaultsOf } from "../admin/settings.ts";
 
 export const SIGN_IN_LIMIT = perAddress(10, "1 minute");
 /** One answer for expired, used, withdrawn and unknown invitations alike. */
@@ -76,14 +76,10 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
           now,
         );
         if (!used.changes) fail(410, INVITE_GONE);
-        if (ctx.db.get("SELECT 1 FROM users WHERE username = ?", body.username)) fail(409, "That username is taken.");
-        const userId = uuidv7(now);
-        ctx.db.run(
-          "INSERT INTO users(id, username, password_hash, quota, created) VALUES(?, ?, ?, ?, ?)",
-          userId,
-          body.username,
-          passwordHash,
-          DEFAULTS.quotaBytes,
+        const userId = insertUser(
+          ctx,
+          { username: body.username, passwordHash, admin: false },
+          memberDefaultsOf(ctx),
           now,
         );
         ctx.db.run("UPDATE invites SET used_by = ? WHERE token_hash = ?", userId, invite);
@@ -103,7 +99,7 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
 
   route(app, ctx, api.session.signOut, ({ member, reply }) => {
     ctx.db.run("DELETE FROM sessions WHERE token_hash = ?", member.sessionHash);
-    clearCookie(ctx, reply, sessionCookie(ctx));
+    clearCookie(ctx, reply, sessionCookie(ctx, reply.request));
     streamsOf(ctx).recheck();
     ctx.events.publish(member.userId, "devices");
     return { ok: true as const };

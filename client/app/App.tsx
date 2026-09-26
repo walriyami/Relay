@@ -21,7 +21,17 @@ import {
   Shield,
   Sun,
 } from "lucide-react";
-import { ApiError, api, call, displayName, setCsrf, setPrincipal, type Me, type SessionEnded } from "../api";
+import {
+  ApiError,
+  api,
+  call,
+  displayName,
+  setCsrf,
+  setPrincipal,
+  type Me,
+  type SessionEnded,
+  type SetupState,
+} from "../api";
 import { navigate, useRoute, useSearch } from "../lib/router";
 import { connectLive, disconnectLive, onChange } from "../lib/live";
 import { abandonAll, isBusy, setTransferPrefs, transfers } from "../lib/transfers";
@@ -29,6 +39,7 @@ import { clearDraft } from "../lib/draft";
 import { setLocalPrefs, useLocalPrefs } from "../lib/local-prefs";
 import { Button, ConfirmHost, Popover, Spinner, Toaster, confirmDialog, menuKeys } from "../components/ui";
 import { AuthFrame, SignIn, Join } from "../features/auth/Auth";
+import { Setup } from "../features/setup/Setup";
 import { SendPage } from "../features/send/SendPage";
 import { FilesPage } from "../features/library/FilesPage";
 import { ActivityProvider } from "../features/activity/ActivityProvider";
@@ -142,6 +153,8 @@ function Private() {
   const search = useSearch();
   const parts = route.split("/").filter(Boolean);
   const [me, setMe] = useState<Me | null>(null);
+  /** Stays as it was at load until setup's last screen is left, however far setup got meanwhile. */
+  const [setup, setSetup] = useState<SetupState>("done");
   const [loading, setLoading] = useState(true);
   /** The first session check failed for a reason other than being signed out. */
   const [unreachable, setUnreachable] = useState(false);
@@ -180,22 +193,23 @@ function Private() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    call(api.session.get)
-      .then((data) => {
+    // Only the server saying "no session" means signed out; an outage keeps the cookie and retries.
+    const session = call(api.session.get).catch((error) => {
+      if (error instanceof ApiError && error.status === 401) return null;
+      throw error;
+    });
+    Promise.all([session, call(api.setup.status)])
+      .then(([data, status]) => {
         if (cancelled) return;
         setUnreachable(false);
-        signedIn(data);
+        setSetup(status.state);
+        if (data) signedIn(data);
+        else setMe(null);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return;
-        // Only the server saying "no session" means signed out; an outage keeps the cookie and retries.
-        if (error instanceof ApiError && error.status === 401) {
-          setUnreachable(false);
-          setMe(null);
-        } else {
-          setUnreachable(true);
-          timer = setTimeout(() => setAttempt((n) => n + 1), Math.min(30_000, 2_000 * 2 ** Math.min(attempt, 4)));
-        }
+        setUnreachable(true);
+        timer = setTimeout(() => setAttempt((n) => n + 1), Math.min(30_000, 2_000 * 2 ** Math.min(attempt, 4)));
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -266,6 +280,20 @@ function Private() {
       <main className="boot" tabIndex={-1}>
         <ConnectionScreen onRetry={() => setAttempt((n) => n + 1)} />
       </main>
+    );
+  // Before anyone has an account, and for the administrator until they finish choosing what members get.
+  if (setup === "account" || (setup === "defaults" && me?.user.admin))
+    return (
+      <Public>
+        <Setup
+          state={setup}
+          onSignedIn={signedInHere}
+          onFinished={() => {
+            setSetup("done");
+            navigate("/", true);
+          }}
+        />
+      </Public>
     );
   if (!me) {
     if (parts[0] === "join" && parts[1])

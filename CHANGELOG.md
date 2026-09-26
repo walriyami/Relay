@@ -4,7 +4,21 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+
+- First-start setup in the browser: create the administrator account, choose what everyone gets, and invite your first person. Relay needs no settings to start.
+- Per-member settings. Each member has their own storage, upload retention, link lifetime and Trash retention. Setup chooses what new members start with, and **Admin → New members** changes it later.
+- Administrators can change a member's name, username, link lifetime and Trash retention.
+- Members choose how long Trash keeps what they delete, in **Settings → Storage**.
+
+### Changed
+
+- `RELAY_ORIGIN` is optional. Unset, Relay answers at whatever address it's opened at. Set it to accept only one address.
+- `RELAY_SECRET` is no longer required by `compose.yaml`. Relay generates one and keeps it with the data.
+
 ### Removed
+
+- `RELAY_ADMIN_PASSWORD` and the built-in `admin` account. The administrator is created during setup.
 
 - Backup snapshots, the backup volume, the `RELAY_BACKUP_*` settings and the `npm run ops` command. Everything Relay stores lives in the data volume.
 - The maximum file size limit. A file only has to fit the member's storage and the service capacity.

@@ -22,6 +22,7 @@ export const LIMITS = {
   manifestBytes: 32 * 1024 ** 2,
   linkDaysMax: 365,
   retentionDaysMax: 3650,
+  trashDaysMax: 365,
   passwordMin: 12,
   /** The optional name a guest gives with a submission. */
   senderLength: 80,
@@ -46,6 +47,7 @@ export const LIMITS = {
 /** Usernames: 3–32 characters of lowercase letters, numbers, "-" and "_", starting with a letter or number. */
 export const USERNAME = /^[a-z0-9][a-z0-9_-]{2,31}$/;
 
+/** Built-in values: what a new member gets until setup (or the administrator) chooses others. */
 export const DEFAULTS = {
   linkDays: 7,
   trashDays: 30,
@@ -63,8 +65,28 @@ export type User = {
   name: string | null;
   admin: boolean;
   quota: number;
+  /** New uploads move to Trash after this many days; null keeps them until deleted. */
   retentionDays: number | null;
+  /** Trash deletes an item for good this many days after it was trashed. */
+  trashDays: number;
 };
+/**
+ * What each new member starts with. Setup chooses these; the administrator can change them later,
+ * and change any member's own values in Admin. Members change their own time settings themselves.
+ */
+export type MemberDefaults = {
+  quota: number;
+  retentionDays: number | null;
+  /** How long new links work; null keeps them until turned off. */
+  linkDays: number | null;
+  trashDays: number;
+};
+/**
+ * How far setup has come. "account": nobody has an account yet, so the first person to finish
+ * that step becomes the administrator. "defaults": the administrator exists but hasn't chosen what
+ * members get. "done": Relay is set up.
+ */
+export type SetupState = "account" | "defaults" | "done";
 /** What Activity shows. Deliveries still waiting for an answer are always shown. */
 export type ActivityGroup = "received" | "requests" | "links" | "security" | "members";
 export type ActivityPrefs = Record<ActivityGroup, boolean>;
@@ -294,6 +316,7 @@ export type PendingInvite = {
 };
 
 export type AdminMember = User & {
+  linkDays: number | null;
   disabled: boolean;
   created: Time;
   usage: Usage;
@@ -314,6 +337,7 @@ export type AdminOverview = {
   operations: ServiceOperations;
   codeLength: CodeLength;
   members: AdminMember[];
+  defaults: MemberDefaults;
   storage: {
     used: number;
     reserved: number;
@@ -346,7 +370,7 @@ export type SessionEnded = {
   reason: "suspended" | "signed-out" | "password-reset" | "password-changed" | "expired";
 };
 
-export type SignInMethod = "password" | "passkey" | "code" | "invitation";
+export type SignInMethod = "password" | "passkey" | "code" | "invitation" | "setup";
 /** Something that happened on the account. Device and request names are as they were then. */
 export type ActivityEvent =
   | { kind: "signin"; deviceId: Id; device: string; method: SignInMethod }

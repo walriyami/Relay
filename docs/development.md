@@ -4,10 +4,10 @@
 
 ```sh
 npm ci
-RELAY_ADMIN_PASSWORD='dev-password-only' npm run dev
+npm run dev
 ```
 
-Open http://localhost:5178 and sign in as `admin`. `npm run dev` runs the API on port 3090 with automatic restarts, plus Vite with hot reload on port 5178, which proxies API calls. Local data goes to `.data/`. Delete that folder to start over.
+Open http://localhost:5178. The first time, Relay walks you through setup and creates your administrator account. `npm run dev` runs the API on port 3090 with automatic restarts, plus Vite with hot reload on port 5178, which proxies API calls. Local data goes to `.data/`. Delete that folder to start over.
 
 Relay needs Node.js 24, which can run TypeScript directly, so there's no compile step. The project pins Node 24 as a dev dependency, and every npm script runs on it even when your system has an older Node. To run a file directly, use `npx node <file>`.
 

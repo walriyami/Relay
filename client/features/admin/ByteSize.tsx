@@ -49,13 +49,16 @@ export function ByteSizeField({
   label: string;
   hint?: string;
   draft: ByteDraft;
-  /** The saved value. A change says what it becomes, so a switched unit can't slip by unnoticed. */
-  original: number;
+  /**
+   * The saved value. A change says what it becomes, so a switched unit can't slip by unnoticed.
+   * Left out when nothing is saved yet.
+   */
+  original?: number;
   onChange: (draft: ByteDraft) => void;
   invalid?: boolean;
 }) {
-  const next = changedBytes(draft, original);
-  const change = next ? `Now ${bytes(original)}; saving makes it ${bytes(next)}.` : "";
+  const next = original === undefined ? undefined : changedBytes(draft, original);
+  const change = next ? `Now ${bytes(original!)}; saving makes it ${bytes(next)}.` : "";
   return (
     <Field label={label} hint={[hint, change].filter(Boolean).join(" ") || undefined}>
       <span className="byte-size">

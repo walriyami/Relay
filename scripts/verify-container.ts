@@ -16,6 +16,7 @@ import { LIMITS } from "../shared/model.ts";
 import {
   REPO,
   Session,
+  setUpAdmin,
   assert,
   bufferSource,
   download,
@@ -62,14 +63,7 @@ const hardened = [
   "--security-opt",
   "no-new-privileges:true",
 ];
-const environment = (origin: string) => [
-  "-e",
-  `RELAY_ORIGIN=${origin}`,
-  "-e",
-  `RELAY_ADMIN_PASSWORD=${PASSWORD}`,
-  "-e",
-  `RELAY_SECRET=${SECRET}`,
-];
+const environment = (origin: string) => ["-e", `RELAY_ORIGIN=${origin}`, "-e", `RELAY_SECRET=${SECRET}`];
 const volumeMounts = ["-v", `${volumes.data}:/data`];
 
 async function startContainer(name: string, storage: string[], extra: string[] = []) {
@@ -91,6 +85,7 @@ async function startContainer(name: string, storage: string[], extra: string[] =
     IMAGE,
   );
   await waitForHealth(origin, 60_000);
+  await setUpAdmin(origin, PASSWORD);
   const session = new Session(origin);
   await session.signIn("admin", PASSWORD, "Container verification");
   return session;

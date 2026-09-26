@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
-import { api, call, displayName, type AdminMember, type AdminOverview, type PendingInvite } from "../../api";
-import { LIMITS } from "../../../shared/model";
+import { ApiError, api, call, displayName, type AdminMember, type AdminOverview, type PendingInvite } from "../../api";
+import { LIMITS, USERNAME, type MemberDefaults } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { ago, bytes, dateTime, plural } from "../../lib/format";
 import { notifyChange, useLive } from "../../lib/live";
@@ -24,8 +24,8 @@ import {
   toast,
 } from "../../components/ui";
 import { LinkDialog } from "../../components/LinkDialog";
-import { keepOptions } from "../../lib/options";
-import { ByteSizeField, changedBytes, toDraft } from "./ByteSize";
+import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
+import { ByteSizeField, changedBytes, toDraft, type ByteDraft } from "./ByteSize";
 
 const errorToast = (e: unknown) => toast((e as Error).message, { tone: "error" });
 
@@ -114,6 +114,17 @@ export function AdminPage() {
             error={invites.error}
             onChanged={invites.reload}
           />
+          <section className="settings-section card-surface" aria-labelledby="admin-defaults">
+            <div className="settings-section-head">
+              <h2 id="admin-defaults">New members</h2>
+              <p className="muted">
+                What people who join from now on start with. Members already here keep theirs; use Manage to change
+                them.
+              </p>
+            </div>
+            {/* Keyed so saved (or elsewhere changed) values become the new starting point. */}
+            <NewMemberDefaults key={JSON.stringify(data.defaults)} defaults={data.defaults} onSaved={reload} />
+          </section>
           <section className="settings-section card-surface" aria-labelledby="admin-limits">
             <div className="settings-section-head">
               <h2 id="admin-limits">Limits</h2>
@@ -381,6 +392,122 @@ function Limits({ limits, onSaved }: { limits: AdminOverview["limits"]; onSaved:
   );
 }
 
+function NewMemberDefaults({ defaults, onSaved }: { defaults: MemberDefaults; onSaved: () => void }) {
+  const [quota, setQuota] = useState(() => toDraft(defaults.quota));
+  const [retention, setRetention] = useState(defaults.retentionDays ?? 0);
+  const [linkDays, setLinkDays] = useState(toSegment(defaults.linkDays));
+  const [trashDays, setTrashDays] = useState(defaults.trashDays);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const quotaChange = changedBytes(quota, defaults.quota);
+  const changes = {
+    quota: quotaChange ?? undefined,
+    retentionDays: retention !== (defaults.retentionDays ?? 0) ? retention || null : undefined,
+    linkDays: linkDays !== toSegment(defaults.linkDays) ? fromSegment(linkDays) : undefined,
+    trashDays: trashDays !== defaults.trashDays ? trashDays : undefined,
+  };
+  const changed = Object.values(changes).some((v) => v !== undefined) || quotaChange === null;
+  return (
+    <form
+      className="stack"
+      noValidate
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError("");
+        if (quotaChange === null) return setError("Enter a storage quota greater than zero.");
+        setBusy(true);
+        try {
+          await call(api.admin.settings, { body: { defaults: changes } });
+          toast("Saved. New members start with these.");
+          onSaved();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <MemberFields
+        quota={{ draft: quota, original: defaults.quota, invalid: quotaChange === null, onChange: setQuota }}
+        retention={{ value: retention, onChange: setRetention }}
+        linkDays={{ value: linkDays, onChange: setLinkDays }}
+        trashDays={{ value: trashDays, onChange: setTrashDays }}
+      />
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div>
+        <Button type="submit" busy={busy} disabled={!changed}>
+          Save for new members
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+type Choice<T> = { value: T; onChange: (value: T) => void };
+
+/** The values each member has, asked the same way for new members and for one member. */
+function MemberFields({
+  quota,
+  quotaHint,
+  retention,
+  linkDays,
+  trashDays,
+}: {
+  quota: { draft: ByteDraft; original: number; invalid: boolean; onChange: (draft: ByteDraft) => void };
+  quotaHint?: string;
+  retention: Choice<number>;
+  /** As a segmented value: 0 keeps links until turned off. */
+  linkDays: Choice<number>;
+  trashDays: Choice<number>;
+}) {
+  return (
+    <>
+      <ByteSizeField
+        label="Storage quota"
+        hint={quotaHint}
+        draft={quota.draft}
+        original={quota.original}
+        onChange={quota.onChange}
+        invalid={quota.invalid}
+      />
+      <div className="stack-sm">
+        <span className="field-label">Keep uploads in Files</span>
+        <Segmented
+          label="Keep uploads in Files"
+          value={retention.value}
+          options={keepOptions(retention.value)}
+          onChange={retention.onChange}
+        />
+        <span className="field-hint">After this, uploads move to Trash automatically.</span>
+      </div>
+      <div className="stack-sm">
+        <span className="field-label">Links expire after</span>
+        <Segmented
+          label="Links expire after"
+          value={linkDays.value}
+          options={linkLifeOptions(fromSegment(linkDays.value))}
+          onChange={linkDays.onChange}
+        />
+        <span className="field-hint">What new links start with. Each link can still be set on its own.</span>
+      </div>
+      <div className="stack-sm">
+        <span className="field-label">Empty Trash after</span>
+        <Segmented
+          label="Empty Trash after"
+          value={trashDays.value}
+          options={trashOptions(trashDays.value)}
+          onChange={trashDays.onChange}
+        />
+        <span className="field-hint">Until then, anything deleted can be restored.</span>
+      </div>
+    </>
+  );
+}
+
 /** "They'll be signed out on 2 devices", or that they aren't signed in anywhere. */
 const signOutConsequence = (m: AdminMember) =>
   m.signedInDevices
@@ -401,28 +528,44 @@ function ManageMember({
   onChanged: () => void;
   onSaved: () => void;
 }) {
+  const [name, setName] = useState(member.name ?? "");
+  const [username, setUsername] = useState(member.username);
   const [quota, setQuota] = useState(() => toDraft(member.quota));
   const [retention, setRetention] = useState(member.retentionDays || 0);
+  const [linkDays, setLinkDays] = useState(toSegment(member.linkDays));
+  const [trashDays, setTrashDays] = useState(member.trashDays);
   const [disabled, setDisabled] = useState(member.disabled);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const passwordInput = useRef<HTMLInputElement>(null);
+  const inputs = {
+    username: useRef<HTMLInputElement>(null),
+    password: useRef<HTMLInputElement>(null),
+  };
+  const cleanUsername = username.trim().toLowerCase();
   // Only edited fields are sent: a quota the form can't show exactly is never rewritten.
   const quotaChange = changedBytes(quota, member.quota);
   const changes = {
+    name: name.trim() !== (member.name ?? "") ? name.trim() || null : undefined,
+    username: cleanUsername !== member.username ? cleanUsername : undefined,
     quota: quotaChange ?? undefined,
     retentionDays: retention !== (member.retentionDays || 0) ? retention || null : undefined,
+    linkDays: linkDays !== toSegment(member.linkDays) ? fromSegment(linkDays) : undefined,
+    trashDays: trashDays !== member.trashDays ? trashDays : undefined,
     disabled: !member.admin && disabled !== member.disabled ? disabled : undefined,
   };
   const changed = Object.values(changes).some((v) => v !== undefined) || quotaChange === null || !!password;
+  function fail(message: string, field?: keyof typeof inputs) {
+    setError(message);
+    if (field) inputs[field].current?.focus();
+  }
   async function save() {
     setError("");
+    if (changes.username !== undefined && !USERNAME.test(changes.username))
+      return fail("Use 3 to 32 lowercase letters, numbers, - or _, starting with a letter or number.", "username");
     if (quotaChange === null) return setError("Enter a storage quota greater than zero.");
     if (password && password.length < LIMITS.passwordMin) {
-      setError(`The new password needs at least ${LIMITS.passwordMin} characters.`);
-      passwordInput.current?.focus();
-      return;
+      return fail(`The new password needs at least ${LIMITS.passwordMin} characters.`, "password");
     }
     const suspending = changes.disabled === true;
     if (suspending || password) {
@@ -455,14 +598,22 @@ function ManageMember({
         saved = true;
       }
       if (password) await call(api.admin.resetPassword, { params: { id: member.id }, body: { password } });
-      toast(suspending ? `${member.username} is suspended` : "Saved");
+      const now = changes.username ?? member.username;
+      toast(
+        suspending
+          ? `${now} is suspended`
+          : changes.username
+            ? `Saved. ${self ? "You sign" : "They sign"} in as ${now} from now on.`
+            : "Saved",
+      );
       onSaved();
     } catch (e) {
       if (saved) {
         // The member's other changes are in; only the password is left to retry.
         onChanged();
         setError(`Your other changes were saved, but the password wasn’t changed: ${(e as Error).message}`);
-      } else setError((e as Error).message);
+      } else if (e instanceof ApiError && e.status === 409) fail(e.message, "username");
+      else setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -489,24 +640,48 @@ function ManageMember({
           if (!busy) void save();
         }}
       >
-        <ByteSizeField
-          label="Storage quota"
-          hint={`${bytes(member.usage.used)} used now.`}
-          draft={quota}
-          original={member.quota}
-          onChange={setQuota}
-          invalid={quotaChange === null}
-        />
-        <div className="stack-sm">
-          <span className="field-label">Keep uploads in Files</span>
-          <Segmented
-            label="Keep uploads in Files"
-            value={retention}
-            options={keepOptions(member.retentionDays)}
-            onChange={setRetention}
-          />
-          <span className="field-hint">After this, uploads move to Trash automatically.</span>
+        <div className="form-grid">
+          <Field
+            label="Name"
+            hint={
+              self
+                ? "What people you share with see. Empty shows your username."
+                : "What people they share with see. Empty shows their username."
+            }
+          >
+            <input
+              className="input"
+              maxLength={LIMITS.displayNameLength}
+              placeholder={member.username}
+              autoComplete="off"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Username"
+            hint={self ? "What you sign in with." : "What they sign in with. Their devices and passkeys keep working."}
+          >
+            <input
+              ref={inputs.username}
+              className="input"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
+              maxLength={32}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </Field>
         </div>
+        <MemberFields
+          quota={{ draft: quota, original: member.quota, invalid: quotaChange === null, onChange: setQuota }}
+          quotaHint={`${bytes(member.usage.used)} used now.`}
+          retention={{ value: retention, onChange: setRetention }}
+          linkDays={{ value: linkDays, onChange: setLinkDays }}
+          trashDays={{ value: trashDays, onChange: setTrashDays }}
+        />
         {!member.admin && (
           <Toggle
             label="Suspend access"
@@ -529,7 +704,7 @@ function ManageMember({
             hint={`Optional. At least ${LIMITS.passwordMin} characters. Signs the member out everywhere.`}
           >
             <input
-              ref={passwordInput}
+              ref={inputs.password}
               className="input"
               type="password"
               autoComplete="new-password"

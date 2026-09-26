@@ -7,11 +7,10 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      RELAY_ORIGIN: ${RELAY_ORIGIN:-http://localhost:3090}
-      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?Set RELAY_ADMIN_PASSWORD in .env}
-      # Derives link and request tokens. Moving the data to a different key keeps every file but
-      # invalidates existing links.
-      RELAY_SECRET: ${RELAY_SECRET:?Set RELAY_SECRET in .env (at least 32 characters)}
+      # Optional. Unset, Relay answers at whatever address it is opened at; see .env.example.
+      RELAY_ORIGIN: ${RELAY_ORIGIN:-}
+      # Optional. Derives link and request tokens; unset, Relay keeps a generated key in the volume.
+      RELAY_SECRET: ${RELAY_SECRET:-}
       # Proxies allowed to report the client address. Covers a proxy on the host or on a Docker network.
       RELAY_TRUST_PROXY: ${RELAY_TRUST_PROXY:-127.0.0.1,::1,172.16.0.0/12}
     volumes:

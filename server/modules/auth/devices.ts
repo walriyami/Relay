@@ -46,7 +46,7 @@ export function registerDevices(app: FastifyInstance, ctx: Context) {
     if (!ctx.db.get("SELECT 1 FROM devices WHERE id = ? AND user_id = ?", params.id, member.userId))
       notFound("That device");
     ctx.db.run("DELETE FROM sessions WHERE device_id = ?", params.id);
-    if (params.id === member.deviceId) clearCookie(ctx, reply, sessionCookie(ctx));
+    if (params.id === member.deviceId) clearCookie(ctx, reply, sessionCookie(ctx, reply.request));
     streams.recheck();
     ctx.events.publish(member.userId, "devices");
     return { ok: true as const };

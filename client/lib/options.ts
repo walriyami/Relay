@@ -1,10 +1,12 @@
-// The choices offered for link lifetimes and for how long uploads stay in Files. Every screen that
-// asks one of these questions offers the same set.
+// The choices offered for link lifetimes, how long uploads stay in Files and how long Trash keeps
+// them. Every screen that asks one of these questions offers the same set.
 
 /** How long a new or extended link keeps working. Links can also be kept until turned off. */
 export const LINK_DAYS = [1, 7, 30, 90];
 /** How long uploads stay in Files before moving to Trash; 0 keeps them until deleted. */
 export const KEEP_DAYS = [0, 1, 7, 30, 90, 365];
+/** How long Trash keeps what was deleted or expired, before it is gone for good. */
+export const TRASH_DAYS = [7, 30, 90, 365];
 
 export const days = (n: number) => (n === 365 ? "1 year" : n === 1 ? "1 day" : `${n} days`);
 const shortDays = (n: number) => (n === 365 ? "1 yr" : `${n} d`);
@@ -34,6 +36,8 @@ export const toSegment = (days: number | null) => days ?? 0;
 export const fromSegment = (value: number) => value || null;
 /** "Expires in 7 days", "Never expires": how long a link will work, as a choice. */
 export const linkLifeLabel = (n: number | null) => (n === null ? "Never expires" : `Expires in ${days(n)}`);
+export const trashOptions = (current: number) =>
+  withCurrent(TRASH_DAYS, current).map((value) => ({ value, label: days(value) }));
 /** Segmented options for keeping uploads; `short` labels keep six choices on one line on a phone. */
 export const keepOptions = (current: number | null) =>
   withCurrent(KEEP_DAYS, current || 0).map((value) => ({

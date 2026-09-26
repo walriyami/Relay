@@ -108,14 +108,14 @@ const UNLOCK_FAILURES = { max: 10, windowMs: 15 * 60_000 };
  */
 function visitorOf(ctx: Context, req: FastifyRequest, reply: FastifyReply | null, row: LinkRow) {
   if (authOf(ctx, req).member?.userId === row.owner) return "owner" as const;
-  const name = visitorCookie(ctx);
+  const name = visitorCookie(ctx, req);
   let secret = req.cookies[name];
   if (!secret || !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
     if (!reply) return null;
     secret = randomToken();
   }
   // Refreshed on every open, so a browser that keeps coming back stays the same person.
-  reply?.setCookie(name, secret, cookieOptions(ctx, VISITOR_MS));
+  reply?.setCookie(name, secret, cookieOptions(ctx, req, VISITOR_MS));
   return sha256(`${secret}:${row.id}`);
 }
 

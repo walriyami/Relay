@@ -25,19 +25,19 @@ export type UserRow = {
   admin: number;
   quota: number;
   retention_days: number | null;
+  trash_days: number;
   prefs: string;
 };
-export const USER_COLUMNS = "id, username, display_name, admin, quota, retention_days, prefs";
+export const USER_COLUMNS = "id, username, display_name, admin, quota, retention_days, trash_days, prefs";
 
-export const toUser = (
-  row: Pick<UserRow, "id" | "username" | "display_name" | "admin" | "quota" | "retention_days">,
-): User => ({
+export const toUser = (row: Omit<UserRow, "prefs">): User => ({
   id: row.id,
   username: row.username,
   name: row.display_name,
   admin: !!row.admin,
   quota: row.quota,
   retentionDays: row.retention_days,
+  trashDays: row.trash_days,
 });
 
 /** The name a member shows other people: their display name, or else their username. */
@@ -142,7 +142,7 @@ export function insertSession(ctx: Context, userId: string, deviceName: string, 
 }
 
 export function finishSignIn(ctx: Context, reply: FastifyReply, session: NewSession): Me {
-  reply.setCookie(sessionCookie(ctx), session.token, cookieOptions(ctx, SESSION_MS));
+  reply.setCookie(sessionCookie(ctx, reply.request), session.token, cookieOptions(ctx, reply.request, SESSION_MS));
   ctx.events.publish(session.userId, "devices");
   return me(ctx, session.userId, session.deviceId, session.csrf);
 }

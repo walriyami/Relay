@@ -17,6 +17,8 @@ CREATE TABLE users (
   disabled INTEGER NOT NULL DEFAULT 0,
   quota INTEGER NOT NULL,
   retention_days INTEGER,
+  -- Days an item stays in Trash before it is deleted for good.
+  trash_days INTEGER NOT NULL DEFAULT 30,
   prefs TEXT NOT NULL DEFAULT '{}',
   -- Maintained by triggers on nodes: logical bytes of ready file and text nodes.
   bytes_used INTEGER NOT NULL DEFAULT 0,

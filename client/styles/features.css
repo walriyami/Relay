@@ -2247,6 +2247,8 @@ audio.preview-media {
 .byte-size {
   display: flex;
   gap: var(--s2);
+  /* A number and a unit: wide enough for any size, never a full-width bar. */
+  max-width: 20rem;
 }
 .byte-size .input:first-child {
   flex: 1;
@@ -2774,4 +2776,683 @@ audio.preview-media {
 }
 .share-note figcaption::before {
   content: "— ";
+}
+
+/* First-start setup: one calm column, a step at a time. */
+.setup {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+}
+.setup:focus {
+  outline: none;
+}
+/* A soft warmth behind the column, so the first screen doesn't feel like a form. */
+.setup-glow {
+  position: absolute;
+  inset: -20vh -10vw auto;
+  height: 70vh;
+  background:
+    radial-gradient(40% 50% at 30% 40%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
+    radial-gradient(35% 45% at 72% 30%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%);
+  filter: blur(8px);
+  pointer-events: none;
+  animation: setup-glow 18s ease-in-out infinite alternate;
+}
+@keyframes setup-glow {
+  to {
+    transform: translate3d(2vw, 3vh, 0) scale(1.06);
+  }
+}
+.setup-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  max-width: calc(var(--content) + 2 * var(--gutter));
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--s4) var(--gutter);
+}
+.setup-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: clamp(var(--s4), 5vh, 56px) var(--gutter) var(--s7);
+}
+.setup-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+  width: min(480px, 100%);
+  text-align: center;
+}
+.setup-step-members {
+  width: min(560px, 100%);
+}
+.setup-step h1 {
+  font-size: clamp(1.6rem, 1.2rem + 1.6vw, 2.05rem);
+  letter-spacing: -0.02em;
+  outline: none;
+}
+.setup-lead {
+  max-width: 44ch;
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.setup-aside {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+/* Everything in a step arrives in turn, top to bottom. */
+.setup-step > * {
+  animation: setup-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.setup-step > :nth-child(2) {
+  animation-delay: 60ms;
+}
+.setup-step > :nth-child(3) {
+  animation-delay: 120ms;
+}
+.setup-step > :nth-child(4) {
+  animation-delay: 180ms;
+}
+.setup-step > :nth-child(n + 5) {
+  animation-delay: 240ms;
+}
+@keyframes setup-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+.setup-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  margin-top: var(--s2);
+}
+.setup-cta {
+  width: min(320px, 100%);
+  height: 48px;
+  border-radius: var(--r2);
+  font-size: 1rem;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+  transition:
+    background-color 0.12s,
+    transform 0.16s,
+    box-shadow 0.16s;
+}
+.setup-cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.setup-cta:active:not(:disabled) {
+  transform: translateY(0);
+}
+/* A trailing arrow sits inside the label. */
+.setup-cta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.setup-cta > span svg {
+  transition: transform 0.16s;
+}
+.setup-cta:hover:not(:disabled) > span svg {
+  transform: translateX(2px);
+}
+.setup-card {
+  width: 100%;
+  padding: var(--s5);
+  text-align: left;
+  box-shadow: var(--shadow-sm);
+}
+.setup-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  min-height: var(--control-sm);
+  color: var(--muted);
+  text-decoration: none;
+}
+.setup-back:hover {
+  color: var(--ink);
+}
+
+/* Progress: three bars, the current one filling in. */
+.setup-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.setup-progress ol {
+  display: flex;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.setup-progress li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 132px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.setup-progress li.current {
+  color: var(--ink);
+}
+.setup-progress-bar {
+  position: relative;
+  height: 4px;
+  border-radius: var(--pill);
+  background: var(--line);
+  overflow: hidden;
+}
+.setup-progress-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.setup-progress li.done .setup-progress-bar::after {
+  transform: none;
+}
+.setup-progress li.current .setup-progress-bar::after {
+  animation: setup-fill 0.7s 0.15s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes setup-fill {
+  to {
+    transform: scaleX(0.5);
+  }
+}
+.setup-progress-count {
+  display: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  .setup-progress li {
+    width: 40px;
+  }
+  .setup-progress-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .setup-progress-count {
+    display: block;
+  }
+  .setup-card {
+    padding: var(--s4);
+  }
+}
+
+/* Welcome and done: what Relay does, and what to try first. */
+.setup-points {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  width: 100%;
+  margin: var(--s2) 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.setup-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+.setup-points li > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+.setup-points .muted {
+  font-size: 0.9rem;
+}
+.setup-point-icon,
+.setup-question-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* What everyone gets */
+.setup-welcome-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--s3);
+  border-radius: var(--pill);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.setup-questions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+.setup-question,
+.setup-total {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+.setup-question-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  flex: 1;
+  min-width: 0;
+}
+.setup-question-title {
+  font-weight: 600;
+  line-height: 36px;
+  margin-bottom: -6px;
+}
+.setup-questions .segmented {
+  display: flex;
+  width: 100%;
+}
+.setup-questions .segmented button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 4px;
+}
+.setup-reveal {
+  animation: setup-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.setup-reveal .field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.setup-total {
+  align-items: center;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.setup-total-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+.setup-total-text .muted {
+  font-size: 0.88rem;
+}
+.setup-total:has(.setup-total-edit) {
+  align-items: flex-start;
+}
+.setup-total-edit {
+  flex: 1;
+  min-width: 0;
+}
+.setup-total-edit .field-label {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+}
+.setup-questions .setup-cta {
+  align-self: center;
+  margin-top: var(--s1);
+}
+
+/* Invitation */
+.setup-invite {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+}
+.setup-invite-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success);
+  font-weight: 600;
+}
+.setup-invite .share-access-detail {
+  text-align: center;
+}
+
+/* Scenes: small drawings that move, in the page's own colours. */
+.setup-scene {
+  width: min(320px, 100%);
+  height: auto;
+  overflow: visible;
+  margin-bottom: var(--s2);
+}
+.scene-device rect:first-child,
+.scene-device > path {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 2;
+}
+.scene-line {
+  fill: var(--line);
+}
+.scene-arc {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 2 7;
+  animation: scene-flow 1.2s linear infinite;
+}
+@keyframes scene-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+.scene-file path:first-child {
+  fill: var(--accent);
+}
+.scene-file-fold {
+  fill: none;
+  stroke: var(--accent-soft);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+/* The file rides a parabola: steady across, up then down. */
+.scene-file-x {
+  animation: scene-x 3.2s infinite;
+}
+.scene-file-y {
+  animation: scene-y 3.2s infinite;
+}
+.scene-file {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-file 3.2s infinite;
+}
+@keyframes scene-x {
+  0%,
+  12% {
+    transform: translate(118px, 64px);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  62%,
+  100% {
+    transform: translate(236px, 64px);
+  }
+}
+@keyframes scene-y {
+  0%,
+  12% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  }
+  37% {
+    transform: translateY(-30px);
+    animation-timing-function: cubic-bezier(0.6, 0, 0.8, 0.4);
+  }
+  62%,
+  100% {
+    transform: translateY(0);
+  }
+}
+@keyframes scene-file {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  10%,
+  56% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  66%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+.scene-landed {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-landed 3.2s infinite;
+}
+.scene-landed-check {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 24;
+  animation: scene-landed-check 3.2s infinite;
+}
+@keyframes scene-landed {
+  0%,
+  60% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  68%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+@keyframes scene-landed-check {
+  0%,
+  66% {
+    stroke-dashoffset: 24;
+    opacity: 1;
+  }
+  76%,
+  92% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+.scene-ping {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.scene-relay .scene-ping {
+  animation: scene-ping 3.2s 1.95s infinite;
+}
+@keyframes scene-ping {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.6);
+  }
+  30%,
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+.scene-hub rect {
+  fill: var(--accent);
+}
+.scene-hub path {
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.scene-hub {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-pop 0.6s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+.scene-people .scene-ping {
+  animation: scene-ping 3s 1.6s infinite;
+}
+.scene-tie {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 140;
+  stroke-dashoffset: 140;
+  animation: scene-tie 0.7s calc(0.35s + var(--i) * 0.16s) cubic-bezier(0.3, 0.7, 0.4, 1) forwards;
+}
+@keyframes scene-tie {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.scene-person {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    scene-pop 0.55s calc(0.55s + var(--i) * 0.16s) cubic-bezier(0.3, 1.6, 0.5, 1) both,
+    scene-float 4s calc(1.6s + var(--i) * 0.45s) ease-in-out infinite alternate;
+}
+.scene-person > circle:first-child {
+  stroke: var(--surface);
+  stroke-width: 3;
+}
+.scene-person.tint-a > circle:first-child {
+  fill: #f6d7cc;
+}
+.scene-person.tint-b > circle:first-child {
+  fill: #cfe6d9;
+}
+.scene-person.tint-c > circle:first-child {
+  fill: #d9dcf2;
+}
+.scene-person-glyph {
+  fill: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+:root[data-theme="dark"] .scene-person.tint-a > circle:first-child {
+  fill: #4a2d24;
+}
+:root[data-theme="dark"] .scene-person.tint-b > circle:first-child {
+  fill: #203a2c;
+}
+:root[data-theme="dark"] .scene-person.tint-c > circle:first-child {
+  fill: #2b2f4a;
+}
+:root[data-theme="dark"] .scene-person-glyph {
+  fill: color-mix(in srgb, var(--ink) 70%, transparent);
+}
+@keyframes scene-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+}
+@keyframes scene-float {
+  to {
+    transform: translateY(-4px);
+  }
+}
+
+.scene-done {
+  width: 160px;
+}
+.scene-done-ring {
+  fill: var(--success-soft);
+  stroke: var(--success);
+  stroke-width: 3;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-pop 0.6s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+.scene-done-check {
+  fill: none;
+  stroke: var(--success);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  animation: scene-draw 0.5s 0.35s cubic-bezier(0.6, 0, 0.3, 1) forwards;
+}
+@keyframes scene-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.scene-spark {
+  fill: var(--accent);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-spark 0.9s 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+.scene-spark:nth-child(3n) {
+  fill: var(--success);
+}
+@keyframes scene-spark {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--a)) translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--a)) translateY(-54px) scale(0.4);
+  }
+}
+/* Without motion the relay scene shows its arrival, rather than an empty phone. */
+@media (prefers-reduced-motion: reduce) {
+  .scene-landed,
+  .scene-landed-check {
+    animation: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
 }

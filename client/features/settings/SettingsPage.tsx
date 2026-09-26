@@ -6,7 +6,7 @@ import { useSession } from "../../app/session";
 import { confirmSignOut, signOut } from "../../app/App";
 import { ago, bytes } from "../../lib/format";
 import { notifyChange } from "../../lib/live";
-import { fromSegment, keepOptions, linkLifeOptions, toSegment } from "../../lib/options";
+import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
 import { navigate } from "../../lib/router";
 import { setTransferPrefs } from "../../lib/transfers";
 import { setLocalPrefs, useLocalPrefs } from "../../lib/local-prefs";
@@ -37,6 +37,7 @@ const deviceIcon = (d: Device) => {
 type AccountChange = {
   prefs?: Partial<Omit<Prefs, "activity">> & { activity?: Partial<ActivityPrefs> };
   retentionDays?: number | null;
+  trashDays?: number;
 };
 
 function applyChange(current: Me, body: AccountChange): Me {
@@ -47,7 +48,11 @@ function applyChange(current: Me, body: AccountChange): Me {
       ...body.prefs,
       activity: { ...current.prefs.activity, ...body.prefs?.activity },
     },
-    user: body.retentionDays !== undefined ? { ...current.user, retentionDays: body.retentionDays } : current.user,
+    user: {
+      ...current.user,
+      ...(body.retentionDays !== undefined && { retentionDays: body.retentionDays }),
+      ...(body.trashDays !== undefined && { trashDays: body.trashDays }),
+    },
   };
 }
 
@@ -230,7 +235,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
             <strong>{bytes(used)}</strong> <span className="muted">of {bytes(quota)} used</span>
           </span>
           <p className="field-hint">
-            Items in Trash still count until deleted. Trash empties itself after 30 days.{" "}
+            Items in Trash still count until deleted.{" "}
             <a
               className="link"
               href="/trash"
@@ -243,6 +248,20 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
               Open Trash
             </a>
           </p>
+        </div>
+        <div className="setting-row">
+          <span className="setting-label">
+            <strong>Empty Trash after</strong>
+            <span className="field-hint">
+              Until then, anything deleted can be restored. Applies to what’s in Trash now, too.
+            </span>
+          </span>
+          <Segmented
+            label="Empty Trash after"
+            value={me.user.trashDays}
+            options={trashOptions(me.user.trashDays)}
+            onChange={(v) => void save({ trashDays: v })}
+          />
         </div>
       </Section>
       <Section id="s-account" title="Account">

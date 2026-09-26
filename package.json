@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,web 'RELAY_ORIGIN=${RELAY_ORIGIN:-http://localhost:5178} node --watch server/main.ts' 'vite --host 127.0.0.1'",
+    "dev": "concurrently -k -n server,web 'node --watch server/main.ts' 'vite --host 127.0.0.1'",
     "start": "node server/main.ts",
     "build": "npm run typecheck && NODE_ENV=production vite build",
     "typecheck": "tsc --noEmit",

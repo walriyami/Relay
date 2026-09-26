@@ -11,10 +11,20 @@ import { testConfig } from "./config.ts";
 
 export type Instance = App & { root: string; close: () => Promise<void> };
 
-export async function start(overrides: Partial<Config> = {}, root?: string): Promise<Instance> {
+export const ADMIN_PASSWORD = "Test-admin-password-only";
+
+/**
+ * A disposable instance, already set up with the administrator "admin" and the built-in member
+ * values, as most tests expect. `setup: false` leaves it as a first start finds it.
+ */
+export async function start(
+  overrides: Partial<Config> = {},
+  root?: string,
+  { setup = true }: { setup?: boolean } = {},
+): Promise<Instance> {
   const dir = root ?? (await mkdtemp(join(tmpdir(), "relay-test-")));
   const built = await buildApp(testConfig(dir, overrides));
-  return {
+  const instance: Instance = {
     ...built,
     root: dir,
     close: async () => {
@@ -22,6 +32,25 @@ export async function start(overrides: Partial<Config> = {}, root?: string): Pro
       if (!root) await rm(dir, { recursive: true, force: true });
     },
   };
+  if (setup) await setUp(instance, ADMIN_PASSWORD);
+  return instance;
+}
+
+/**
+ * Sets up a first start as a browser would, keeping the built-in member values, then removes the
+ * setup browser's device, session and sign-in so tests begin with no devices. Does nothing on an
+ * instance that is already set up.
+ */
+export async function setUp(instance: Pick<App, "app" | "ctx">, password: string) {
+  const client = new Client(instance as Instance);
+  if ((await client.call(api.setup.status)).state !== "account") return;
+  await client.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup" } });
+  const { defaults, limits } = await client.call(api.admin.overview);
+  await client.call(api.setup.finish, { body: { ...defaults, capacity: limits.capacity } });
+  const { db } = instance.ctx;
+  db.tx(() => {
+    for (const table of ["sessions", "devices", "activity"]) db.run(`DELETE FROM ${table}`);
+  });
 }
 /** Closes the app but keeps its directory, to start it again as a "restart". */
 export async function stop(instance: Instance) {
@@ -87,7 +116,7 @@ export class Client {
 
 export async function admin(instance: Instance) {
   const client = new Client(instance);
-  await client.signIn("admin", "Test-admin-password-only");
+  await client.signIn("admin", ADMIN_PASSWORD);
   return client;
 }
 
