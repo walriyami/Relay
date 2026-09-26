@@ -8,7 +8,6 @@
 // It never runs by accident and never defaults to any origin:
 //   RELAY_VERIFY_USERNAME=... RELAY_VERIFY_PASSWORD=... \
 //     npm run verify:deployment -- --run-live --origin https://relay.example.com [--size 72MiB]
-// Verify stored backups separately with `npm run ops -- verify <RELAY_BACKUP_DIR>`.
 // Plain http is accepted only for loopback origins (a disposable local instance).
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";

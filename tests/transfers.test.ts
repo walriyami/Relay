@@ -113,16 +113,12 @@ test("paths: folders are created mkdir -p style; duplicates and file/folder clas
   }
 });
 
-test("admission: file size limit, quota (including reserved bytes), capacity, disk space and guest limits", async () => {
+test("admission: quota (including reserved bytes), capacity, disk space and guest limits", async () => {
   const instance = await start();
   try {
     const boss = await admin(instance);
     const client = await member(instance, "tia", boss);
     const me = await client.call(api.session.get);
-
-    await boss.call(api.admin.settings, { body: { maxFileBytes: 1000 } });
-    assert.equal(await status(client.call(api.transfers.create, { body: body(client, [{ size: 1001 }]) })), 413);
-    await boss.call(api.admin.settings, { body: { maxFileBytes: 1024 ** 4 } });
 
     await boss.call(api.admin.updateMember, { params: { id: me.user.id }, body: { quota: 1000 } });
     await client.call(api.transfers.create, { body: body(client, [{ size: 600 }]) }); // reserves 600

@@ -38,9 +38,9 @@ export const DUMMY_PASSWORD_HASH = "scrypt$32768$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAA
 
 /**
  * Derives the bearer secrets of links and upload requests from their ids with a server key, so
- * the database (and its backups) hold only hashes, while the owner can still be shown the link.
- * The key comes from RELAY_SECRET, or from <data>/secret.key created on first start. Restoring a
- * backup with a different key leaves the content intact but invalidates existing links.
+ * the database holds only hashes, while the owner can still be shown the link. The key comes from
+ * RELAY_SECRET, or from <data>/secret.key created on first start. Moving the data to another key
+ * leaves the content intact but invalidates existing links.
  */
 export class Secrets {
   private readonly key: Buffer;

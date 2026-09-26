@@ -14,7 +14,7 @@ Relay is built for a trusted group on a server you control.
 
 - **Accounts** exist only by invitation. Passwords are hashed with scrypt, and passkeys (WebAuthn) are supported.
 - **Sessions** use `HttpOnly` cookies, which get the `__Host-` prefix and the `Secure` flag over HTTPS. Every state-changing request needs a matching origin and a CSRF token.
-- **Links and requests** are bearer URLs derived with an HMAC key. The database and backups store only hashes of them. Links can expire, have a password, be limited to one person, and be revoked at any time.
+- **Links and requests** are bearer URLs derived with an HMAC key. The database stores only hashes of them. Links can expire, have a password, be limited to one person, and be revoked at any time.
 - **Short codes** are rate-limited per address and across the service, and a retired code is never reused.
 - **Privacy between accounts.** Administrators manage accounts and limits, but they can't open members' files, links or activity through Relay.
 - **Hardened container.** It runs as a non-root user with a read-only root filesystem, no capabilities and `no-new-privileges`.

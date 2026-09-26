@@ -45,11 +45,7 @@ test("the overview reports members, storage, limits and activity", async () => {
     assert.equal(overview.storage.reserved, 5000);
     assert.equal(overview.storage.capacity, DEFAULTS.capacityBytes);
     assert.ok(overview.storage.diskTotal > 0 && overview.storage.diskFree > 0);
-    assert.deepEqual(overview.limits, {
-      capacity: DEFAULTS.capacityBytes,
-      maxFileBytes: DEFAULTS.maxFileBytes,
-    });
-    assert.equal("backup" in overview, false);
+    assert.deepEqual(overview.limits, { capacity: DEFAULTS.capacityBytes });
     assert.equal(overview.activity.activeUploads, 1);
     assert.equal(overview.activity.receivedBytesLastHour >= 0, true);
 
@@ -57,14 +53,10 @@ test("the overview reports members, storage, limits and activity", async () => {
     const changed = await boss.call(api.admin.overview);
     assert.equal(changed.limits.capacity, 10_000);
     assert.equal(changed.storage.capacity, 10_000);
-    assert.equal(changed.limits.maxFileBytes, DEFAULTS.maxFileBytes);
-    const rejectedBackupSetting = await boss.raw({
-      method: "PATCH",
-      url: "/api/admin/settings",
-      payload: { backupKeep: 3 },
-    });
-    assert.equal(rejectedBackupSetting.statusCode, 400, "backup retention is not a product setting");
-    assert.equal(instance.ctx.db.setting("backupKeep"), undefined, "the web API cannot change operator policy");
+    for (const payload of [{ maxFileBytes: 500 }, { backupKeep: 3 }]) {
+      const removed = await boss.raw({ method: "PATCH", url: "/api/admin/settings", payload });
+      assert.equal(removed.statusCode, 400, `${Object.keys(payload)[0]} is not a setting`);
+    }
   } finally {
     await instance.close();
   }
@@ -219,24 +211,11 @@ test("member management: quota, retention, disabling and password reset", async 
   }
 });
 
-test("backup administration endpoints are removed", async () => {
+test("there is no file size limit: one file may fill the whole capacity", async () => {
   const instance = await start();
   try {
     const boss = await admin(instance);
-    const formerBackupPost = await boss.raw({ method: "POST", url: "/api/admin/backups" });
-    const formerBackupStatus = await boss.raw({ method: "GET", url: "/api/admin/backups" });
-    assert.equal(formerBackupPost.statusCode, 404);
-    assert.equal(formerBackupStatus.statusCode, 404);
-  } finally {
-    await instance.close();
-  }
-});
-
-test("the upload admission reads the capacity the administrator sets", async () => {
-  const instance = await start();
-  try {
-    const boss = await admin(instance);
-    await boss.call(api.admin.settings, { body: { capacity: 1000, maxFileBytes: 500 } });
+    await boss.call(api.admin.settings, { body: { capacity: 1000 } });
     const create = (size: number) =>
       boss.call(api.transfers.create, {
         body: {
@@ -247,11 +226,11 @@ test("the upload admission reads the capacity the administrator sets", async () 
           files: [{ path: `f-${size}.bin`, size, mime: "" }],
         },
       });
-    assert.equal(await status(create(600)), 413, "larger than the maximum file size");
-    const ok = await create(400);
-    assert.equal((await patchUpload(boss, ok.uploads[0].id, 0, Buffer.alloc(400))).statusCode, 204);
-    await create(400);
-    assert.ok([413, 507].includes(await status(create(400))), "over the service capacity");
+    const whole = await create(1000);
+    assert.equal((await patchUpload(boss, whole.uploads[0].id, 0, Buffer.alloc(1000))).statusCode, 204);
+    assert.equal(await status(create(1)), 507, "over the service capacity");
+    await boss.call(api.admin.settings, { body: { capacity: 1500 } });
+    await create(500);
   } finally {
     await instance.close();
   }

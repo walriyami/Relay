@@ -27,9 +27,8 @@ import { registerRequests } from "./modules/requests/index.ts";
 import { registerAdmin } from "./modules/admin/index.ts";
 import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { Operations } from "./lib/operations.ts";
-import { Backups } from "./modules/backup/index.ts";
 
-export type App = { app: FastifyInstance; ctx: Context; backups: Backups; sweep: () => Promise<void> };
+export type App = { app: FastifyInstance; ctx: Context; sweep: () => Promise<void> };
 
 export async function buildApp(config: Config): Promise<App> {
   for (const dir of ["", "blobs", "uploads", "thumbnails"])
@@ -58,7 +57,6 @@ export async function buildApp(config: Config): Promise<App> {
   ctx.links = createLinks(ctx);
   ctx.deliveries = createDeliveries(ctx);
   ctx.activity = createActivity(ctx);
-  const backups = new Backups(ctx);
   await ensureAdmin(ctx);
 
   await app.register(cookie);
@@ -142,7 +140,6 @@ export async function buildApp(config: Config): Promise<App> {
         await ctx.operations.run(name, work, (error) =>
           app.log.error({ err: error, stage: name }, "maintenance failed"),
         );
-      backups.maybeRun(now);
     })()
       .catch((error) => app.log.error({ err: error }, "maintenance sweep failed"))
       .finally(() => (sweeping = null)));
@@ -162,7 +159,6 @@ export async function buildApp(config: Config): Promise<App> {
   app.addHook("preClose", async () => {
     clearInterval(timer);
     await sweeping;
-    await backups.close();
     ctx.events.close();
   });
   app.addHook("onClose", () => db.close());
@@ -176,7 +172,7 @@ export async function buildApp(config: Config): Promise<App> {
         : reply.type("text/html").sendFile("index.html"),
     );
   }
-  return { app, ctx, backups, sweep };
+  return { app, ctx, sweep };
 }
 
 /** Filesystem or SQLite writes that failed for lack of space (SQLITE_FULL is 13). */

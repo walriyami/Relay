@@ -2,6 +2,13 @@
 
 All notable changes to Relay are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- Backup snapshots, the backup volume, the `RELAY_BACKUP_*` settings and the `npm run ops` command. Everything Relay stores lives in the data volume.
+- The maximum file size limit. A file only has to fit the member's storage and the service capacity.
+
 ## [1.0.0] - 2026-09-27
 
 The first public release.

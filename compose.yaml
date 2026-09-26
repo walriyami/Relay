@@ -9,17 +9,13 @@ services:
     environment:
       RELAY_ORIGIN: ${RELAY_ORIGIN:-http://localhost:3090}
       RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?Set RELAY_ADMIN_PASSWORD in .env}
-      # Derives link and request tokens. Keep it with your backups: restoring with a different key
-      # keeps every file but invalidates existing links.
+      # Derives link and request tokens. Moving the data to a different key keeps every file but
+      # invalidates existing links.
       RELAY_SECRET: ${RELAY_SECRET:?Set RELAY_SECRET in .env (at least 32 characters)}
-      RELAY_BACKUP_INTERVAL_HOURS: ${RELAY_BACKUP_INTERVAL_HOURS:-24}
-      RELAY_BACKUP_KEEP: ${RELAY_BACKUP_KEEP:-7}
       # Proxies allowed to report the client address. Covers a proxy on the host or on a Docker network.
       RELAY_TRUST_PROXY: ${RELAY_TRUST_PROXY:-127.0.0.1,::1,172.16.0.0/12}
     volumes:
       - relay-data:/data
-      # Put this on a different disk from relay-data when you can.
-      - relay-backups:/backups
     # Reachable only from this machine. Put an HTTPS reverse proxy in front to share it.
     ports:
       - 127.0.0.1:3090:3090
@@ -32,4 +28,3 @@ services:
 
 volumes:
   relay-data:
-  relay-backups:

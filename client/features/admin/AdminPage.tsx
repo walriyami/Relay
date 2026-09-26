@@ -28,8 +28,6 @@ import { keepOptions } from "../../lib/options";
 import { ByteSizeField, changedBytes, toDraft } from "./ByteSize";
 
 const errorToast = (e: unknown) => toast((e as Error).message, { tone: "error" });
-/** The largest file the server accepts as a limit. */
-const MAX_FILE_LIMIT = 1024 ** 4;
 
 /** Only reachable by the administrator: the app shows members "Page not found" instead. */
 export function AdminPage() {
@@ -119,10 +117,10 @@ export function AdminPage() {
           <section className="settings-section card-surface" aria-labelledby="admin-limits">
             <div className="settings-section-head">
               <h2 id="admin-limits">Limits</h2>
-              <p className="muted">Applies to everyone.</p>
+              <p className="muted">The most all members can store together.</p>
             </div>
             {/* Keyed so a saved (or elsewhere changed) value becomes the new starting point. */}
-            <Limits key={`${data.limits.capacity}:${data.limits.maxFileBytes}`} limits={data.limits} onSaved={reload} />
+            <Limits key={data.limits.capacity} limits={data.limits} onSaved={reload} />
           </section>
           <section className="settings-section card-surface" aria-labelledby="admin-codes">
             <div className="settings-section-head">
@@ -182,8 +180,8 @@ function ServiceHealth({ data }: { data: AdminOverview }) {
       )}
       {o.reconciliation.missing > 0 && (
         <p className="notice" role="status">
-          {plural(o.reconciliation.missing, "stored blob")} missing at startup. Some files may be unavailable. Check
-          host storage and restore from a verified backup.
+          {plural(o.reconciliation.missing, "stored blob")} missing at startup. Some files may be unavailable. Check the
+          data volume on the host.
         </p>
       )}
       {failed && (
@@ -334,16 +332,10 @@ function Invitations({
 
 function Limits({ limits, onSaved }: { limits: AdminOverview["limits"]; onSaved: () => void }) {
   const [capacity, setCapacity] = useState(() => toDraft(limits.capacity));
-  const [maxFile, setMaxFile] = useState(() => toDraft(limits.maxFileBytes));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // Only what the administrator edited is sent, so an untouched value is never rewritten.
-  const changes = {
-    capacity: changedBytes(capacity, limits.capacity),
-    maxFileBytes: changedBytes(maxFile, limits.maxFileBytes),
-  };
-  const invalid = Object.values(changes).some((v) => v === null);
-  const changed = Object.values(changes).some((v) => v !== undefined);
+  // Undefined while untouched, so an unchanged value is never rewritten; null when invalid.
+  const change = changedBytes(capacity, limits.capacity);
   return (
     <form
       className="stack-sm"
@@ -351,13 +343,11 @@ function Limits({ limits, onSaved }: { limits: AdminOverview["limits"]; onSaved:
       onSubmit={async (event) => {
         event.preventDefault();
         setError("");
-        if (invalid) return setError("Enter sizes greater than zero.");
-        if (changes.maxFileBytes && changes.maxFileBytes > MAX_FILE_LIMIT)
-          return setError(`The largest file can be at most ${bytes(MAX_FILE_LIMIT)}.`);
+        if (change === null) return setError("Enter a size greater than zero.");
         setBusy(true);
         try {
           await call(api.admin.settings, {
-            body: { capacity: changes.capacity ?? undefined, maxFileBytes: changes.maxFileBytes ?? undefined },
+            body: { capacity: change },
           });
           toast("Limits saved");
           onSaved();
@@ -374,14 +364,7 @@ function Limits({ limits, onSaved }: { limits: AdminOverview["limits"]; onSaved:
           draft={capacity}
           original={limits.capacity}
           onChange={setCapacity}
-          invalid={changes.capacity === null}
-        />
-        <ByteSizeField
-          label="Largest file"
-          draft={maxFile}
-          original={limits.maxFileBytes}
-          onChange={setMaxFile}
-          invalid={changes.maxFileBytes === null}
+          invalid={change === null}
         />
       </div>
       {error && (
@@ -390,7 +373,7 @@ function Limits({ limits, onSaved }: { limits: AdminOverview["limits"]; onSaved:
         </p>
       )}
       <div>
-        <Button type="submit" busy={busy} disabled={!changed}>
+        <Button type="submit" busy={busy} disabled={change === undefined}>
           Save limits
         </Button>
       </div>

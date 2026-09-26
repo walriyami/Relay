@@ -436,7 +436,6 @@ export const api = {
       auth: "admin",
       body: z.strictObject({
         capacity: z.optional(int(1, Number.MAX_SAFE_INTEGER)),
-        maxFileBytes: z.optional(int(1, 1024 ** 4)),
         codeLength: z.optional(z.union([z.literal(4), z.literal(6)])),
       }),
     }),

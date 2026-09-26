@@ -45,7 +45,7 @@ const PASSWORD = "Container-verification-password-only";
 const SECRET = "container-verification-secret-that-is-long-enough";
 const run = `relay-verify-${Date.now().toString(36)}`;
 const names = { primary: `${run}-primary`, second: `${run}-second`, disk: `${run}-disk` };
-const volumes = { data: `${run}-data`, backups: `${run}-backups` };
+const volumes = { data: `${run}-data` };
 for (const name of [...Object.values(names), ...Object.values(volumes)])
   assert(name.startsWith("relay-verify-"), `Refusing to use ${name}.`);
 
@@ -70,7 +70,7 @@ const environment = (origin: string) => [
   "-e",
   `RELAY_SECRET=${SECRET}`,
 ];
-const volumeMounts = ["-v", `${volumes.data}:/data`, "-v", `${volumes.backups}:/backups`];
+const volumeMounts = ["-v", `${volumes.data}:/data`];
 
 async function startContainer(name: string, storage: string[], extra: string[] = []) {
   const port = await freePort();
@@ -137,7 +137,6 @@ try {
       builtImage = true;
     });
   docker("volume", "create", "--label", "relay-verify=1", volumes.data);
-  docker("volume", "create", "--label", "relay-verify=1", volumes.backups);
   let session = await step("start the primary container", () =>
     startContainer(names.primary, volumeMounts, ["--memory", "500m"]),
   );
@@ -192,12 +191,7 @@ try {
   });
 
   await step("ENOSPC on a small tmpfs data volume", async () => {
-    session = await startContainer(names.disk, [
-      "--tmpfs",
-      "/data:rw,size=400m,uid=1000,gid=1000,mode=0700",
-      "--tmpfs",
-      "/backups:rw,size=16m,uid=1000,gid=1000,mode=0700",
-    ]);
+    session = await startContainer(names.disk, ["--tmpfs", "/data:rw,size=400m,uid=1000,gid=1000,mode=0700"]);
     const chunk = payload.subarray(0, LIMITS.chunkBytes);
     const transfer = await createTransfer(session, "full/payload.bin", chunk.length);
     const id = transfer.uploads[0].id;

@@ -54,7 +54,6 @@ export const DEFAULTS = {
   loginCodeMinutes: 5,
   quotaBytes: 100 * 1024 ** 3,
   capacityBytes: 500 * 1024 ** 3,
-  maxFileBytes: 100 * 1024 ** 3,
 } as const;
 
 export type User = {
@@ -327,7 +326,6 @@ export type AdminOverview = {
   };
   limits: {
     capacity: number;
-    maxFileBytes: number;
   };
   activity: { activeUploads: number; receivedBytesLastHour: number };
 };

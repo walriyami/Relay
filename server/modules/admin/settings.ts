@@ -6,7 +6,6 @@ export type Limits = AdminOverview["limits"];
 /** Product-facing limits kept in `settings` under these keys, as decimal strings. */
 const FALLBACKS: Limits = {
   capacity: DEFAULTS.capacityBytes,
-  maxFileBytes: DEFAULTS.maxFileBytes,
 };
 
 export function limitsOf(ctx: Context): Limits {

@@ -24,7 +24,6 @@ Relay needs Node.js 24, which can run TypeScript directly, so there's no compile
 | `npm test`                        | Backend integration tests on disposable instances                                         |
 | `npm run test:e2e`                | Builds, then runs the browser journeys in Chromium, Firefox, WebKit and a mobile viewport |
 | `npm run format` / `format:check` | Prettier                                                                                  |
-| `npm run ops -- <command>`        | Backup CLI: `list`, `verify` and `restore`. See [backups](backups.md).                    |
 | `npm run screenshots`             | Regenerates `docs/images` from generated demo content. Run `npm run build` first.         |
 
 Install the browsers once before the first end-to-end run:
@@ -35,7 +34,7 @@ npx playwright install --with-deps
 
 ## Tests
 
-- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, quotas, ZIP64 layout, links, requests, pickup codes, backups and restore.
+- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, quotas, ZIP64 layout, links, requests and pickup codes.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe.
 
 Tests never touch real data. Every instance uses a new temporary directory and generated files.

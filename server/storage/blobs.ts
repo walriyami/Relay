@@ -14,9 +14,6 @@ export const thumbnailFailure = (root: string, sha256: string) => join(root, "th
 
 export function createBlobStore(ctx: Context): BlobStore {
   const root = join(ctx.config.root, "blobs");
-  let holds = 0;
-  /** Blobs collected while held; their files go when the last hold is released. */
-  const deferred = new Set<string>();
 
   const path = (sha256: string) => join(root, sha256.slice(0, 2), sha256.slice(2, 4), sha256);
   const recorded = (sha256: string) => !!ctx.db.get("SELECT 1 FROM blobs WHERE sha256 = ?", sha256);
@@ -54,10 +51,7 @@ export function createBlobStore(ctx: Context): BlobStore {
     },
 
     unstage(sha256) {
-      if (!recorded(sha256)) {
-        if (holds) deferred.add(sha256);
-        else removeFiles(sha256);
-      }
+      if (!recorded(sha256)) removeFiles(sha256);
     },
 
     adopt(file, sha256, size, crc32) {
@@ -94,23 +88,7 @@ export function createBlobStore(ctx: Context): BlobStore {
           if (ctx.db.run("DELETE FROM blobs WHERE sha256 = ?", sha256).changes) removed.push(sha256);
         }
       });
-      for (const sha256 of removed) {
-        if (holds) deferred.add(sha256);
-        else removeFiles(sha256);
-      }
-    },
-
-    hold() {
-      holds++;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        if (--holds) return;
-        // A blob adopted again while held is live once more.
-        for (const sha256 of deferred) if (!recorded(sha256)) removeFiles(sha256);
-        deferred.clear();
-      };
+      for (const sha256 of removed) removeFiles(sha256);
     },
 
     async reconcile() {
@@ -125,7 +103,7 @@ export function createBlobStore(ctx: Context): BlobStore {
         if (entry.isDirectory()) continue;
         const name = entry.name;
         if (SHA.test(name) && entry.parentPath === dirname(path(name)) && known.has(name)) found.add(name);
-        else if (!holds) await remove(join(entry.parentPath, name));
+        else await remove(join(entry.parentPath, name));
       }
       // Thumbnails of blobs that no longer exist, and renditions interrupted mid-write.
       const thumbnails = join(ctx.config.root, "thumbnails");

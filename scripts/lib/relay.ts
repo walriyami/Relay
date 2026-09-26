@@ -521,7 +521,6 @@ export async function startServer(options: {
       HOST: "127.0.0.1",
       PORT: String(options.port),
       RELAY_DATA: options.root,
-      RELAY_BACKUP_DIR: join(options.root, "..", "backups"),
       RELAY_ORIGIN: origin,
       RELAY_ADMIN_PASSWORD: LOCAL_PASSWORD,
       RELAY_SECRET: LOCAL_SECRET,

@@ -12,12 +12,10 @@ flowchart LR
     TUS[tus upload receiver]
     DL[Downloads and ZIP64 streaming]
     SSE[Live events]
-    BK[Snapshot worker]
   end
   subgraph Disk["Local disk"]
     DB[(relay.sqlite)]
     BLOBS[(blobs/ by SHA-256)]
-    BACKUPS[(backups/)]
   end
   UI -- JSON --> API
   UI -- 8 MiB chunks --> TUS
@@ -26,7 +24,6 @@ flowchart LR
   API --> DB
   TUS --> BLOBS
   DL --> BLOBS
-  BK --> BACKUPS
 ```
 
 ## Principles
@@ -62,7 +59,7 @@ Uploads belong to the browser tab that started them. The tab holds a lease throu
 - Accounts are created by invitation only. The first account, `admin`, is bootstrapped from `RELAY_ADMIN_PASSWORD`.
 - People sign in with a password (hashed with scrypt), a passkey (WebAuthn), or a one-time code shown on another of their signed-in devices.
 - Sessions use `HttpOnly`, `SameSite` cookies (`__Host-` prefixed over HTTPS). Every unsafe request is checked against `RELAY_ORIGIN` and a CSRF token.
-- Link, request and invitation tokens are derived from their ids with an HMAC key (`RELAY_SECRET`). The database and backups store only hashes of those tokens.
+- Link, request and invitation tokens are derived from their ids with an HMAC key (`RELAY_SECRET`). The database stores only hashes of those tokens.
 - Short numeric codes (four or six digits) are rate-limited per address and across the service. A retired code is never reassigned.
 - Every content and archive route checks authorization. Administrators manage accounts and limits, but they can't read members' files, links or activity.
 
@@ -81,10 +78,10 @@ server/
   app.ts           Fastify setup, security headers, rate limits, route wiring
   config.ts        Environment configuration
   db/              SQLite connection and schema
-  modules/         One folder per domain: auth, transfers, library, links, downloads, backup…
+  modules/         One folder per domain: auth, transfers, library, links, downloads, admin…
   storage/         Content-addressed blob store and file helpers
 shared/            Typed API contract (zod) and models used by both sides
-scripts/           Backup CLI, screenshots and release verification
+scripts/           Screenshots and release verification
 tests/             Backend integration tests (node:test)
 tests/browser/     End-to-end journeys (Playwright)
 ```

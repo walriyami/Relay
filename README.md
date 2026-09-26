@@ -14,7 +14,7 @@ Resumable uploads of any size, streamed downloads, and nothing stored anywhere y
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ed?logo=docker&logoColor=white)
 
-[Features](#features) · [Quick start](#quick-start) · [Self-hosting](docs/self-hosting.md) · [Backups](docs/backups.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md)
+[Features](#features) · [Quick start](#quick-start) · [Self-hosting](docs/self-hosting.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md)
 
 <br>
 
@@ -88,7 +88,7 @@ Responsive from phones to desktops, with light, dark and system themes. Keyboard
 
 ### 🧱 Simple to run
 
-One container, one SQLite database, one data volume. Each unique file is stored once, and verified snapshots run automatically. It needs no external services.
+One container, one SQLite database, one data volume. Each unique file is stored once. It needs no external services.
 
 </td>
 </tr>
@@ -130,14 +130,13 @@ Open **http://localhost:3090** and sign in as `admin`. Invite everyone else from
 
 ## Documentation
 
-| Guide                                  | What it covers                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------ |
-| [Self-hosting](docs/self-hosting.md)   | Docker Compose, HTTPS reverse proxies, configuration, limits and updates |
-| [Backups and restore](docs/backups.md) | Automatic snapshots, verification and safe restores                      |
-| [Architecture](docs/architecture.md)   | How transfers, storage, downloads and security fit together              |
-| [Development](docs/development.md)     | Local setup, tests, release checks and conventions                       |
-| [Security policy](SECURITY.md)         | Reporting vulnerabilities and the security model                         |
-| [Changelog](CHANGELOG.md)              | What changed in each release                                             |
+| Guide                                | What it covers                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| [Self-hosting](docs/self-hosting.md) | Docker Compose, HTTPS reverse proxies, configuration, limits and updates |
+| [Architecture](docs/architecture.md) | How transfers, storage, downloads and security fit together              |
+| [Development](docs/development.md)   | Local setup, tests, release checks and conventions                       |
+| [Security policy](SECURITY.md)       | Reporting vulnerabilities and the security model                         |
+| [Changelog](CHANGELOG.md)            | What changed in each release                                             |
 
 ## Built with
 

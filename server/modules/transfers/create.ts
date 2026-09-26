@@ -30,19 +30,8 @@ export function bytesLabel(bytes: number) {
   return `${Math.round(value * 10) / 10} ${units[unit]}`;
 }
 
-/** Quota, service capacity and free disk space must all hold the new bytes. */
-function admit(
-  ctx: Context,
-  input: TransferInput,
-  options: CreateTransferOptions,
-  plan: PlannedNode[],
-  bytes: number,
-  entries: number,
-) {
-  const maxFileBytes = Number(ctx.db.setting("maxFileBytes") ?? DEFAULTS.maxFileBytes);
-  for (const node of plan)
-    if (node.file !== undefined && input.files[node.file].size > maxFileBytes)
-      fail(413, `"${node.name}" is larger than the ${bytesLabel(maxFileBytes)} file size limit.`);
+/** The request's room, the owner's quota, service capacity and free disk space must all hold the new bytes. */
+function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entries: number) {
   if (options.limit) {
     const room = options.limit;
     if (room.bytes === 0 || room.entries === 0) fail(413, "This request is full.");
@@ -164,7 +153,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       const text = input.text?.trim() ? input.text : null;
       if (!plan.length && text === null) fail(400, "Choose something to send.");
       const bytes = input.files.reduce((sum, f) => sum + f.size, 0) + (text === null ? 0 : Buffer.byteLength(text));
-      admit(ctx, input, options, plan, bytes, plan.length + (text === null ? 0 : 1));
+      admit(ctx, options, bytes, plan.length + (text === null ? 0 : 1));
 
       const now = Date.now();
       let itemId = options.itemId;

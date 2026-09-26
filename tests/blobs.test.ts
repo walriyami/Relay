@@ -50,30 +50,6 @@ test("identical content is stored once and lives until the last item referencing
   }
 });
 
-test("a held store keeps collected files until the hold is released, unless it was adopted again", async () => {
-  const instance = await start();
-  try {
-    const client = await member(instance, "tia");
-    const first = await send(client, [{ path: "a.txt", data: "pinned" }]);
-    const path = instance.ctx.blobs.path(sha("pinned"));
-    const release = instance.ctx.blobs.hold();
-    await trashAndDelete(client, first.result.itemId);
-    assert.equal(existsSync(path), true, "pinned");
-    assert.equal(instance.ctx.db.value("SELECT count(*) FROM blobs"), 0, "the row is gone at once");
-    release();
-    assert.equal(existsSync(path), false);
-
-    const again = await send(client, [{ path: "b.txt", data: "pinned" }]);
-    const release2 = instance.ctx.blobs.hold();
-    await trashAndDelete(client, again.result.itemId);
-    await send(client, [{ path: "c.txt", data: "pinned" }]);
-    release2();
-    assert.equal(existsSync(path), true, "adopted again while pinned");
-  } finally {
-    await instance.close();
-  }
-});
-
 test("reconcile removes files without rows and stray thumbnails, and reports rows without files", async () => {
   const instance = await start();
   try {
@@ -96,26 +72,6 @@ test("reconcile removes files without rows and stray thumbnails, and reports row
     assert.equal(result.removedFiles, 4);
     assert.deepEqual(blobFiles(instance.root), [sha("kept")]);
     assert.deepEqual(readdirSync(join(instance.root, "thumbnails")), [`${sha("kept")}-s.webp`]);
-  } finally {
-    await instance.close();
-  }
-});
-
-test("holds cover blobs created later and release only after the last holder", async () => {
-  const instance = await start();
-  try {
-    const client = await member(instance, "tia");
-    const firstRelease = instance.ctx.blobs.hold();
-    const lastRelease = instance.ctx.blobs.hold();
-    const sent = await send(client, [{ path: "later.txt", data: "created while held" }]);
-    const file = instance.ctx.blobs.path(sha("created while held"));
-    await trashAndDelete(client, sent.result.itemId);
-    firstRelease();
-    firstRelease();
-    assert.equal(existsSync(file), true);
-    assert.equal(instance.ctx.db.value("SELECT count(*) FROM blobs"), 0);
-    lastRelease();
-    assert.equal(existsSync(file), false);
   } finally {
     await instance.close();
   }

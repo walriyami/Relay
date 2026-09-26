@@ -58,11 +58,6 @@ export interface BlobStore {
   adopt(file: string, sha256: string, size: number, crc32: number): void;
   /** Deletes the given blobs if no node references them any more. Synchronous. */
   collect(candidates: Iterable<string>): void;
-  /**
-   * While held, collected blobs lose their rows but keep their files until the last hold is
-   * released. A backup holds the store so every file its database copy references still exists.
-   */
-  hold(): () => void;
   /** Startup reconciliation: removes files with no row and reports rows with no file. */
   reconcile(): Promise<{ removedFiles: number; missing: string[] }>;
 }

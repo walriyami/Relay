@@ -1,6 +1,6 @@
 # Self-hosting
 
-Relay runs as one container with two volumes: one for your data and one for backups. This guide covers a production setup behind HTTPS.
+Relay runs as one container with one data volume. This guide covers a production setup behind HTTPS.
 
 - [Requirements](#requirements)
 - [Install with Docker Compose](#install-with-docker-compose)
@@ -42,7 +42,7 @@ docker compose ps        # wait for "healthy"
 
 Relay now listens on `127.0.0.1:3090`, which only this machine can reach. Put a reverse proxy in front of it to share it.
 
-The container runs as an unprivileged user with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Only the two volumes are writable.
+The container runs as an unprivileged user with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Only the data volume is writable.
 
 > [!IMPORTANT]
 > Run exactly **one** Relay container per data volume. The database takes an exclusive lock, so a second process on the same volume fails at startup. That is intended, so don't add replicas.
@@ -112,23 +112,20 @@ Tunnels such as Cloudflare Tunnel work the same way. Route the public host name 
 
 Relay reads its configuration from environment variables. With Docker Compose, set them in `.env`.
 
-| Variable                      | Default                 | Description                                                                                                                                        |
-| ----------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RELAY_ORIGIN`                | `http://localhost:3090` | The exact URL people open, without a trailing slash. Passkeys require a host name, not an IP address.                                              |
-| `RELAY_ADMIN_PASSWORD`        | none                    | Password for the first account, `admin`. Only read while the database has no accounts. Required by `compose.yaml`.                                 |
-| `RELAY_SECRET`                | generated               | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`. Required by `compose.yaml`. |
-| `RELAY_BACKUP_INTERVAL_HOURS` | `24`                    | Hours between automatic snapshots, from 1 to 720.                                                                                                  |
-| `RELAY_BACKUP_KEEP`           | `7`                     | Snapshots to keep, from 1 to 365.                                                                                                                  |
-| `RELAY_TRUST_PROXY`           | `127.0.0.1,::1`         | Comma-separated addresses or CIDR ranges of trusted proxies. `compose.yaml` adds `172.16.0.0/12`.                                                  |
-| `RELAY_DATA`                  | `.data`                 | Data directory. Set to `/data` in the image.                                                                                                       |
-| `RELAY_BACKUP_DIR`            | `<data>/backups`        | Snapshot directory. Set to `/backups` in the image.                                                                                                |
-| `HOST`                        | `127.0.0.1`             | Listen address. Set to `0.0.0.0` in the image.                                                                                                     |
-| `PORT`                        | `3090`                  | Listen port.                                                                                                                                       |
+| Variable               | Default                 | Description                                                                                                                                        |
+| ---------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_ORIGIN`         | `http://localhost:3090` | The exact URL people open, without a trailing slash. Passkeys require a host name, not an IP address.                                              |
+| `RELAY_ADMIN_PASSWORD` | none                    | Password for the first account, `admin`. Only read while the database has no accounts. Required by `compose.yaml`.                                 |
+| `RELAY_SECRET`         | generated               | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`. Required by `compose.yaml`. |
+| `RELAY_TRUST_PROXY`    | `127.0.0.1,::1`         | Comma-separated addresses or CIDR ranges of trusted proxies. `compose.yaml` adds `172.16.0.0/12`.                                                  |
+| `RELAY_DATA`           | `.data`                 | Data directory. Set to `/data` in the image.                                                                                                       |
+| `HOST`                 | `127.0.0.1`             | Listen address. Set to `0.0.0.0` in the image.                                                                                                     |
+| `PORT`                 | `3090`                  | Listen port.                                                                                                                                       |
 
 An invalid value stops Relay at startup with a message naming the variable.
 
 > [!WARNING]
-> Back up `RELAY_SECRET` together with your snapshots. A restore with a different key keeps every file, but all existing share and request links stop working.
+> Keep `RELAY_SECRET` with your data. Moving the data to a different key keeps every file, but all existing share and request links stop working.
 
 ## First sign-in and members
 
@@ -136,13 +133,12 @@ An invalid value stops Relay at startup with a message naming the variable.
 2. Invite people from **Admin → Invitations**. Each invitation is a one-time link, QR code or short code.
 3. Members can add a passkey in **Settings**. They can also sign in on a new device with a code shown on a device where they're already signed in.
 
-Administrators set each member's storage quota, the maximum file size, the service capacity and the length of short codes (four or six digits). They cannot see members' files, links or activity.
+Administrators set each member's storage quota, the service capacity and the length of short codes (four or six digits). They cannot see members' files, links or activity.
 
 ## Limits and storage
 
 | Setting            | Default                               | Where to change it     |
 | ------------------ | ------------------------------------- | ---------------------- |
-| Maximum file size  | 100 GiB                               | Admin → Limits         |
 | Storage per member | 100 GiB                               | Admin → Members        |
 | Service capacity   | 500 GiB                               | Admin → Limits         |
 | Trash retention    | 30 days                               | Fixed                  |
@@ -158,7 +154,7 @@ git pull
 docker compose up -d --build
 ```
 
-Before a major update, [verify your latest snapshot](backups.md#inspect-and-verify) and keep a copy of the backup volume.
+Everything Relay stores lives in the data volume. To keep a copy before a major update, stop Relay with `docker compose stop` and copy the volume.
 
 To stop Relay without touching your data, run `docker compose stop` or `docker compose down`. **Never** run `docker compose down -v`, because `-v` deletes the volumes and every file with them.
 
