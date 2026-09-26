@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in Relay doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Send
+        2. Drop a folder with …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Relay version or commit
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and device
+      placeholder: Safari 18 on iPhone, Firefox 131 on Windows…
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run Relay?
+      options:
+        - Docker Compose
+        - From source (npm start)
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs
+      description: Relevant lines from `docker compose logs relay`. Remove anything private first.
+      render: text

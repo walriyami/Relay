@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+dist
+.data
+.env
+docs
+tests
+playwright-report
+test-results
+*.md
+.DS_Store

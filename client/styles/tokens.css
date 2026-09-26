@@ -1,0 +1,114 @@
+@font-face {
+  font-family: "Albert Sans";
+  src: url("/assets/albert-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Albert Sans";
+  src: url("/assets/albert-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Albert Sans";
+  src: url("/assets/albert-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Albert Sans";
+  src: url("/assets/albert-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --font: "Albert Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --r1: 8px;
+  --r2: 12px;
+  --r3: 16px;
+  --pill: 999px;
+
+  --control: 40px;
+  --control-sm: 32px;
+  --content: 1120px;
+  --gutter: 24px;
+  --header: 60px;
+
+  --canvas: #f6f6f4;
+  --surface: #ffffff;
+  --well: #f0f0ed;
+  --raised: #ffffff;
+  --ink: #232322;
+  --muted: #66665f;
+  --line: #e2e2de;
+  --line-strong: #cfcfca;
+  /* Boundaries of fields and switches: at least 3:1 against every background (WCAG 1.4.11). */
+  --control-border: #8a8a83;
+  --accent: #b93b23;
+  --accent-hover: #9e311c;
+  --accent-ink: #ffffff;
+  --accent-soft: #fcefea;
+  --danger: #b22b20;
+  --danger-soft: #fbeceb;
+  --success: #1f7a4d;
+  --success-soft: #e9f5ee;
+  --online: #1b8f4f;
+  --brand-symbol: #ffffff;
+  --scrim: rgb(20 20 18 / 0.45);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow: 0 12px 32px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.06);
+  --focus: 0 0 0 2px var(--canvas), 0 0 0 4px var(--accent);
+  color-scheme: light;
+}
+/* Touch screens get larger controls; small ones still meet a comfortable 40px, without hit areas overlapping. */
+@media (pointer: coarse) {
+  :root {
+    --control: 44px;
+    --control-sm: 40px;
+  }
+}
+
+:root[data-theme="dark"] {
+  --canvas: #0b0c0e;
+  --surface: #15171a;
+  --well: #101215;
+  --raised: #1d2024;
+  --ink: #f2f3f4;
+  --muted: #949ba5;
+  --line: #2b2e33;
+  --line-strong: #3a3e45;
+  --control-border: #6b717a;
+  --accent: #f16b47;
+  --accent-hover: #ff8869;
+  --accent-ink: #0b0c0e;
+  --accent-soft: #2a1a16;
+  --danger: #ff9a86;
+  --danger-soft: #2c1714;
+  --success: #6fd49c;
+  --success-soft: #13251b;
+  --online: #3ccf7b;
+  --brand-symbol: #0b0c0e;
+  --scrim: rgb(0 0 0 / 0.62);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow: 0 16px 40px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@media (max-width: 720px) {
+  :root {
+    --gutter: 16px;
+    --header: 56px;
+  }
+}

@@ -1,0 +1,2777 @@
+/* App shell */
+.boot {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+.app {
+  min-height: 100vh;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(12px);
+  -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+/* Connection: one line under the top bar (part of it, so it stays in view) while Relay can't be
+   reached, saying where the break is. Your side is neutral; Relay's side carries the accent. */
+.conn-bar {
+  border-top: 1px solid var(--line);
+  background: var(--well);
+  color: var(--ink);
+  font-size: 0.86rem;
+  animation: fade 0.2s ease-out;
+}
+.conn-bar.is-down {
+  background: color-mix(in srgb, var(--accent-soft) 75%, var(--surface));
+}
+.conn-bar.is-back {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.conn-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  max-width: calc(var(--content) + 2 * var(--gutter));
+  min-height: 44px;
+  margin: 0 auto;
+  padding: 6px var(--gutter);
+}
+.conn-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.4;
+}
+.conn-text strong {
+  font-weight: 600;
+}
+.conn-detail {
+  color: var(--muted);
+}
+.is-back .conn-detail {
+  color: inherit;
+}
+.conn-retry {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--s3);
+}
+.conn-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* You — Internet — Relay, with what's out of reach dimmed and the broken link dashed. */
+.conn-path {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+}
+.conn-node {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.2s;
+}
+.conn-dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+}
+.conn-node.is-cut {
+  opacity: 0.45;
+}
+.conn-hop {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line-strong);
+}
+.conn-hop.is-broken {
+  width: 18px;
+  height: 0;
+  background: none;
+  border-top: 2px dashed var(--accent);
+  animation: conn-broken 1.6s ease-in-out infinite;
+}
+@keyframes conn-broken {
+  50% {
+    opacity: 0.35;
+  }
+}
+.conn-path.is-large {
+  gap: var(--s2);
+  align-items: flex-start;
+}
+.conn-path.is-large .conn-dot {
+  width: 52px;
+  height: 52px;
+}
+.conn-path.is-large .conn-hop {
+  width: 36px;
+  margin-top: 25px;
+}
+.conn-path.is-large .conn-hop.is-broken {
+  width: 44px;
+}
+.conn-path small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+/* The same, as the whole screen when Relay can't be opened at all. */
+.conn-screen {
+  display: grid;
+  justify-items: center;
+  gap: var(--s3);
+  max-width: 440px;
+  padding: var(--s6) var(--gutter);
+  text-align: center;
+}
+.conn-screen h1 {
+  margin: var(--s3) 0 0;
+  font-size: 1.35rem;
+}
+.conn-screen p {
+  margin: 0 0 var(--s2);
+}
+/* Public pages have no top bar; the line sits at the top of the page instead. */
+.public-conn {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.public-conn .conn-bar {
+  border-top: 0;
+  border-bottom: 1px solid var(--line);
+}
+@media (max-width: 560px) {
+  .conn-inner {
+    flex-wrap: wrap;
+    row-gap: var(--s2);
+    padding-block: var(--s2);
+  }
+  .conn-text {
+    flex-basis: calc(100% - 110px);
+  }
+  .conn-retry {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conn-bar,
+  .conn-hop.is-broken {
+    animation: none;
+  }
+}
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  max-width: calc(var(--content) + 2 * var(--gutter));
+  height: var(--header);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 1.08rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+}
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  flex: 1;
+  min-width: 0;
+}
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--s3);
+  border-radius: var(--r1);
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.nav-link:hover {
+  color: var(--ink);
+  background: var(--well);
+}
+.nav-link.active {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.nav-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  flex-shrink: 0;
+}
+.avatar-button {
+  display: grid;
+  place-items: center;
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.avatar-button:hover .avatar,
+.avatar-button[aria-expanded="true"] .avatar {
+  box-shadow: 0 0 0 2px var(--line-strong);
+}
+.avatar-button.active .avatar {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.avatar-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.main {
+  max-width: calc(var(--content) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: var(--s5) var(--gutter) var(--s7);
+}
+.main:focus {
+  outline: none;
+}
+@media (max-width: 720px) {
+  .topbar-inner {
+    gap: var(--s2);
+  }
+  .brand span {
+    display: none;
+  }
+  .nav {
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 0;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-link {
+    padding: 0 10px;
+  }
+  .main {
+    padding-top: var(--s4);
+  }
+}
+.nav-icon {
+  display: none;
+}
+/* Phones: the main sections move to a bottom tab bar within thumb reach */
+@media (max-width: 560px) {
+  /* A backdrop filter would trap the fixed tab bar inside the header. */
+  .topbar {
+    background: var(--canvas);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .topbar-inner {
+    justify-content: space-between;
+  }
+  .brand span {
+    display: inline;
+  }
+  .nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+    overflow: visible;
+    background: color-mix(in srgb, var(--canvas) 92%, transparent);
+    backdrop-filter: saturate(1.4) blur(12px);
+    -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    border-top: 1px solid var(--line);
+  }
+  .nav-link {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    height: 54px;
+    padding: 0;
+    font-size: 0.74rem;
+  }
+  .nav-link.active {
+    background: transparent;
+    box-shadow: none;
+    color: var(--accent);
+  }
+  .nav-link:hover {
+    background: transparent;
+  }
+  .nav-icon {
+    display: inline-flex;
+  }
+  .main {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+  .toaster {
+    bottom: calc(76px + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* Pages and sections */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+}
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+.page-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+.page-head + * {
+  margin-top: calc(var(--s2) * -1);
+}
+.page-actions {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: var(--control-sm);
+}
+/* A text link at the end of a section head lines its text up with the content's right edge. */
+.section-head .section-link {
+  margin-right: calc(-1 * var(--s3));
+  color: var(--muted);
+}
+.section-head .section-link:hover:not(:disabled) {
+  color: var(--ink);
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  align-self: flex-start;
+  margin-bottom: var(--s1);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.back-link:hover {
+  color: var(--ink);
+}
+.btn.danger-text {
+  color: var(--danger);
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+}
+.search svg {
+  position: absolute;
+  left: var(--s3);
+  color: var(--muted);
+  pointer-events: none;
+}
+.search .input {
+  padding-left: 38px;
+  padding-right: 40px;
+}
+.search .input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.search .search-clear {
+  position: absolute;
+  right: 4px;
+  color: var(--muted);
+}
+.search .search-clear svg {
+  position: static;
+  color: inherit;
+}
+.toolbar > .btn-ghost:last-child {
+  margin-left: auto;
+}
+/* Choosing items: a mode, so the cards carry no controls until it's on. */
+.toolbar .select-toggle {
+  min-width: 96px;
+  justify-content: center;
+}
+/* Top right: text previews and file icons start at the left. */
+.card-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.18);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+  color: transparent;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    transform 0.12s;
+}
+.is-selected .card-check {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  transform: scale(1.06);
+}
+.collection-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.collection-card.is-selecting .card-open .card-meta {
+  padding-right: 0;
+}
+@media (hover: hover) {
+  .collection-card.is-selecting:not(.is-selected):hover .card-check {
+    background: rgb(0 0 0 / 0.32);
+  }
+}
+.selection-bar {
+  position: sticky;
+  bottom: var(--s4);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: fit-content;
+  max-width: 100%;
+  min-height: 52px;
+  margin: var(--s4) auto 0;
+  padding: 6px 6px 6px var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  animation: rise 0.16s ease-out;
+}
+.selection-count {
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.selection-actions {
+  display: flex;
+  gap: var(--s1);
+}
+.selection-actions:empty {
+  display: none;
+}
+.selection-bar .btn {
+  border-radius: var(--pill);
+}
+@media (max-width: 560px) {
+  .selection-bar {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    width: 100%;
+    padding-left: var(--s3);
+    border-radius: var(--r2);
+  }
+  .selection-actions {
+    margin-left: auto;
+  }
+  /* Icons carry the actions where the words don't fit. */
+  .selection-actions .btn {
+    font-size: 0;
+    gap: 0;
+  }
+  .selection-actions .btn svg {
+    font-size: 1rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .selection-bar,
+  .card-check {
+    animation: none;
+    transition: none;
+  }
+}
+.library-results {
+  scroll-margin-top: var(--s5);
+}
+
+/* Composer */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5) var(--s4);
+}
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
+  min-height: 190px;
+  padding: var(--s5);
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--r2);
+  background: var(--well);
+  color: var(--muted);
+  text-align: center;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+.dropzone > div:not(.row) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dropzone strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.dropzone.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.selection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  align-items: stretch;
+}
+.selection > .btn {
+  align-self: flex-start;
+}
+.selection-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: var(--s1);
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: var(--well);
+}
+.selection-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 52px;
+  padding: 6px var(--s1) 6px 6px;
+  border-radius: var(--r1);
+}
+.selection-row:hover {
+  background: var(--surface);
+}
+.selection-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.selection-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selection-text .muted {
+  font-size: 0.82rem;
+}
+/* One frame with two modes: files (drop area and picks) and the text box. */
+.composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: 36px;
+}
+.composer-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.composer-summary.muted {
+  font-weight: 500;
+}
+.composer-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex-shrink: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--well);
+}
+/* The selected mode's background slides between the two buttons. */
+.composer-mode::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 7px;
+  background: var(--raised);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  transition: transform 0.22s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.composer-mode[data-mode="text"]::before {
+  transform: translateX(100%);
+}
+:root[data-theme="dark"] .composer-mode::before {
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+.composer-mode button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 72px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: color 0.16s;
+}
+.composer-mode button[aria-pressed="true"] {
+  color: var(--ink);
+}
+.composer-mode button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.composer-mode-count {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.composer-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.composer-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 250px;
+}
+.composer-pane[hidden] {
+  display: none;
+}
+.composer-pane:not([hidden]) {
+  animation: composer-mode-in 0.2s ease-out;
+}
+@keyframes composer-mode-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.composer-drop {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
+  width: 100%;
+  min-height: 206px;
+  padding: var(--s4);
+  border: 1px solid transparent;
+  border-radius: var(--r2);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color 0.16s,
+    border-color 0.16s;
+}
+.composer-drop:hover,
+.composer-drop:focus-visible {
+  border-color: var(--line);
+  background: var(--well);
+}
+.composer-drop:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.composer-drop > strong {
+  color: var(--ink);
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.composer-browse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.composer-art {
+  width: 96px;
+  height: 90px;
+  overflow: visible;
+}
+.composer-art g {
+  stroke: var(--line-strong);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform-box: fill-box;
+  transform-origin: 50% 90%;
+  transition: transform 0.26s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.composer-art-back {
+  fill: var(--well);
+  transform: rotate(-15deg) translateX(-3px);
+}
+.composer-art-middle {
+  fill: var(--well);
+  transform: rotate(13deg) translateX(2px);
+}
+.composer-art-front {
+  fill: var(--surface);
+}
+.composer-art .composer-art-fold {
+  fill: var(--well);
+}
+.composer-art .composer-art-line {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+}
+.composer-art .composer-art-arrow {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  transition: transform 0.26s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.composer-drop:hover .composer-art-back {
+  transform: rotate(-21deg) translateX(-6px);
+}
+.composer-drop:hover .composer-art-middle {
+  transform: rotate(18deg) translateX(5px);
+}
+.composer-drop:hover .composer-art-arrow {
+  transform: translateY(-3px);
+}
+.composer-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  min-height: 32px;
+}
+.composer-tools.is-centered {
+  justify-content: center;
+}
+.composer-tools > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.composer-tools > button:hover:not(:disabled, [aria-disabled="true"]) {
+  color: var(--ink);
+}
+.composer-tools > button:disabled,
+.composer-tools > button[aria-disabled="true"] {
+  opacity: 0.5;
+}
+.composer-tools > button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.composer-tools-end {
+  margin-left: auto;
+}
+.composer-write textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 206px;
+  max-height: 60vh;
+  padding: var(--s3) 2px;
+  border: 0;
+  border-radius: var(--r1);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.6;
+  resize: none;
+}
+.composer-write textarea::placeholder {
+  color: var(--muted);
+}
+.composer-write textarea:focus-visible {
+  outline: none;
+}
+/* The other mode's contents, in one quiet line. */
+.composer-peek {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r1);
+  background: var(--well);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.composer-peek > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.composer-peek > button {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-pane:not([hidden]),
+  .composer-mode::before,
+  .composer-art g,
+  .composer-art .composer-art-arrow {
+    animation: none;
+    transition: none;
+  }
+}
+.selection-more {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0;
+}
+.btn.btn-quiet {
+  color: var(--muted);
+}
+/* Name and retention: quiet chips under the content, each opening its own small popover. */
+.composer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1);
+  margin: 0 calc(-1 * var(--s2));
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+}
+.composer-meta .btn {
+  gap: 6px;
+  max-width: 100%;
+  color: var(--muted);
+  font-weight: 500;
+}
+.composer-meta .btn:hover:not(:disabled),
+.composer-meta .btn[aria-expanded="true"] {
+  color: var(--ink);
+}
+.composer-meta .btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-meta {
+  flex-wrap: nowrap;
+}
+.composer-meta svg {
+  flex-shrink: 0;
+}
+.composer-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 320px !important;
+}
+.composer-meta > .btn:not(.composer-name) {
+  flex-shrink: 0;
+}
+.composer-name.is-auto span {
+  font-style: italic;
+}
+.name-popover {
+  width: 300px;
+  padding: var(--s3);
+}
+.name-popover form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.name-popover p {
+  margin: 0;
+}
+/* Send: the drop box and Recent on the left; the destinations on the right follow you as you scroll. */
+.send-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "box panel"
+    "below panel";
+  column-gap: var(--s4);
+  row-gap: var(--s6);
+  align-items: start;
+}
+.send-layout > .composer {
+  grid-area: box;
+  /* The empty drop box's height: uploads and results take the same space instead of shrinking it. */
+  min-height: 334px;
+}
+.send-layout > .send-panel {
+  grid-area: panel;
+  position: sticky;
+  top: 84px;
+}
+.send-below {
+  grid-area: below;
+  min-width: 0;
+}
+/* Recent sits beside the destinations: at most four roomy cards a row, three when it narrows. */
+.send-below .card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(max(168px, calc((100% - 3 * var(--s3)) / 4)), 1fr));
+}
+/* On a phone, two a row like everywhere else rather than one card filling the screen. */
+@media (max-width: 560px) {
+  .send-below .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.send-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s4);
+}
+.send-panel-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+.send-panel-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.send-panel-heading {
+  margin: var(--s4) 0 2px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.send-panel-summary.is-paused {
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r1);
+  background: var(--well);
+}
+.send-panel-empty {
+  padding: 2px 0 var(--s1);
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+.destination-wrap {
+  position: relative;
+}
+/* A row's option (link expiry) sits on its own line under the row's text, inside the row. */
+.destination-wrap.has-extra .destination {
+  align-items: flex-start;
+  padding-bottom: 38px;
+}
+.destination-extra {
+  position: absolute;
+  bottom: 6px;
+  left: calc(10px + 36px + var(--s3) - 8px);
+}
+.destination-extra .btn {
+  gap: 2px;
+  min-height: 28px;
+  padding-inline: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.destination-extra .btn:hover {
+  color: var(--ink);
+}
+/* Touch-sized options would cover the row; there they sit on their own line beneath it instead. */
+@media (pointer: coarse) {
+  .destination-wrap.has-extra .destination {
+    align-items: center;
+    padding-bottom: var(--s2);
+  }
+  .destination-extra {
+    position: static;
+    padding-left: calc(10px + 36px + var(--s3) - 8px);
+  }
+  .destination-extra .btn {
+    min-height: var(--control-sm);
+  }
+}
+.menu-icon-gap {
+  display: inline-block;
+  width: 16px;
+}
+.destination {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--s2) var(--s2) var(--s2) 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r1);
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.12s,
+    border-color 0.12s;
+}
+.destination:hover:not([aria-disabled="true"]) {
+  background: var(--well);
+}
+.destination:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.destination[aria-disabled="true"] {
+  cursor: default;
+}
+.destination[aria-disabled="true"] .destination-text,
+.destination[aria-disabled="true"] .destination-icon {
+  opacity: 0.5;
+}
+.destination.is-primary {
+  border-color: var(--line);
+}
+.destination-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--r1);
+  background: var(--well);
+  color: var(--muted);
+}
+.destination.is-primary .destination-icon {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+/* Nothing to send yet: the primary looks as quiet as the rest instead of a faded coral block. */
+.destination.is-primary[aria-disabled="true"] {
+  border-color: transparent;
+}
+.destination.is-primary[aria-disabled="true"] .destination-icon {
+  background: var(--well);
+  color: var(--muted);
+}
+.destination.is-done .destination-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.destination.is-done[aria-disabled="true"] .destination-text,
+.destination.is-done[aria-disabled="true"] .destination-icon {
+  opacity: 1;
+}
+.destination-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.destination-text strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.destination-text small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.destination-text .online-dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+.destination-go {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.destination[aria-disabled="true"] .destination-go {
+  visibility: hidden;
+}
+/* Add a device: always available, drawn as an empty slot so it doesn't read as a place to send. */
+.destination.is-quiet {
+  min-height: 48px;
+}
+.destination.is-quiet .destination-icon {
+  border: 1px dashed var(--line);
+  background: transparent;
+}
+.destination.is-quiet:hover .destination-icon {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+.destination.is-quiet .destination-text strong {
+  font-weight: 600;
+}
+/* A transfer you started lives in the drop box until you press Done. It takes the drop box's
+   whole height, so pressing Send never makes the page jump. */
+.transfer-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--s5);
+  animation: composer-mode-in 0.2s ease-out;
+}
+.transfer.transfer-embedded {
+  flex: 1;
+  justify-content: center;
+  gap: var(--s3);
+  padding: var(--s3) 0 0;
+}
+.transfer.transfer-embedded:has(> .transfer-hero-dismiss) {
+  position: relative;
+  padding-right: var(--s7, 40px);
+}
+.transfer-hero-dismiss {
+  position: absolute;
+  top: var(--s3);
+  right: 0;
+}
+.transfer-embedded + .transfer-embedded > .transfer-hero-dismiss {
+  top: var(--s4);
+}
+.transfer-embedded + .transfer-embedded {
+  flex: 0 0 auto;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.transfer-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.transfer-eyebrow-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--pill);
+  background: var(--well);
+  color: var(--ink);
+}
+.tone-busy .transfer-eyebrow-icon {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.tone-done {
+  color: var(--success);
+}
+.tone-done .transfer-eyebrow-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.tone-error {
+  color: var(--danger);
+}
+.tone-error .transfer-eyebrow-icon {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.transfer-hero-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.transfer-hero-detail {
+  font-size: 0.9rem;
+}
+.transfer-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.transfer-numbers {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px var(--s3);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.transfer-pct {
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.transfer-pct small {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.transfer-meter .progress {
+  height: 8px;
+}
+.transfer-paused .transfer-meter .progress > div {
+  background: var(--muted);
+}
+.transfer-embedded .transfer-actions {
+  padding-top: var(--s2);
+}
+.transfer-view-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: auto;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+.transfer-strips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+.transfer-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 40px;
+  padding: 2px var(--s1) 2px var(--s3);
+  border-radius: var(--r1);
+  background: var(--well);
+}
+.transfer-strip .ok {
+  color: var(--success);
+  flex-shrink: 0;
+}
+.transfer-strip .transfer-x {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.transfer-strip .transfer-name {
+  max-width: 50%;
+}
+.strip-meter {
+  width: 28px;
+  height: 4px;
+  flex-shrink: 0;
+  border-radius: var(--pill);
+  background: var(--line);
+  overflow: hidden;
+}
+.strip-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--s5);
+  background: color-mix(in srgb, var(--canvas) 70%, transparent);
+  pointer-events: none;
+  animation: fade 0.1s ease-out;
+}
+.drop-overlay > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  width: min(560px, 100%);
+  padding: var(--s7) var(--s5);
+  border: 2px dashed var(--accent);
+  border-radius: var(--r3);
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.drop-overlay strong {
+  color: var(--ink);
+  font-size: 1.2rem;
+}
+.drop-overlay span {
+  color: var(--muted);
+}
+/* What leaving the page stopped, in the drop box until you pick again or dismiss it. */
+.stopped-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: var(--well);
+}
+.stopped-notice > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.stopped-notice > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+.stopped-notice strong {
+  overflow-wrap: anywhere;
+}
+.stopped-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+/* Phones: the destinations are below the drop box, so a bar brings them up once there is something to send. */
+.send-jump {
+  display: none;
+}
+@media (max-width: 720px) {
+  .composer {
+    padding: var(--s4);
+  }
+  .dropzone {
+    min-height: 150px;
+    padding: var(--s4);
+  }
+  .composer-pane {
+    min-height: 200px;
+  }
+  .send-layout > .composer {
+    min-height: 316px;
+  }
+  .send-layout > .composer.is-transfer-settled {
+    min-height: 0;
+  }
+  .is-transfer-settled .transfer-view {
+    gap: var(--s3);
+  }
+  .is-transfer-settled .transfer.transfer-embedded {
+    flex: 0 0 auto;
+    justify-content: flex-start;
+    gap: var(--s2);
+    padding-top: 0;
+  }
+  .is-transfer-settled .transfer-hero-name {
+    font-size: 1.08rem;
+  }
+  .is-transfer-settled .transfer-embedded .transfer-actions {
+    padding-top: 0;
+  }
+  .transfer-view-foot {
+    flex-wrap: wrap;
+    gap: var(--s2);
+    padding-top: var(--s3);
+  }
+  .transfer-view-foot.is-finished .muted {
+    display: none;
+  }
+  .transfer-view-foot.is-finished .btn {
+    width: 100%;
+  }
+  .composer-drop,
+  .composer-write textarea {
+    min-height: 160px;
+  }
+  .send-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas:
+      "box"
+      "panel"
+      "below";
+    row-gap: var(--s4);
+  }
+  .send-layout > .send-panel {
+    position: static;
+    scroll-margin-top: 72px;
+  }
+  .send-jump {
+    position: fixed;
+    right: var(--s4);
+    bottom: calc(var(--s4) + env(safe-area-inset-bottom));
+    left: var(--s4);
+    z-index: 25;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .send-jump .btn {
+    box-shadow: var(--shadow);
+    pointer-events: auto;
+  }
+  /* On a phone the destinations only take room once there is something to send. */
+  .send-panel.is-idle .destination-wrap,
+  .send-panel.is-idle .send-panel-heading,
+  .send-panel.is-idle .send-panel-empty {
+    display: none;
+  }
+  .send-panel.is-idle .send-panel-summary {
+    margin-bottom: 0;
+  }
+  .send-panel.is-idle .destination-wrap:has(.is-quiet) {
+    display: block;
+  }
+  .send-below {
+    margin-top: var(--s2);
+  }
+}
+@media (max-width: 560px) {
+  /* Clear of the bottom tab bar, level with toasts. */
+  .send-jump {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
+/* Transfers */
+.transfer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.transfer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s3) var(--s3) var(--s4);
+}
+.transfer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: var(--control-sm);
+}
+.transfer-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+.transfer-title strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-title .pill {
+  margin-left: 0;
+}
+.transfer-title .ok {
+  color: var(--success);
+  flex-shrink: 0;
+}
+.transfer-status {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  padding-right: var(--s1);
+}
+.transfer-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+.transfer-note.error {
+  color: var(--danger);
+}
+.transfer-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.transfer-actions {
+  padding-top: var(--s1);
+}
+.transfer-compact {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s2) var(--s2) var(--s4);
+  min-height: 52px;
+}
+.transfer-compact .ok {
+  color: var(--success);
+  flex-shrink: 0;
+}
+.transfer-compact .transfer-x {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.transfer-name {
+  font-weight: 600;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-line {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-compact .transfer-actions {
+  padding-top: 0;
+  flex-shrink: 0;
+}
+@media (max-width: 560px) {
+  .transfer-compact {
+    flex-wrap: wrap;
+    row-gap: var(--s1);
+  }
+  .transfer-name {
+    max-width: calc(100% - 80px);
+    flex: 1;
+  }
+  .transfer-line {
+    order: 5;
+    flex-basis: 100%;
+    padding-left: 30px;
+    white-space: normal;
+  }
+  .transfer-compact .transfer-actions {
+    order: 6;
+    padding-left: 30px;
+  }
+}
+/* Activity */
+.activity-button {
+  position: relative;
+}
+.activity-popover {
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 48px;
+  padding: var(--s2) var(--s2) var(--s2) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.popover-empty {
+  padding: var(--s4);
+  font-size: 0.92rem;
+}
+.activity-scroll {
+  max-height: min(520px, calc(100dvh - 140px));
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.activity-section + .activity-section {
+  border-top: 1px solid var(--line);
+}
+.activity-heading {
+  padding: var(--s3) var(--s4) var(--s1);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--s1) var(--s2);
+}
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  border-radius: var(--r1);
+}
+.activity-item:has(> button.activity-open):hover {
+  background: var(--well);
+}
+.activity-open {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: 1;
+  min-width: 0;
+  padding: var(--s2);
+  border: 0;
+  border-radius: var(--r1);
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+button.activity-open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.activity-thumb {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+.activity-thumb .thumb-compact {
+  width: 44px;
+  height: 44px;
+}
+.activity-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--well);
+  color: var(--muted);
+}
+.activity-icon.is-warn {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.activity-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.activity-text strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-item.is-fresh .activity-text strong,
+.activity-item.is-pending .activity-text strong {
+  font-weight: 600;
+}
+.activity-text .muted {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-answer {
+  display: flex;
+  gap: var(--s1);
+  flex-shrink: 0;
+  padding-right: var(--s1);
+}
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Enter code */
+.code-button {
+  gap: var(--s2);
+  padding-inline: var(--s3);
+}
+.code-popover {
+  width: 340px;
+}
+/* Between phone and desktop the top bar also holds the sections, and on the narrowest phones (with
+   44px touch controls) there is no room for the label either: the button is its icon alone. */
+@media (min-width: 561px) and (max-width: 900px), (max-width: 374px) {
+  .code-button {
+    width: var(--control);
+    padding-inline: 0;
+  }
+  .code-button-label {
+    display: none;
+  }
+}
+.code-entry-form > .link {
+  align-self: flex-start;
+  font-size: 0.88rem;
+}
+.code-entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 480px) {
+  .activity-popover,
+  .code-popover {
+    width: calc(100vw - 16px);
+  }
+  .activity-item.is-pending {
+    flex-wrap: wrap;
+  }
+  .activity-answer {
+    width: 100%;
+    justify-content: flex-end;
+    padding: 0 var(--s2) var(--s2);
+  }
+}
+
+/* Account menu */
+.account-popover {
+  width: 240px;
+}
+.account-head {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.account-head .muted {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Preview. The viewer takes the whole window height, so a file is shown as large as it fits. */
+.preview-modal {
+  height: calc(100dvh - 48px);
+}
+.preview-modal .modal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--s4) var(--s4);
+  overflow: hidden;
+}
+.preview-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: var(--s2);
+  min-width: 0;
+  min-height: 0;
+}
+.preview-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* A preview filling a fixed-height stage (the viewer, a single-file item) instead of sizing itself. */
+.preview-fill {
+  flex-direction: column;
+  align-items: stretch;
+  align-self: stretch;
+  min-height: 0;
+}
+.preview-fill > * {
+  flex: 1;
+  min-height: 0;
+}
+.preview-fill > .preview-none {
+  flex: 0 0 auto;
+  margin: auto 0;
+}
+.preview-fill > .preview-pdf,
+.preview-fill > .preview-media {
+  height: auto;
+  max-height: none;
+}
+.preview-fill > .preview-text pre {
+  flex: 1;
+  max-height: none;
+}
+.preview-image {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 0;
+}
+.preview-image-frame {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  max-height: calc(100dvh - 180px);
+  border-radius: var(--r1);
+}
+.preview-fill .preview-image-frame {
+  max-height: none;
+}
+/* Auto margins centre the image while it fits and pin it to the start once it overflows. */
+.preview-image img {
+  display: block;
+  flex-shrink: 0;
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  object-fit: contain;
+  border-radius: var(--r1);
+  user-select: none;
+}
+.preview-image.is-zoomable .preview-image-frame {
+  cursor: zoom-in;
+}
+.preview-image.is-zoomed .preview-image-frame {
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: grab;
+}
+.preview-image.is-zoomed .preview-image-frame:active {
+  cursor: grabbing;
+}
+.preview-image.is-zoomed img {
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
+.preview-image .spinner-row {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+}
+.preview-zoom {
+  position: absolute;
+  right: var(--s2);
+  bottom: var(--s2);
+  box-shadow: var(--shadow-sm);
+}
+.preview-pdf {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  height: calc(100dvh - 180px);
+  padding: var(--s3);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  background: var(--well);
+}
+.preview-pdf-loading {
+  justify-content: center;
+}
+.preview-pdf-page {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: min(100%, 900px);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.preview-pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.preview-pdf-more {
+  text-align: center;
+}
+.preview-media {
+  width: 100%;
+  max-height: calc(100dvh - 180px);
+  border-radius: var(--r1);
+  background: #000;
+}
+audio.preview-media {
+  background: none;
+}
+.preview-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  width: 100%;
+}
+.preview-text pre {
+  max-height: calc(100dvh - 240px);
+  overflow: auto;
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  background: var(--well);
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-none {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s7) var(--s4);
+  color: var(--muted);
+  text-align: center;
+}
+.preview-none strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.preview-nav {
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+/* At either end the arrow is hidden but keeps its space, so the preview doesn't shift. */
+.preview-nav.is-end {
+  visibility: hidden;
+}
+/* Links: keep the Share entry point readable on narrow screens. */
+@media (max-width: 560px) {
+  .link-row-item .link-copy {
+    flex-shrink: 0;
+  }
+  .link-row-item .list-text .muted {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+}
+@media (max-width: 720px) {
+  /* Phones: the arrows sit in a row under the preview, never over text or video controls. */
+  .preview-modal {
+    height: calc(100dvh - 8px);
+  }
+  .preview-stage {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "content content content"
+      "prev . next";
+    row-gap: var(--s2);
+  }
+  .preview-stage .preview-content {
+    grid-area: content;
+  }
+  .preview-nav.prev {
+    grid-area: prev;
+  }
+  .preview-nav.next {
+    grid-area: next;
+  }
+}
+
+/* Settings */
+.settings {
+  max-width: 800px;
+  gap: var(--s4);
+}
+.settings .page-head {
+  margin-bottom: var(--s2);
+}
+.settings .page-head + * {
+  margin-top: 0;
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s5);
+}
+/* A section opened by its address ("/settings#s-activity") lands below the sticky top bar. */
+.settings-section-head h2 {
+  scroll-margin-top: calc(72px + var(--s5) + var(--s4));
+}
+.settings-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-section-head .muted {
+  font-size: 0.92rem;
+}
+.settings-section-head code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+.settings-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3) var(--s4);
+  flex-wrap: wrap;
+  padding: var(--s1) 0;
+}
+.setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.setting-label strong {
+  font-weight: 600;
+}
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+}
+.device-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s2) var(--s2) var(--s3);
+}
+.device-row + .device-row {
+  border-top: 1px solid var(--line);
+}
+.device-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r1);
+  background: var(--well);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.device-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.device-text strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-text .muted {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.device-text .online-dot {
+  width: 7px;
+  height: 7px;
+}
+.login-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+  text-align: center;
+}
+.login-code > .btn-primary {
+  width: 100%;
+}
+.login-code .share-access {
+  text-align: left;
+}
+.login-code .share-access-detail p {
+  margin: 0;
+}
+.login-code .share-access-detail p + p {
+  margin-top: var(--s2);
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s3);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s4);
+}
+.stat strong {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+.stat strong.small {
+  font-size: 1rem;
+}
+.stat > div {
+  margin-top: auto;
+  padding-top: var(--s1);
+}
+.list-text.static {
+  cursor: default;
+}
+/* Admin: a size typed with its unit. */
+.byte-size {
+  display: flex;
+  gap: var(--s2);
+}
+.byte-size .input:first-child {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .settings-section {
+    padding: var(--s4);
+  }
+}
+
+/* Sign in and public pages */
+.auth {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--s5) var(--s4);
+}
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  width: min(400px, 100%);
+  padding: var(--s6);
+}
+.auth-card h1 {
+  font-size: 1.4rem;
+}
+.auth-card .muted {
+  margin-top: var(--s1);
+}
+.auth-split {
+  grid-template-columns: repeat(2, minmax(0, 400px));
+  gap: var(--s5);
+  justify-content: center;
+  align-content: start;
+  align-items: start;
+  padding-top: clamp(48px, 9vh, 112px);
+}
+.auth-page-brand {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.auth-split .auth-card {
+  width: 100%;
+  max-width: 400px;
+  min-width: 0;
+}
+.auth-code-card {
+  justify-content: center;
+}
+.auth-code-card h2 {
+  font-size: 1.4rem;
+}
+@media (max-width: 860px) {
+  .auth-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.auth-switch {
+  align-self: flex-start;
+  font-size: 0.92rem;
+}
+.auth-alt {
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  text-align: center;
+  font-size: 0.92rem;
+}
+.auth-card .auth-alt .muted {
+  margin-top: 0;
+}
+.public {
+  min-height: 100vh;
+}
+/* Header and card share one width so the brand lines up with the card edge. */
+.public-head,
+.public-main {
+  max-width: calc(640px + 2 * var(--gutter));
+  margin: 0 auto;
+}
+.public-head {
+  padding: var(--s4) var(--gutter);
+}
+.public-main {
+  padding: 0 var(--gutter) var(--s7);
+}
+.public-head.narrow,
+.public-main.narrow {
+  max-width: calc(440px + 2 * var(--gutter));
+}
+.public-head.wide,
+.public-main.wide {
+  max-width: calc(880px + 2 * var(--gutter));
+}
+.public-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding: var(--s6);
+}
+.public-card > .link {
+  align-self: flex-start;
+}
+.public-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-width: 0;
+}
+.public-title h1 {
+  overflow-wrap: anywhere;
+}
+.public-card .code-entry-form {
+  padding: 0;
+  border: 0;
+}
+.request-description {
+  white-space: pre-wrap;
+  margin: var(--s1) 0;
+}
+.request-owner {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.guest-add {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  border-radius: var(--r1);
+}
+.guest-add strong {
+  font-weight: 600;
+}
+.guest-add .muted {
+  font-weight: 400;
+}
+.guest-add .row {
+  gap: 2px;
+}
+.guest-add.dragging {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: 4px;
+  background: var(--accent-soft);
+}
+.guest-sent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s5) var(--s4);
+  text-align: center;
+}
+.guest-sent h2 {
+  font-size: 1.2rem;
+}
+.guest-sent p {
+  max-width: 44ch;
+}
+.guest-sent .btn {
+  margin-top: var(--s2);
+}
+.guest-sent-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+/* Requests */
+.limits-summary {
+  font-size: 0.92rem;
+}
+
+/* Requests */
+.request-row .row-chevron {
+  display: none;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.submission-list li + li {
+  border-top: 1px solid var(--line);
+}
+.submission-row {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r1);
+}
+.submission-row:hover strong {
+  color: var(--accent);
+}
+.submission-row > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.submission-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+@media (max-width: 720px) {
+  .request-row .row-chevron {
+    display: block;
+  }
+  .request-row .row-copy .btn {
+    width: auto;
+    padding-inline: var(--s2);
+  }
+}
+
+/* 404 */
+.not-found {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+  padding-top: var(--s7);
+  text-align: center;
+}
+@media (max-width: 720px) {
+  .auth-card,
+  .public-card {
+    padding: var(--s5) var(--s4);
+  }
+}
+.theme-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 36px;
+  padding: 0 var(--s1) 0 var(--s3);
+  font-size: 0.93rem;
+}
+.theme-switch-options {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--pill);
+  background: var(--well);
+}
+.theme-switch button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--pill);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.theme-switch button:hover {
+  color: var(--ink);
+}
+.theme-switch button[aria-checked="true"] {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.theme-switch button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+:root[data-theme="dark"] .theme-switch-options {
+  background: var(--canvas);
+}
+/* A switch inside a menu: the whole row toggles it, and the menu stays open. */
+.menu-switch .switch-visual {
+  margin-left: auto;
+}
+.switch-visual {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--pill);
+  background: var(--control-border);
+  transition: background-color 0.15s;
+}
+.switch-visual::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  transition: transform 0.15s;
+}
+[aria-checked="true"] > .switch-visual {
+  background: var(--accent);
+}
+[aria-checked="true"] > .switch-visual::after {
+  transform: translateX(14px);
+}
+@media (max-width: 560px) {
+  /* Finished strips stay on one line on phones: the name first, the status squeezed after it. */
+  .transfer-strip .transfer-name {
+    flex: 0 1 auto;
+    max-width: 55%;
+  }
+  .transfer-strip .transfer-line {
+    order: 0;
+    flex: 1 1 0;
+    padding-left: 0;
+    white-space: nowrap;
+  }
+}
+.guest-full {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s4);
+  border-radius: var(--r1);
+  background: var(--well);
+  text-align: center;
+}
+.guest-full p:first-child {
+  font-weight: 600;
+}
+.guest-renames {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+/* Link options: the lifetime is always open; the rest are switches or one line until asked for. */
+.link-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.link-options .toggle-row {
+  padding: 0;
+}
+.link-option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.link-option-detail {
+  margin: 0;
+  font-size: 0.86rem;
+}
+.link-option-detail .field-hint {
+  margin: 4px 0 0;
+}
+.link-option-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  min-height: var(--control-sm);
+  text-decoration: none;
+}
+.link-option-add:hover {
+  text-decoration: underline;
+}
+.input-with-action {
+  position: relative;
+  display: flex;
+}
+.input-with-action .input {
+  flex: 1;
+  padding-right: 44px;
+}
+.input-with-action .btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  color: var(--muted);
+}
+.link-options-trigger {
+  gap: 2px;
+}
+.link-options-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.link-options-popover {
+  width: min(380px, calc(100vw - 16px));
+  padding: var(--s4);
+}
+.link-options-popover form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+/* Who opened a link: a line that opens into the list of devices. */
+.link-reach {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  font-size: 0.88rem;
+}
+.link-reach-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.link-reach-toggle:hover span {
+  text-decoration: underline;
+}
+.link-reach-chevron {
+  color: var(--muted);
+  transition: transform 0.14s;
+}
+.link-reach-toggle[aria-expanded="true"] .link-reach-chevron {
+  transform: rotate(180deg);
+}
+.link-visits {
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  list-style: none;
+}
+.link-visits li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s2) var(--s3);
+  text-align: left;
+}
+.link-visits li + li {
+  border-top: 1px solid var(--line);
+}
+.link-visits .muted {
+  font-size: 0.8rem;
+}
+.link-row-lock {
+  margin-left: 6px;
+  vertical-align: -1px;
+  color: var(--muted);
+}
+.member-username {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 0.86rem;
+}
+
+/* A share behind a password: one question, nothing else. */
+.share-unlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) 0;
+  text-align: center;
+}
+.share-unlock p {
+  margin: 0;
+}
+.share-unlock-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.share-unlock-row {
+  display: flex;
+  gap: var(--s2);
+  width: 100%;
+  max-width: 360px;
+}
+.share-unlock-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The sender's note: quiet, set apart from the files by a rule rather than a box. */
+.share-note {
+  flex: none;
+  margin: 0 0 var(--s4);
+  padding: 2px 0 2px var(--s3);
+  border-left: 3px solid var(--accent);
+}
+.share-note blockquote {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.share-note figcaption {
+  margin-top: 4px;
+  font-size: 0.83rem;
+}
+.share-note figcaption::before {
+  content: "— ";
+}
