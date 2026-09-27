@@ -52,7 +52,8 @@ test("mobile link result keeps every handoff visible without horizontal overflow
   await expect(result.locator(".share-access-code .code")).toHaveText(/^[0-9]{3}-[0-9]{3}$/);
   await expect(result.getByRole("button", { name: "Copy link" })).toBeVisible();
   await expect(result.getByRole("button", { name: "Copy link" })).toBeEnabled();
-  await expect(result.getByRole("button", { name: "Copy link" })).toHaveClass(/btn-ghost/);
+  // Beside the QR code, copying is the main action, so it reads as a button rather than a link.
+  await expect(result.getByRole("button", { name: "Copy link" })).toHaveClass(/btn-secondary/);
   await expect(result.getByRole("button", { name: "Open in Files" })).toHaveCount(0);
   await expect(result.locator(".transfer-eyebrow")).toHaveCount(0);
   await expect(result.locator(".transfer-hero-name")).toHaveText("Text · 21 characters");

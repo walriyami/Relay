@@ -18,6 +18,7 @@ import {
 import { ApiError, api, call, type Me, type MemberDefaults, type SetupState } from "../../api";
 import { bytes, dateTime } from "../../lib/format";
 import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
+import { scrollMotion } from "../../lib/router";
 import { Brand } from "../../app/Brand";
 import { Button, Segmented, Spinner } from "../../components/ui";
 import { ShareAccess } from "../../components/ShareAccess";
@@ -506,7 +507,7 @@ function InviteStep({ heading, onNext }: { heading: HeadingRef; onNext: () => vo
   const card = useRef<HTMLDivElement>(null);
   // A new invitation opens below the fold on most screens.
   useEffect(() => {
-    card.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    card.current?.scrollIntoView({ behavior: scrollMotion(), block: "nearest" });
   }, [invite?.token]);
   async function create() {
     setBusy(true);

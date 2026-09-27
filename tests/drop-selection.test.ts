@@ -68,3 +68,23 @@ test("dropped folders with the same root keep separate identities and hierarchie
     ["Album/one.txt", "Album (2)/two.txt"],
   );
 });
+
+test("a dropped file is taken as given, even when its entry can't be read back", async () => {
+  const file = new File(["hello"], "notes.txt");
+  const unreadable = {
+    name: file.name,
+    isFile: true,
+    isDirectory: false,
+    file(_success: (file: File) => void, failure: (error: Error) => void) {
+      failure(new Error("NotFoundError"));
+    },
+  } as unknown as FileSystemFileEntry;
+  const list = [{ webkitGetAsEntry: () => unreadable, getAsFile: () => file }] as unknown as DataTransferItemList;
+
+  const selection = await collectDroppedSelection(list);
+  assert.deepEqual(
+    selection.files.map(({ file, path }) => [file, path]),
+    [[file, "notes.txt"]],
+  );
+  assert.equal(selection.skipped, 0);
+});

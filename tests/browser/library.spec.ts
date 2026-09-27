@@ -40,7 +40,7 @@ test("recent items open in a popup at their own address; Back closes it and stay
   await page.goBack();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("link", { name: "Send" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "Send", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(composer(page)).toBeVisible();
 });
 
@@ -182,7 +182,7 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   await expect(page.getByText("2 items moved to Trash")).toBeVisible();
 
   await page.unroute("**/api/items?*");
-  await page.locator(".toolbar").getByRole("button", { name: "Trash" }).click();
+  await page.locator(".page-head").getByRole("button", { name: "Trash" }).click();
   const trashSearch = page.getByRole("searchbox", { name: "Search Trash" });
   await trashSearch.fill(group);
   const trash = page.getByRole("list", { name: "Trash" });

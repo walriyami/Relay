@@ -49,6 +49,33 @@ async function createRequest(page: Page, name: string) {
 const requestRow = (page: Page, name: string) =>
   page.getByRole("list", { name: "Open requests" }).getByRole("listitem").filter({ hasText: name });
 
+test("a file dropped anywhere on the page joins the list rather than replacing the page", async ({ page, browser }) => {
+  await signedIn(page);
+  const name = unique("dropped");
+  const url = await createRequest(page, name);
+  const visitor = await browser.newContext();
+  try {
+    const guest = await visitor.newPage();
+    await guest.goto(url);
+    const heading = guest.getByRole("heading", { level: 1, name });
+    await expect(heading).toBeVisible();
+    const data = await guest.evaluateHandle((file) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["hello"], file, { type: "text/plain" }));
+      return transfer;
+    }, `${name}.txt`);
+    // A near miss, over the heading rather than the drop area, is still taken.
+    await heading.dispatchEvent("dragenter", { dataTransfer: data });
+    await expect(guest.getByText("Drop to add")).toBeVisible();
+    await heading.dispatchEvent("drop", { dataTransfer: data });
+    await expect(guest.getByRole("button", { name: `Remove ${name}.txt` })).toBeVisible();
+    await expect(guest.getByRole("button", { name: "Upload 1 file", exact: true })).toBeVisible();
+    await expect(guest).toHaveURL(url);
+  } finally {
+    await visitor.close();
+  }
+});
+
 test("a full request says so, hides the picker and never offers to send more", async ({ page, browser }) => {
   await signedIn(page);
   const name = unique("full");

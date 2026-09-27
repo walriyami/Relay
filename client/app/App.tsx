@@ -9,6 +9,7 @@ import {
   type ComponentType,
 } from "react";
 import {
+  Compass,
   Download,
   FolderInput,
   FolderOpen,
@@ -347,6 +348,9 @@ const NAV = [
 function NotFound() {
   return (
     <div className="page not-found">
+      <span className="empty-icon">
+        <Compass size={26} aria-hidden />
+      </span>
       <h1>Page not found</h1>
       <p className="muted">This address doesn’t exist in Relay.</p>
       <Button variant="primary" onClick={() => navigate("/")}>

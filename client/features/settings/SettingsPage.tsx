@@ -7,7 +7,7 @@ import { confirmSignOut, signOut } from "../../app/App";
 import { ago, bytes } from "../../lib/format";
 import { notifyChange } from "../../lib/live";
 import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
-import { navigate } from "../../lib/router";
+import { navigate, scrollMotion } from "../../lib/router";
 import { setTransferPrefs } from "../../lib/transfers";
 import { setLocalPrefs, useLocalPrefs } from "../../lib/local-prefs";
 import { AddDevice } from "./AddDevice";
@@ -56,6 +56,105 @@ function applyChange(current: Me, body: AccountChange): Me {
   };
 }
 
+/** The page's sections, in order, as the side navigation lists them. */
+const SECTIONS = [
+  { id: "s-sending", title: "Sending" },
+  { id: "s-devices", title: "Devices" },
+  { id: "s-passkeys", title: "Passkeys" },
+  { id: "s-activity", title: "Activity" },
+  { id: "s-notify", title: "Arrivals" },
+  { id: "s-look", title: "Appearance" },
+  { id: "s-storage", title: "Storage" },
+  { id: "s-account", title: "Account" },
+];
+const WIDE = "(min-width: 1120px)";
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+
+/**
+ * Beside the sections on wide screens: where you are on the page, and a jump to any other section.
+ * The current section is the last one whose heading has scrolled past the top quarter of the
+ * window, or the last one once the page is at its end. A section picked here stays current until
+ * you scroll yourself, even when the page ends before its heading can reach the top.
+ */
+function SettingsNav() {
+  const [current, setCurrent] = useState(SECTIONS[0].id);
+  const picked = useRef(false);
+  useEffect(() => {
+    const wide = matchMedia(WIDE);
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      if (picked.current) return;
+      const line = Math.max(window.innerHeight / 4, 140);
+      const end = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+      let at = SECTIONS[0].id;
+      for (const { id } of SECTIONS) {
+        const top = document.getElementById(id)?.getBoundingClientRect().top;
+        if (top !== undefined && top <= line) at = id;
+      }
+      setCurrent(end ? SECTIONS[SECTIONS.length - 1].id : at);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const release = (event: Event) => {
+      if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
+      picked.current = false;
+    };
+    const listen = () => {
+      if (!wide.matches) return;
+      window.addEventListener("scroll", schedule, { passive: true });
+      window.addEventListener("resize", schedule);
+      for (const type of ["wheel", "touchmove", "keydown"]) window.addEventListener(type, release, { passive: true });
+      schedule();
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      for (const type of ["wheel", "touchmove", "keydown"]) window.removeEventListener(type, release);
+    };
+    const change = () => {
+      stop();
+      listen();
+    };
+    listen();
+    wide.addEventListener("change", change);
+    return () => {
+      stop();
+      wide.removeEventListener("change", change);
+    };
+  }, []);
+  return (
+    <nav className="settings-nav" aria-label="Settings sections">
+      <ul>
+        {SECTIONS.map(({ id, title }) => (
+          <li key={id}>
+            <a
+              href={`#${id}`}
+              aria-current={current === id ? "location" : undefined}
+              onClick={(event) => {
+                event.preventDefault();
+                const heading = document.getElementById(id);
+                if (!heading) return;
+                picked.current = true;
+                setCurrent(id);
+                heading.scrollIntoView({ behavior: scrollMotion(), block: "start" });
+                // Keyboard and screen reader users continue from the section they chose.
+                heading.focus({ preventScroll: true });
+                history.replaceState(history.state, "", `#${id}`);
+              }}
+            >
+              {title}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
   const { me: savedMe, setMe, refreshMe } = useSession();
   const queue = useRef<AccountChange[]>([]);
@@ -101,6 +200,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
       <div className="page-head">
         <h1>Settings</h1>
       </div>
+      <SettingsNav />
       <Section id="s-sending" title="Sending" description="Defaults for new transfers.">
         <div className="setting-row">
           <span className="setting-label">

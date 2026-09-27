@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CircleCheck, FilePlus2, FolderPlus, Upload, X } from "lucide-react";
 import { ApiError, api, call, type PublicRequest, type PublicShare } from "../api";
 import { LIMITS } from "../../shared/model";
-import { collectDroppedSelection } from "../drop-selection";
+import { collectDroppedSelection, dragHasFiles, skippedNotice } from "../drop-selection";
 import { autoName, baseName, bytes, plural, until } from "../lib/format";
 import { startTransfer, isBusy, uniquePaths, type DraftFile, type Transfer } from "../lib/transfers";
 import {
@@ -15,6 +15,7 @@ import {
 import { navigate } from "../lib/router";
 import { Button, Field, IconButton, Spinner, toast } from "../components/ui";
 import { FileTypeIcon } from "../components/Thumbnail";
+import { DocumentArt } from "../components/DocumentArt";
 import { SHARE_GONE, ShareUnlock, ShareView, shareSummary, useShare } from "../features/incoming/ReceiveView";
 import { CodeEntryForm, codeDigits } from "../features/codes/CodeEntry";
 import { browserName } from "../features/auth/device-name";
@@ -292,6 +293,8 @@ export function GuestUpload({ token }: { token: string }) {
   const [error, setError] = useState("");
   const [picks, setPicks] = useState<Pick[]>([]);
   const [dragging, setDragging] = useState(false);
+  // Files found so far while a dropped folder is read; null when not reading.
+  const [reading, setReading] = useState<number | null>(null);
   const [seen, setSeen] = useState<Set<string>>(() => new Set());
   const [sender, setSender] = useState("");
   const filesInput = useRef<HTMLInputElement>(null);
@@ -367,6 +370,54 @@ export function GuestUpload({ token }: { token: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when a transfer's status changes, not on every progress tick.
     [picks, all.map((t) => `${t.id}:${t.status}`).join()],
   );
+  // Dropping anywhere on the page adds to the list, so a near miss never opens the file in place of
+  // this page. While the request is full or just answered, drops are refused rather than lost.
+  const accepting = useRef(false);
+  accepting.current = !!info && !sent && !full;
+  const addDropped = useRef(add);
+  addDropped.current = add;
+  useEffect(() => {
+    let depth = 0;
+    const enter = (event: DragEvent) => {
+      if (!dragHasFiles(event)) return;
+      event.preventDefault();
+      depth++;
+      setDragging(accepting.current);
+    };
+    const over = (event: DragEvent) => {
+      if (!dragHasFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer!.dropEffect = accepting.current ? "copy" : "none";
+    };
+    const leave = (event: DragEvent) => {
+      if (!dragHasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDragging(false);
+    };
+    const drop = async (event: DragEvent) => {
+      if (!dragHasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setDragging(false);
+      if (!accepting.current) return;
+      setReading(0);
+      const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
+      setReading(null);
+      addDropped.current(selection.files, selection.folders);
+      if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
+    };
+    const onDrop = (event: DragEvent) => void drop(event);
+    document.addEventListener("dragenter", enter);
+    document.addEventListener("dragover", over);
+    document.addEventListener("dragleave", leave);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragenter", enter);
+      document.removeEventListener("dragover", over);
+      document.removeEventListener("dragleave", leave);
+      document.removeEventListener("drop", onDrop);
+    };
+  }, []);
   function upload() {
     if (!info || !count) return;
     startTransfer({
@@ -424,23 +475,6 @@ export function GuestUpload({ token }: { token: string }) {
       />
     </>
   );
-  const drop = {
-    onDragOver: (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragging(true);
-    },
-    onDragLeave: () => setDragging(false),
-    onDrop: async (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragging(false);
-      try {
-        const selection = await collectDroppedSelection(e.dataTransfer.items);
-        add(selection.files, selection.folders);
-      } catch (error) {
-        toast(`Couldn’t read what was dropped: ${(error as Error).message}`, { tone: "error" });
-      }
-    },
-  };
   const addButtons = (size: "sm" | "md") => (
     <>
       <Button
@@ -507,8 +541,12 @@ export function GuestUpload({ token }: { token: string }) {
         ) : (
           <>
             {picks.length > 0 || busy ? (
-              <div className={`guest-add ${dragging ? "dragging" : ""}`} {...drop}>
-                {picks.length > 0 ? (
+              <div className={`guest-add ${dragging ? "dragging" : ""}`}>
+                {reading !== null ? (
+                  <span className="muted" role="status">
+                    {reading ? `Reading… ${plural(reading, "file")} so far` : "Reading what you dropped…"}
+                  </span>
+                ) : picks.length > 0 ? (
                   <strong>
                     {plural(count, "file")}
                     <span className="muted"> · {bytes(size)}</span>
@@ -520,9 +558,24 @@ export function GuestUpload({ token }: { token: string }) {
                 {pickers}
               </div>
             ) : (
-              <div className={`dropzone ${dragging ? "dragging" : ""}`} {...drop}>
-                <Upload size={28} aria-hidden />
-                <strong>{coarse() ? "Choose files to send" : "Drop files or folders here"}</strong>
+              <div className={`dropzone ${dragging ? "dragging" : ""}`}>
+                <DocumentArt />
+                <div role={reading === null ? undefined : "status"}>
+                  <strong>
+                    {reading !== null
+                      ? "Reading what you dropped…"
+                      : dragging
+                        ? "Drop to add"
+                        : coarse()
+                          ? "Choose files to send"
+                          : "Drop files or folders here"}
+                  </strong>
+                  <span>
+                    {reading
+                      ? `${plural(reading, "file")} found so far`
+                      : "You’ll see the list before anything uploads."}
+                  </span>
+                </div>
                 <div className="row center">{addButtons("md")}</div>
                 {pickers}
               </div>

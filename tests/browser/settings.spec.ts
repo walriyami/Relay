@@ -12,7 +12,7 @@ test("settings save and apply to new shares", async ({ page }) => {
   await expect(page.getByText("Saved").first()).toBeVisible();
   await page.reload();
   await expect(expiry.getByRole("radio", { name: "30 days" })).toHaveAttribute("aria-checked", "true");
-  await page.getByRole("link", { name: "Send" }).click();
+  await page.getByRole("link", { name: "Send", exact: true }).click();
   await writeText(page, "something to send");
   await expect(destinations(page).getByRole("button", { name: /^Link options/ })).toHaveAccessibleName(
     "Link options: 30 days",

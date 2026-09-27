@@ -45,8 +45,21 @@ export async function collectDroppedSelection(
     selectionId: `drop-root-${index}`,
   }));
   for (const { entry, file, selectionId } of roots) {
-    if (entry) await walk(entry, selectionId);
-    else if (file) result.files.push({ file, path: file.name });
+    // A dropped file is already in hand. Reading it again through its entry is slower and can fail
+    // where getAsFile succeeded (WebKit, for files not backed by disk), so only folders are walked.
+    // Folders need the check: Chrome returns a File for them too.
+    if (file && !entry?.isDirectory) result.files.push({ file, path: file.name, selectionId });
+    else if (entry) await walk(entry, selectionId);
   }
   return result;
 }
+
+/** Whether a drag carries files, rather than text or a link from another page. */
+export const dragHasFiles = (event: DragEvent) =>
+  !!event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files");
+
+/** Said when some dropped entries couldn't be read; everything else was still added. */
+export const skippedNotice = (skipped: number) =>
+  skipped === 1
+    ? "1 item couldn’t be read and was left out."
+    : `${skipped.toLocaleString()} items couldn’t be read and were left out.`;

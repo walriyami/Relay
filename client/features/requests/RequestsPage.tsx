@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, FolderInput, Inbox, Pencil, Plus } from "lucide-react";
+import { Ban, ChevronRight, FolderInput, Inbox, Link2, Pencil, Plus, RotateCcw } from "lucide-react";
 import { ApiError, api, call, stableId, urls, type UploadRequest } from "../../api";
 import type { Body } from "../../../shared/api";
 import { DEFAULTS, LIMITS } from "../../../shared/model";
@@ -134,16 +134,22 @@ export function RequestsPage() {
       <Menu
         label={`More actions for ${r.name}`}
         items={[
-          { label: "View received files", onSelect: () => setViewing(r) },
+          { label: "View received files", icon: <Inbox size={16} />, onSelect: () => setViewing(r) },
           ...(live
             ? [
-                { label: "Share request", onSelect: () => setCreated(r) },
-                { label: "Edit request", onSelect: () => edit(r) },
-                { label: "Close request", danger: true, onSelect: () => void close(r) },
+                { label: "Share request", icon: <Link2 size={16} />, onSelect: () => setCreated(r) },
+                { label: "Edit request", icon: <Pencil size={16} />, onSelect: () => edit(r) },
+                {
+                  label: "Close request",
+                  icon: <Ban size={16} />,
+                  danger: true,
+                  separator: true,
+                  onSelect: () => void close(r),
+                },
               ]
             : r.closed
               ? []
-              : [{ label: "Reopen request", onSelect: () => edit(r) }]),
+              : [{ label: "Reopen request", icon: <RotateCcw size={16} />, onSelect: () => edit(r) }]),
         ]}
       />
     </li>
@@ -226,6 +232,7 @@ export function RequestsPage() {
           meta={`Up to ${bytes(created.maxBytes)} · Closes ${until(created.expires)}`}
           url={requestUrl(created.token)}
           code={created.code}
+          codeLabel="Upload code"
           purpose="upload request"
           actions={
             <Button size="sm" variant="ghost" icon={<Pencil size={16} />} onClick={() => edit(created)}>

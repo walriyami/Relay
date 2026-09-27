@@ -7,7 +7,7 @@ import { ago, bytes, dateTime, plural } from "../../lib/format";
 import { notifyChange, useLive } from "../../lib/live";
 import type { CodeLength } from "../../../shared/codes";
 import { usePeriodicRefresh } from "../../lib/refresh";
-import { navigate } from "../../lib/router";
+import { navigate, scrollMotion } from "../../lib/router";
 import {
   Button,
   CopyButton,
@@ -24,7 +24,7 @@ import {
   toast,
 } from "../../components/ui";
 import { LinkDialog } from "../../components/LinkDialog";
-import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
+import { days, fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
 import { ByteSizeField, changedBytes, toDraft, type ByteDraft } from "./ByteSize";
 
 const errorToast = (e: unknown) => toast((e as Error).message, { tone: "error" });
@@ -76,8 +76,8 @@ export function AdminPage() {
         !error && <Spinner />
       ) : (
         <>
+          <HealthNotice data={data} />
           <Stats data={data} />
-          <ServiceHealth data={data} />
           <section className="settings-section card-surface" aria-labelledby="admin-members">
             <div className="settings-section-head">
               <h2 id="admin-members">Members</h2>
@@ -98,7 +98,15 @@ export function AdminPage() {
                     <span className="muted">
                       {bytes(u.usage.used)} of {bytes(u.quota)}
                       {u.usage.reserved > 0 && ` · ${bytes(u.usage.reserved)} uploading`}
-                      {u.retentionDays ? ` · uploads kept ${u.retentionDays} days` : ""}
+                      {u.retentionDays ? ` · uploads kept ${days(u.retentionDays)}` : ""}
+                    </span>
+                    <span className="member-usage">
+                      <ProgressBar
+                        value={u.usage.used + u.usage.reserved}
+                        max={u.quota}
+                        label={`Storage used by ${displayName(u)}`}
+                        minVisible
+                      />
                     </span>
                   </span>
                   <Button size="sm" aria-label={`Manage ${u.username}`} onClick={() => setMember(u)}>
@@ -140,6 +148,7 @@ export function AdminPage() {
             </div>
             <CodeSettings key={data.codeLength} codeLength={data.codeLength} onSaved={reload} />
           </section>
+          <ServiceHealth data={data} />
         </>
       )}
       {invite && (
@@ -149,6 +158,7 @@ export function AdminPage() {
           meta={`Works once · Expires ${dateTime(invite.expires)}`}
           url={`${location.origin}/join/${invite.token}`}
           code={invite.code}
+          codeLabel="Invitation code"
           purpose="invitation"
           onClose={() => setInvite(null)}
         />
@@ -169,73 +179,107 @@ export function AdminPage() {
   );
 }
 
+/** What needs the administrator, if anything; everything else about the service can wait below. */
+function healthProblems({ operations: o, storage }: AdminOverview) {
+  const stale = (stage: AdminOverview["operations"]["maintenance"][number]) =>
+    o.sampled - stage.attempted > Math.max(5 * 60_000, 3 * o.maintenanceIntervalMs);
+  return [
+    storage.diskFree < Math.min(1024 ** 3, storage.diskTotal * 0.05) &&
+      "Disk space is low. Free space on the host before uploads fail.",
+    o.reconciliation.missing > 0 &&
+      `${plural(o.reconciliation.missing, "stored blob")} missing at startup. Some files may be unavailable. Check the data volume on the host.`,
+    o.maintenance.some((stage) => stage.failed) &&
+      "Maintenance failed. Other cleanup jobs continue; failed jobs retry on the next sweep. Inspect server logs for the affected job.",
+    o.maintenance.some(stale) &&
+      "Maintenance has not run recently. Check the process and its configured sweep interval.",
+  ].filter((problem): problem is string => !!problem);
+}
+
+/** Leads the page when the service needs a look, and points to the details. */
+function HealthNotice({ data }: { data: AdminOverview }) {
+  const problems = healthProblems(data);
+  if (!problems.length) return null;
+  return (
+    <div className="notice health-notice" role="status">
+      <strong>Relay needs attention</strong>
+      <span>{problems.length === 1 ? problems[0] : `${problems.length} problems were found.`}</span>
+      <a
+        className="link"
+        href="#admin-health"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("admin-health")?.scrollIntoView({ behavior: scrollMotion(), block: "start" });
+        }}
+      >
+        See service health
+      </a>
+    </div>
+  );
+}
+
 function ServiceHealth({ data }: { data: AdminOverview }) {
   const { operations: o, storage } = data;
-  const failed = o.maintenance.some((stage) => stage.failed);
-  const lowDisk = storage.diskFree < Math.min(1024 ** 3, storage.diskTotal * 0.05);
-  const stale = o.maintenance.some(
-    (stage) => o.sampled - stage.attempted > Math.max(5 * 60_000, 3 * o.maintenanceIntervalMs),
-  );
+  const problems = healthProblems(data);
+  const jobs = o.maintenance.length;
   return (
     <section className="settings-section card-surface" aria-labelledby="admin-health">
-      <div className="settings-section-head">
+      <div className="settings-section-head health-head">
         <h2 id="admin-health">Service health</h2>
-        <span className={`pill ${failed || lowDisk || stale || o.reconciliation.missing ? "danger" : ""}`}>
-          {failed || lowDisk || stale || o.reconciliation.missing ? "Needs attention" : "Checks passing"}
+        <span className={`pill ${problems.length ? "danger" : "success"}`}>
+          {problems.length ? "Needs attention" : "Checks passing"}
         </span>
       </div>
-      {lowDisk && (
-        <p className="notice" role="status">
-          Disk space is low. Free space on the host before uploads fail.
+      {problems.map((problem) => (
+        <p key={problem} className="notice">
+          {problem}
+        </p>
+      ))}
+      {!problems.length && (
+        <p className="muted">
+          {jobs === 1 ? "The maintenance job is" : `All ${jobs} maintenance jobs are`} running on schedule. Last hour:{" "}
+          {plural(o.recent.requests, "request")}, {plural(o.recent.failures, "server error")}.
         </p>
       )}
-      {o.reconciliation.missing > 0 && (
-        <p className="notice" role="status">
-          {plural(o.reconciliation.missing, "stored blob")} missing at startup. Some files may be unavailable. Check the
-          data volume on the host.
-        </p>
-      )}
-      {failed && (
-        <p className="notice" role="status">
-          Maintenance failed. Other cleanup jobs continue; failed jobs retry on the next sweep. Inspect server logs for
-          the affected job.
-        </p>
-      )}
-      {stale && (
-        <p className="notice" role="status">
-          Maintenance has not run recently. Check the process and its configured sweep interval.
-        </p>
-      )}
-      <ul className="list">
-        {o.maintenance.map((stage) => (
-          <li className="list-row" key={stage.name}>
-            <span className="list-text static">
-              <strong>{stage.name}</strong>
-              <span className="muted">
-                {stage.succeeded ? `Last succeeded ${dateTime(stage.succeeded)}` : "No successful run yet"}
-                {stage.failures > 0 ? ` · ${plural(stage.failures, "failure")} since startup` : ""}
+      {/* Open by itself when something failed, since then the detail is the point. */}
+      <details className="health-details" open={problems.length > 0}>
+        <summary>Details</summary>
+        <ul className="list">
+          {o.maintenance.map((stage) => (
+            <li className="list-row" key={stage.name}>
+              <span className="list-text static">
+                <strong>{stage.name}</strong>
+                <span className="muted">
+                  {stage.succeeded ? `Last succeeded ${dateTime(stage.succeeded)}` : "No successful run yet"}
+                  {stage.failures > 0 ? ` · ${plural(stage.failures, "failure")} since startup` : ""}
+                </span>
               </span>
-            </span>
-            <span className={`pill ${stage.failed ? "danger" : ""}`}>{stage.failed ? "Failed" : "OK"}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="field-hint">
-        Last hour: {plural(o.recent.requests, "request")} · {plural(o.recent.failures, "server error")} ·{" "}
-        {o.recent.limited} rate limited
-      </p>
-      <p className="field-hint">
-        {bytes(storage.blobBytes)} in unique stored content · {bytes(storage.trashBytes)} in{" "}
-        {plural(storage.trashItems, "trashed item")}. Content totals exclude temporary files, previews and the database.
-      </p>
-      <p className="field-hint">
-        Process memory {bytes(o.memoryBytes)} · Started {dateTime(o.started)}. Counters reset on restart.
-      </p>
-      <p className="field-hint">
-        Stored-file presence checked at startup {dateTime(o.reconciliation.checked)} ·{" "}
-        {plural(o.reconciliation.removedOrphans, "orphan file")} removed. Updates every 30 seconds while this page is
-        visible.
-      </p>
+              <span className={`pill ${stage.failed ? "danger" : ""}`}>{stage.failed ? "Failed" : "OK"}</span>
+            </li>
+          ))}
+        </ul>
+        <dl className="health-facts">
+          <dt>Last hour</dt>
+          <dd>
+            {plural(o.recent.requests, "request")} · {plural(o.recent.failures, "server error")} · {o.recent.limited}{" "}
+            rate limited
+          </dd>
+          <dt>Stored content</dt>
+          <dd>
+            {bytes(storage.blobBytes)} unique · {bytes(storage.trashBytes)} in{" "}
+            {plural(storage.trashItems, "trashed item")}. Excludes temporary files, previews and the database.
+          </dd>
+          <dt>Process</dt>
+          <dd>
+            {bytes(o.memoryBytes)} memory · started {dateTime(o.started)}. Counters reset on restart.
+          </dd>
+          <dt>File check</dt>
+          <dd>
+            At startup {dateTime(o.reconciliation.checked)} · {plural(o.reconciliation.removedOrphans, "orphan file")}{" "}
+            removed
+          </dd>
+        </dl>
+        <p className="field-hint">Updates every 30 seconds while this page is visible.</p>
+      </details>
     </section>
   );
 }

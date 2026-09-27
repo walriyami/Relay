@@ -45,7 +45,8 @@ export function ShareAccess({
       <CopyButton
         value={url}
         label={copyLabel}
-        variant="ghost"
+        // Beside the QR code it is the main thing to do, so it looks like a button, not a link.
+        variant={compact ? "secondary" : "ghost"}
         className="share-access-copy"
         failureMessage="Couldn’t copy this link. Scan the QR code with another device."
         autofocus

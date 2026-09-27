@@ -50,13 +50,14 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
   const unavailable = errorStatus !== null && [401, 403, 404, 410].includes(errorStatus);
   const data = unavailable ? null : cached;
   const single = !!data && isSingleFile(data.nodes);
+  const { me } = useSession();
   return (
     <Modal
       size="xl"
       className={`item-window${single ? " is-single" : ""}`}
       url={url ?? itemAddress(id)}
       title={data ? data.name : error ? "Unavailable" : "Loading…"}
-      subtitle={data ? summary(data) : undefined}
+      subtitle={data ? summary(data, me.user.trashDays) : undefined}
       onClose={onClose}
       footer={data ? data.trashed ? <TrashFooter c={data} /> : <ItemFooter c={data} /> : undefined}
     >
@@ -81,12 +82,12 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
   );
 }
 
-function summary(c: ItemDetail) {
+function summary(c: ItemDetail, trashDays: number) {
   const parts = [];
   if (itemParts(c) > 1 || c.topFolders) parts.push(composition(c.topFiles, c.topFolders, c.texts));
   if (c.files) parts.push(`${c.topFolders ? allFiles(c.files, c.topFiles) + " · " : ""}${bytes(c.bytes)}`);
   parts.push(`Added ${ago(c.created)}`);
-  if (c.trashed) parts.push(`Deleted forever on ${date(c.trashed + 30 * DAY)}`);
+  if (c.trashed) parts.push(`Deleted forever on ${date(c.trashed + trashDays * DAY)}`);
   else if (c.expires) parts.push(`Moves to Trash ${date(c.expires)}`);
   return parts.join(" · ");
 }

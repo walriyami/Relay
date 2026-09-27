@@ -131,6 +131,10 @@ function scheduleDrop() {
   });
 }
 
+/** Smooth scrolling, or a jump for people who asked their system for less motion. */
+export const scrollMotion = (): ScrollBehavior =>
+  matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+
 /**
  * After navigating, show the top of the page, or the element a "#id" names. The page may still be
  * loading (Settings loads on first visit), so the element is looked for over a few frames.

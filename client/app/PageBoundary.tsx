@@ -1,4 +1,5 @@
 import { Component, useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { CloudOff } from "lucide-react";
 import { Button, confirmDialog } from "../components/ui";
 import { getDraft } from "../lib/draft";
 import { connection, onConnectivity, reportFailure } from "../lib/connection";
@@ -71,6 +72,9 @@ function PageFailure({ retry }: { retry: () => void }) {
 
   return (
     <div className="page not-found">
+      <span className="empty-icon">
+        <CloudOff size={26} aria-hidden />
+      </span>
       <h1 ref={heading} tabIndex={-1}>
         This page couldn’t load
       </h1>
@@ -78,13 +82,15 @@ function PageFailure({ retry }: { retry: () => void }) {
       <p id="page-reload-help" className="muted" role="status">
         {busy ? "Uploads are still open. Return to Send to finish or cancel them before reloading." : ""}
       </p>
-      <Button variant="primary" onClick={retry}>
-        Try again
-      </Button>
-      <Button onClick={() => navigate("/")}>Go to Send</Button>
-      <Button disabled={busy} aria-describedby={busy ? "page-reload-help" : undefined} onClick={() => void reload()}>
-        Reload page
-      </Button>
+      <div className="row center">
+        <Button variant="primary" onClick={retry}>
+          Try again
+        </Button>
+        <Button onClick={() => navigate("/")}>Go to Send</Button>
+        <Button disabled={busy} aria-describedby={busy ? "page-reload-help" : undefined} onClick={() => void reload()}>
+          Reload page
+        </Button>
+      </div>
     </div>
   );
 }

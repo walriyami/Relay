@@ -149,6 +149,7 @@ export function LinksPage() {
       <div className="page-head">
         <div>
           <h1>Links</h1>
+          <p className="muted">Anyone with a link or its code can open it until it expires or you turn it off.</p>
         </div>
       </div>
       {error && data.length > 0 && <LoadFailed banner error={error} onRetry={reload} />}

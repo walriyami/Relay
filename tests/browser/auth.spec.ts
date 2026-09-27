@@ -92,8 +92,12 @@ test("code entry has its own card beside sign-in and stacks below on a narrow sc
     const desktopSignIn = (await signIn.boundingBox())!;
     const desktopCode = (await code.boundingBox())!;
     expect(desktopCode.x).toBeGreaterThan(desktopSignIn.x + desktopSignIn.width);
-    expect(desktopSignIn.y).toBeLessThan(180);
+    // Side by side, the pair is centred in the window like every other sign-in screen, and the
+    // two cards share one height.
     expect(Math.abs(desktopCode.y - desktopSignIn.y)).toBeLessThan(2);
+    expect(Math.abs(desktopCode.height - desktopSignIn.height)).toBeLessThan(2);
+    const brand = (await page.locator(".auth-page-brand").boundingBox())!;
+    expect(Math.abs(brand.y - (800 - (desktopSignIn.y + desktopSignIn.height)))).toBeLessThan(10);
     expect(Math.abs((desktopSignIn.x + desktopCode.x + desktopCode.width) / 2 - 600)).toBeLessThan(10);
 
     await page.setViewportSize({ width: 390, height: 844 });

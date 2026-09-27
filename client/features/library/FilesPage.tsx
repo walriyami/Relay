@@ -357,6 +357,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       setBulkBusy(false);
     }
   }
+  const nothingHere = !loading && !error && !total && !query && !debounced;
   const allSelected = data.length > 0 && data.every((item) => selected.has(item.id));
   return (
     <div className="page">
@@ -385,83 +386,86 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                 : " "}
           </p>
         </div>
-        {trash && trashTotal > 0 && (
+        {/* Files leads to Trash, and Trash back to Files from its heading. */}
+        {trash ? (
+          trashTotal > 0 && (
+            <div className="page-actions">
+              <Button className="danger-text" icon={<Trash2 size={16} />} busy={emptying} onClick={emptyTrash}>
+                Empty Trash
+              </Button>
+            </div>
+          )
+        ) : (
           <div className="page-actions">
-            <Button className="danger-text" icon={<Trash2 size={16} />} busy={emptying} onClick={emptyTrash}>
-              Empty Trash
+            <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => navigate("/trash")}>
+              Trash
             </Button>
           </div>
         )}
       </div>
-      <div className="toolbar">
-        <label className="search">
-          <Search size={16} aria-hidden />
-          <input
-            ref={search}
-            className="input"
-            type="search"
-            placeholder="Search"
-            aria-label={trash ? "Search Trash" : "Search files"}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && query) {
-                e.preventDefault();
-                clearSearch();
+      {/* Nothing to search or sort until there is something here. */}
+      {!nothingHere && (
+        <div className="toolbar">
+          <label className="search">
+            <Search size={16} aria-hidden />
+            <input
+              ref={search}
+              className="input"
+              type="search"
+              placeholder="Search"
+              aria-label={trash ? "Search Trash" : "Search files"}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && query) {
+                  e.preventDefault();
+                  clearSearch();
+                }
+              }}
+            />
+            {query && (
+              <IconButton
+                className="search-clear"
+                size="sm"
+                label="Clear search"
+                icon={<X size={16} />}
+                onClick={clearSearch}
+              />
+            )}
+          </label>
+          <select
+            className="input select"
+            aria-label="Sort"
+            value={sort}
+            onChange={(e) => {
+              const next = e.target.value as Sort;
+              setSort(next);
+              try {
+                localStorage.setItem(SORT_KEY, next);
+              } catch {
+                // The choice just isn't remembered.
               }
             }}
-          />
-          {query && (
-            <IconButton
-              className="search-clear"
-              size="sm"
-              label="Clear search"
-              icon={<X size={16} />}
-              onClick={clearSearch}
-            />
-          )}
-        </label>
-        <select
-          className="input select"
-          aria-label="Sort"
-          value={sort}
-          onChange={(e) => {
-            const next = e.target.value as Sort;
-            setSort(next);
-            try {
-              localStorage.setItem(SORT_KEY, next);
-            } catch {
-              // The choice just isn't remembered.
-            }
-          }}
-        >
-          {SORTS.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        {data.length > 0 && (
-          <Button
-            className="select-toggle"
-            variant={selecting ? "primary" : "ghost"}
-            icon={selecting ? undefined : <CheckCircle2 size={16} />}
-            aria-pressed={selecting}
-            onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
           >
-            {selecting ? "Done" : "Select"}
-          </Button>
-        )}
-        {trash ? (
-          <Button variant="ghost" icon={<FolderOpen size={16} />} onClick={() => navigate("/files")}>
-            Files
-          </Button>
-        ) : (
-          <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => navigate("/trash")}>
-            Trash
-          </Button>
-        )}
-      </div>
+            {SORTS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          {data.length > 0 && (
+            <Button
+              className="select-toggle"
+              variant={selecting ? "primary" : "ghost"}
+              icon={selecting ? undefined : <CheckCircle2 size={16} />}
+              aria-pressed={selecting}
+              onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
+            >
+              {selecting ? "Done" : "Select"}
+            </Button>
+          )}
+        </div>
+      )}
       <div
         className="library-results"
         ref={results}
@@ -571,7 +575,9 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
             Nothing matches “{debounced}”.
           </EmptyState>
         ) : trash ? (
-          <EmptyState icon={<Trash2 size={28} />} title="Trash is empty" />
+          <EmptyState icon={<Trash2 size={28} />} title="Trash is empty">
+            Anything you delete waits here for {dayLabel(me.user.trashDays)}, so you can restore it.
+          </EmptyState>
         ) : (
           <EmptyState
             icon={<FolderOpen size={28} />}

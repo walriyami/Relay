@@ -2,13 +2,12 @@ import { useEffect, useState } from "react";
 import { Upload } from "lucide-react";
 import { LIMITS } from "../../api";
 import { addSelection, getDraft, setText } from "../../lib/draft";
-import { collectDroppedSelection } from "../../drop-selection";
+import { collectDroppedSelection, dragHasFiles, skippedNotice } from "../../drop-selection";
 import { plural } from "../../lib/format";
 import { toast } from "../../components/ui";
 import { Composer } from "./Composer";
 import { RecentGrid } from "../library/FilesPage";
 
-const hasFiles = (event: DragEvent) => !!event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files");
 // A dialog on top owns the keyboard and the pointer; nothing lands in the draft behind it.
 const modalOpen = () => document.body.classList.contains("modal-open");
 
@@ -47,23 +46,23 @@ export function SendPage() {
     // Dropping anywhere on the page adds to the selection. Nothing uploads until a destination is chosen.
     let depth = 0;
     const enter = (event: DragEvent) => {
-      if (!hasFiles(event) || modalOpen()) return;
+      if (!dragHasFiles(event) || modalOpen()) return;
       event.preventDefault();
       depth++;
       setDragging(true);
     };
     const over = (event: DragEvent) => {
-      if (!hasFiles(event) || modalOpen()) return;
+      if (!dragHasFiles(event) || modalOpen()) return;
       event.preventDefault();
       event.dataTransfer!.dropEffect = "copy";
     };
     const leave = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
+      if (!dragHasFiles(event)) return;
       depth = Math.max(0, depth - 1);
       if (!depth) setDragging(false);
     };
     const drop = async (event: DragEvent) => {
-      if (!hasFiles(event) || modalOpen()) return;
+      if (!dragHasFiles(event) || modalOpen()) return;
       event.preventDefault();
       depth = 0;
       setDragging(false);
@@ -71,13 +70,7 @@ export function SendPage() {
       const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
       setReading(null);
       addSelection(selection.files, selection.folders);
-      if (selection.skipped)
-        toast(
-          `${plural(selection.skipped, "item")} couldn’t be read and ${selection.skipped === 1 ? "was" : "were"} left out.`,
-          {
-            tone: "error",
-          },
-        );
+      if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
     };
     const onDrop = (event: DragEvent) => void drop(event);
     document.addEventListener("paste", paste);

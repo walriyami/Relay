@@ -438,6 +438,11 @@ textarea.input {
   background: var(--danger-soft);
   border-color: transparent;
 }
+.pill.success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: transparent;
+}
 .badge {
   position: absolute;
   top: 3px;
@@ -976,6 +981,10 @@ textarea.input {
   grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
   gap: var(--s3);
 }
+/* Cards in a row share its height, so their details line up along the bottom. */
+.card-grid > [role="listitem"] {
+  display: grid;
+}
 @media (max-width: 560px) {
   .card-grid {
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -1014,6 +1023,7 @@ button.card:focus-visible,
 }
 .card-open {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   padding: 0;
@@ -1108,18 +1118,21 @@ button.card:focus-visible,
 }
 .card-body {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 1px;
   padding: 8px 10px 10px;
   min-width: 0;
 }
 .card-title {
-  /* Full name on up to two lines; two lines are always reserved so cards in a row stay equal. */
+  /* The full name on up to two lines. A short name leaves no gap under it: the details sit at the
+     bottom of the card, level with its neighbours' however long their names are. */
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
-  min-height: calc(2 * 1.3em);
+  margin-bottom: auto;
+  padding-bottom: var(--s1);
   overflow: hidden;
   overflow-wrap: anywhere;
   font-size: 0.9rem;
@@ -1438,7 +1451,8 @@ button.card:focus-visible,
 }
 .share-access-compact {
   display: grid;
-  grid-template-columns: 144px minmax(0, 1fr);
+  grid-template-columns: 128px minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
   grid-template-areas:
     "qr copy"
     "qr code"
@@ -1450,6 +1464,7 @@ button.card:focus-visible,
 }
 .share-access-compact .share-access-qr {
   grid-area: qr;
+  align-self: start;
   padding: 0;
 }
 .share-access-compact .share-access-qr .qr {
@@ -1469,6 +1484,7 @@ button.card:focus-visible,
 @media (max-width: 560px) {
   .share-access-compact {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
     grid-template-areas:
       "qr"
       "copy"

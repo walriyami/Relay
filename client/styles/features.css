@@ -453,13 +453,19 @@
   position: static;
   color: inherit;
 }
-.toolbar > .btn-ghost:last-child {
-  margin-left: auto;
-}
 /* Choosing items: a mode, so the cards carry no controls until it's on. */
 .toolbar .select-toggle {
   min-width: 96px;
   justify-content: center;
+}
+/* Phones: the search gets the whole width; sorting and choosing share the row below it. */
+@media (max-width: 560px) {
+  .toolbar .search {
+    flex-basis: 100%;
+  }
+  .toolbar .select-toggle {
+    margin-left: auto;
+  }
 }
 /* Top right: text previews and file icons start at the left. */
 .card-check {
@@ -596,6 +602,9 @@
   font-size: 1.05rem;
   font-weight: 600;
 }
+.dropzone strong + span {
+  font-size: 0.88rem;
+}
 .dropzone.dragging {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -646,6 +655,21 @@
 }
 .selection-text .muted {
   font-size: 0.82rem;
+}
+/* In the composer the picks sit in a tray that fills the drop area's space, with room for more. */
+.composer-pane > .selection-list {
+  flex: 1 1 auto;
+}
+/* While the tray has room to spare, it says what the room is for. Hidden from screen readers:
+   the Add files button says the same. */
+@media (hover: hover) {
+  .composer-pane > .selection-list:not(:has(> li:nth-child(3)))::after {
+    content: "Drop more to add them" / "";
+    margin: auto;
+    padding: var(--s4);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
 }
 /* One frame with two modes: files (drop area and picks) and the text box. */
 .composer-head {
@@ -794,12 +818,12 @@
   font-size: 0.82rem;
   font-weight: 600;
 }
-.composer-art {
+.document-art {
   width: 96px;
   height: 90px;
   overflow: visible;
 }
-.composer-art g {
+.document-art g {
   stroke: var(--line-strong);
   stroke-width: 1.3;
   stroke-linecap: round;
@@ -808,37 +832,40 @@
   transform-origin: 50% 90%;
   transition: transform 0.26s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
-.composer-art-back {
+.document-art-back {
   fill: var(--well);
   transform: rotate(-15deg) translateX(-3px);
 }
-.composer-art-middle {
+.document-art-middle {
   fill: var(--well);
   transform: rotate(13deg) translateX(2px);
 }
-.composer-art-front {
+.document-art-front {
   fill: var(--surface);
 }
-.composer-art .composer-art-fold {
+.document-art .document-art-fold {
   fill: var(--well);
 }
-.composer-art .composer-art-line {
+.document-art .document-art-line {
   stroke: var(--line-strong);
   stroke-width: 2;
 }
-.composer-art .composer-art-arrow {
+.document-art .document-art-arrow {
   fill: none;
   stroke: var(--accent);
   stroke-width: 2;
   transition: transform 0.26s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
-.composer-drop:hover .composer-art-back {
+.composer-drop:hover .document-art-back,
+.dropzone.dragging .document-art-back {
   transform: rotate(-21deg) translateX(-6px);
 }
-.composer-drop:hover .composer-art-middle {
+.composer-drop:hover .document-art-middle,
+.dropzone.dragging .document-art-middle {
   transform: rotate(18deg) translateX(5px);
 }
-.composer-drop:hover .composer-art-arrow {
+.composer-drop:hover .document-art-arrow,
+.dropzone.dragging .document-art-arrow {
   transform: translateY(-3px);
 }
 .composer-tools {
@@ -929,8 +956,8 @@
 @media (prefers-reduced-motion: reduce) {
   .composer-pane:not([hidden]),
   .composer-mode::before,
-  .composer-art g,
-  .composer-art .composer-art-arrow {
+  .document-art g,
+  .document-art .document-art-arrow {
     animation: none;
     transition: none;
   }
@@ -2058,12 +2085,14 @@ audio.preview-media {
 .preview-nav.is-end {
   visibility: hidden;
 }
-/* Links: keep the Share entry point readable on narrow screens. */
+/* Links and requests on narrow screens: Share stays whole, and the status line wraps to a second
+   line rather than cutting off when it expires or closes. */
 @media (max-width: 560px) {
   .link-row-item .link-copy {
     flex-shrink: 0;
   }
-  .link-row-item .list-text .muted {
+  .link-row-item .list-text .muted,
+  .request-row .list-text .muted {
     white-space: normal;
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -2107,6 +2136,69 @@ audio.preview-media {
 .settings .page-head + * {
   margin-top: 0;
 }
+/* Wide screens: the sections listed beside them, following the page as it scrolls. */
+.settings-nav {
+  display: none;
+}
+@media (min-width: 1120px) {
+  .settings {
+    display: grid;
+    grid-template-columns: 168px minmax(0, 800px);
+    column-gap: var(--s6);
+    max-width: calc(168px + var(--s6) + 800px);
+    align-items: start;
+  }
+  .settings > .page-head {
+    grid-column: 1 / -1;
+  }
+  .settings > .settings-section {
+    grid-column: 2;
+  }
+  .settings > .settings-nav {
+    display: block;
+    grid-column: 1;
+    grid-row: 2 / span 8;
+    position: sticky;
+    top: calc(72px + var(--s4));
+  }
+}
+.settings-nav ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-nav a {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 var(--s3);
+  border-radius: var(--r1);
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    color 0.15s,
+    background-color 0.15s,
+    box-shadow 0.15s;
+}
+.settings-nav a:hover {
+  color: var(--ink);
+  background: var(--well);
+}
+.settings-nav a[aria-current] {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-weight: 600;
+}
+.settings-nav a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
 .settings-section {
   display: flex;
   flex-direction: column;
@@ -2145,8 +2237,10 @@ audio.preview-media {
 }
 .setting-label {
   display: flex;
+  flex: 1 1 14rem;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 .setting-label strong {
   font-weight: 600;
@@ -2243,6 +2337,94 @@ audio.preview-media {
 .list-text.static {
   cursor: default;
 }
+/* Admin: members' usage, and the service's health folded below everything else. */
+.member-usage {
+  display: block;
+  max-width: 200px;
+  padding-top: var(--s1);
+}
+.member-usage .progress {
+  height: 4px;
+}
+.health-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s1) var(--s2);
+}
+.health-notice .link {
+  color: inherit;
+  font-weight: 600;
+}
+.health-head {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+.health-head .pill {
+  margin: 0;
+}
+.health-details > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: fit-content;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+.health-details > summary::-webkit-details-marker {
+  display: none;
+}
+/* A chevron that turns as the details open, in place of the browser's triangle. */
+.health-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: 0 2px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.health-details[open] > summary::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+.health-details > summary:hover {
+  color: var(--ink);
+}
+.health-details[open] > summary {
+  margin-bottom: var(--s3);
+}
+.health-details .list {
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+}
+.health-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s2) var(--s4);
+  margin: var(--s4) 0 var(--s2);
+  font-size: 0.88rem;
+}
+.health-facts dt {
+  color: var(--muted);
+}
+.health-facts dd {
+  margin: 0;
+}
+@media (max-width: 560px) {
+  .health-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .health-facts dd + dt {
+    margin-top: var(--s2);
+  }
+}
 /* Admin: a size typed with its unit. */
 .byte-size {
   display: flex;
@@ -2280,13 +2462,13 @@ audio.preview-media {
 .auth-card .muted {
   margin-top: var(--s1);
 }
+/* Centred like every other sign-in screen; side by side, the two cards share one height. */
 .auth-split {
   grid-template-columns: repeat(2, minmax(0, 400px));
   gap: var(--s5);
   justify-content: center;
-  align-content: start;
-  align-items: start;
-  padding-top: clamp(48px, 9vh, 112px);
+  align-content: center;
+  align-items: stretch;
 }
 .auth-page-brand {
   grid-column: 1 / -1;
