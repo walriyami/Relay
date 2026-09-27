@@ -151,7 +151,7 @@ function ActivityPanel({ close }: { close: () => void }) {
             </ul>
           </section>
         ) : !pending.length && loading ? (
-          <p className="muted popover-empty">Loading activity…</p>
+          <p className="muted popover-empty waiting">Loading activity…</p>
         ) : !pending.length && !deliveryError && !feedError ? (
           <div className="popover-empty">
             <InlineEmpty icon={<Bell size={20} />} title="No activity yet">

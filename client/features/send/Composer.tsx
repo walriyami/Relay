@@ -693,7 +693,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
             />
           ))
         ) : (
-          <p className="send-panel-empty">
+          <p className={`send-panel-empty${!cut && devicesLoading ? " waiting" : ""}`}>
             {cut
               ? "Your devices show up here once you’re connected."
               : devicesLoading

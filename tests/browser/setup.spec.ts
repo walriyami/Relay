@@ -147,3 +147,67 @@ test("a second browser that started setup too is sent to sign in", async ({ page
     await other.close();
   }
 });
+
+/** Everything that stands for waiting, or only makes sense once there's something: none of it should flash. */
+async function watchForFlashes(page: Page) {
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as Window & { relaySeen?: string[] }).relaySeen = seen;
+    const tick = () => {
+      for (const el of document.querySelectorAll<HTMLElement>(".waiting, .toolbar")) {
+        if (el.getClientRects().length && Number(getComputedStyle(el).opacity) > 0.02) seen.push(el.className);
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  return async () => {
+    const seen = await page.evaluate(() => (window as Window & { relaySeen?: string[] }).relaySeen!.splice(0));
+    return [...new Set(seen)];
+  };
+}
+
+test("empty pages of a new install appear without a flash of loading, and waiting shows only when it lasts", async ({
+  page,
+}) => {
+  await createAccount(page);
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await page.getByRole("button", { name: "I’ll do this later" }).click();
+  await page.getByRole("button", { name: "Start using Relay" }).click();
+  await expect(composer(page)).toBeVisible();
+  const flashes = await watchForFlashes(page);
+  const nav = (name: string) => page.getByRole("link", { name, exact: true }).first().click();
+
+  // A slow answer shows that it's loading, after a moment…
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/links", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await nav("Links");
+  await expect(page.locator(".spinner-row")).toHaveCSS("opacity", "1");
+  release();
+  await expect(page.getByText("No links yet", { exact: true })).toBeVisible();
+  await page.unroute("**/api/links");
+  await flashes();
+
+  // …a quick one goes straight to the page, with nothing in between…
+  for (const [name, empty] of [
+    ["Files", "No files yet"],
+    ["Requests", "No requests yet"],
+  ]) {
+    await nav(name);
+    await expect(page.getByText(empty, { exact: true })).toBeVisible();
+    // A few more frames, for anything that would follow the empty state.
+    await page.waitForTimeout(500);
+    expect(await flashes(), name).toEqual([]);
+  }
+
+  // …and a page seen before shows what it had straight away, even while its refresh is still out.
+  await page.route("**/api/links", () => {});
+  await nav("Links");
+  await expect(page.getByText("No links yet", { exact: true })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(await flashes()).toEqual([]);
+});

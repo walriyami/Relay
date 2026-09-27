@@ -357,7 +357,8 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       setBulkBusy(false);
     }
   }
-  const nothingHere = !loading && !error && !total && !query && !debounced;
+  // Unknown counts as nothing: search and sort appear with what they'd work on, never flash first.
+  const nothingHere = !total && !query && !debounced;
   const allSelected = data.length > 0 && data.every((item) => selected.has(item.id));
   return (
     <div className="page">

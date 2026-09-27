@@ -654,7 +654,7 @@ function DevicesSection() {
       {devicesError && (
         <LoadFailed banner title="Devices couldn’t be loaded" error={devicesError} onRetry={reloadDevices} />
       )}
-      {devicesLoading && <p className="muted">Loading devices…</p>}
+      {devicesLoading && <p className="muted waiting">Loading devices…</p>}
       <ul className="device-list">
         {signedIn.map((d) => (
           <li key={d.id} className="device-row">

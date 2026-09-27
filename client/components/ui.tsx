@@ -1067,12 +1067,12 @@ export function QrCode({
         The QR code couldn’t be drawn. Copy the link instead.
       </p>
     );
-  return <div className="qr skeleton" style={style} aria-hidden />;
+  return <div className="qr skeleton waiting" style={style} aria-hidden />;
 }
 
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
-    <div className="spinner-row" role="status">
+    <div className="spinner-row waiting" role="status">
       <Loader2 className="spin" size={18} aria-hidden />
       <span>{label}</span>
     </div>

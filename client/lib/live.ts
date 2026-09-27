@@ -161,9 +161,42 @@ export function notifyChange(topic: Topic) {
   fire(topic);
 }
 
+// The last answer to each query, kept for the signed-in member of this tab. A view opened again
+// shows what it had straight away and refreshes it in the background, rather than loading from
+// nothing on every visit. Bounded, least recently used first out; a new principal starts empty.
+const CACHE_LIMIT = 40;
+const cache = new Map<string, unknown>();
+let cacheTab = "";
+function cacheFor(owner: string) {
+  if (cacheTab !== owner) {
+    cache.clear();
+    cacheTab = owner;
+  }
+  return cache;
+}
+function cached(key: string): { data: unknown } | undefined {
+  const entries = cacheFor(tab());
+  if (!entries.has(key)) return undefined;
+  const data = entries.get(key);
+  entries.delete(key);
+  entries.set(key, data);
+  return { data };
+}
+function remember(owner: string, key: string, data: unknown) {
+  // An answer for someone who has since signed out belongs to no one here.
+  if (owner !== tab()) return;
+  const entries = cacheFor(owner);
+  entries.delete(key);
+  entries.set(key, data);
+  if (entries.size > CACHE_LIMIT) entries.delete(entries.keys().next().value!);
+}
+// Answers that say something is gone or not this member's; a remembered copy is wrong after them.
+const FINAL = new Set([401, 403, 404, 410]);
+
 /**
  * Loads an endpoint and reloads it whenever one of `topics` changes. Pass `null` to load nothing.
- * `data` is `initial` until the first response arrives.
+ * `data` is the last answer this tab had for the same query, if any, or `initial` until the first
+ * response arrives; `loading` is true only while there is nothing to show yet.
  */
 export function useLive<E extends Endpoint, I = Response<E>>(
   endpoint: E | null,
@@ -171,14 +204,15 @@ export function useLive<E extends Endpoint, I = Response<E>>(
   topics: Topic[],
   initial: I,
 ): { data: Response<E> | I; loading: boolean; error: string; errorStatus: number | null; reload: () => void } {
-  const [state, setState] = useState<{
+  type State = {
     key: string;
     generation: number;
     data: Response<E> | I;
     loading: boolean;
     error: string;
     errorStatus: number | null;
-  }>({
+  };
+  const [state, setState] = useState<State>({
     key: "",
     generation: 0,
     data: initial,
@@ -195,17 +229,32 @@ export function useLive<E extends Endpoint, I = Response<E>>(
     seq.current++;
   }
   const generation = query.current.generation;
+  // Where a query starts: what this tab last had for it, or nothing yet.
+  const start = (): State => {
+    const hit = endpoint ? cached(key) : undefined;
+    return {
+      key,
+      generation,
+      data: hit ? (hit.data as Response<E>) : initial,
+      loading: !!endpoint && !hit,
+      error: "",
+      errorStatus: null,
+    };
+  };
   const failed = useRef(false);
   failed.current = !!state.error;
   const reload = useCallback(() => {
     if (!endpoint) return;
     const n = ++seq.current;
+    const owner = tab();
     (call as (e: E, i?: Input<E>) => Promise<Response<E>>)(endpoint, input ?? undefined)
       .then((data) => {
+        remember(owner, key, data);
         if (n === seq.current && query.current.generation === generation)
           setState({ key, generation, data, loading: false, error: "", errorStatus: null });
       })
       .catch((error: Error) => {
+        if (error instanceof ApiError && FINAL.has(error.status) && owner === tab()) cacheFor(owner).delete(key);
         if (n === seq.current && query.current.generation === generation)
           setState((s) => ({
             ...s,
@@ -219,7 +268,7 @@ export function useLive<E extends Endpoint, I = Response<E>>(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for endpoint and input, which callers usually recreate on every render.
   }, [key, generation]);
   useEffect(() => {
-    setState({ key, generation, data: initial, loading: !!endpoint, error: "", errorStatus: null });
+    setState(start());
     reload();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const soon = () => {
@@ -253,12 +302,9 @@ export function useLive<E extends Endpoint, I = Response<E>>(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- resubscribe only when the reload function or the topics change.
   }, [reload, topics.join(",")]);
-  // Render the new key's empty/loading state immediately, before effects run, so an old response
-  // can never flash under new parameters.
-  const visible =
-    state.key === key && state.generation === generation
-      ? state
-      : { key, generation, data: initial, loading: !!endpoint, error: "", errorStatus: null };
+  // Render the new key's starting state immediately, before effects run, so an old response can
+  // never flash under new parameters.
+  const visible = state.key === key && state.generation === generation ? state : start();
   return {
     data: visible.data,
     loading: visible.loading,

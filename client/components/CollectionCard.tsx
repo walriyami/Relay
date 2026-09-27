@@ -329,7 +329,7 @@ export function CardGrid({ children, label }: { children: React.ReactNode; label
 }
 export function CardSkeletons({ count = 6 }: { count?: number }) {
   return (
-    <div className="card-grid" aria-hidden>
+    <div className="card-grid waiting" aria-hidden>
       {Array.from({ length: count }, (_, i) => (
         <div key={i} className="card skeleton-card">
           <div className="card-media skeleton" />

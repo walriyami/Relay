@@ -503,6 +503,16 @@ textarea.input {
   padding: var(--s6) 0;
   color: var(--muted);
 }
+/* Waiting is shown only once it's noticeable. A quick answer goes straight to what it brings, with
+   no flash of a spinner or placeholder cards in between; a slower one eases them in. */
+.waiting {
+  animation: waiting 0.25s ease 0.3s backwards;
+}
+@keyframes waiting {
+  from {
+    opacity: 0;
+  }
+}
 
 /* Empty states */
 .empty {
