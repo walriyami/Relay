@@ -1,155 +1,82 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, call, tab, urls, type ChangeEvent, type SessionEnded, type StreamReady, type Topic } from "../api";
+import {
+  ApiError,
+  missed,
+  stamped,
+  tab,
+  urls,
+  type ChangeEvent,
+  type ChangeStamp,
+  type SessionEnded,
+  type Topic,
+} from "../api";
 import type { Endpoint, Input, Response } from "../../shared/api";
+import { coalesce, type Coalesced } from "./coalesce";
 import { connection, onConnectivity, reportFailure, reportReachable } from "./connection";
+import { eventStream } from "./event-stream";
 
-const ALL: Topic[] = ["items", "links", "deliveries", "devices", "requests", "account", "activity"];
-const listeners = new Map<Topic, Set<() => void>>();
-let source: EventSource | null = null;
-let retryTimer: ReturnType<typeof setTimeout> | undefined;
-let retryDelay = 1000;
-let active = false;
-let sourceCleanup: (() => void) | undefined;
-// The tab id the open stream was made for. A new principal gets a new tab id, and its stream.
+const ALL: Topic[] = ["items", "links", "deliveries", "devices", "requests", "account", "activity", "codes"];
+/** Told the stamp a new stream opened at, when that is why it runs; see `missed`. */
+type Listener = (opened?: ChangeStamp) => void;
+const listeners = new Map<Topic, Set<Listener>>();
+let source: ReturnType<typeof eventStream> | undefined;
+// A new principal gets a new tab id and a new stream.
 let sourceTab = "";
 
-function fire(topic: Topic) {
-  listeners.get(topic)?.forEach((fn) => fn());
+function fire(topic: Topic, opened?: ChangeStamp) {
+  listeners.get(topic)?.forEach((fn) => fn(opened));
 }
 
-/**
- * Notices a stream that was cut without closing (a sleeping laptop, a Wi‑Fi handover, a proxy that
- * holds the line open): the server sends something at least every `beatMs` (from `ready`), so a
- * stream silent for a few beats is gone. `onSilent` runs once; the caller closes and reconnects.
- */
-export function watchBeats(source: EventSource, onSilent: () => void) {
-  let beatMs = 20_000;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const heard = () => {
-    clearTimeout(timer);
-    timer = setTimeout(onSilent, beatMs * 2.5);
-  };
-  const ready = (event: Event) => {
-    try {
-      const sent = (JSON.parse((event as MessageEvent<string>).data) as Partial<StreamReady>).beatMs;
-      if (typeof sent === "number" && sent > 0) beatMs = sent;
-    } catch {
-      // Keep the default.
-    }
-    heard();
-  };
-  source.addEventListener("ready", ready);
-  source.addEventListener("beat", heard);
-  source.addEventListener("change", heard);
-  heard();
-  return () => {
-    clearTimeout(timer);
-    source.removeEventListener("ready", ready);
-    source.removeEventListener("beat", heard);
-    source.removeEventListener("change", heard);
-  };
-}
-
-/** One member event stream per tab. It marks this device online and keeps this tab's transfers alive. */
+/** One member event stream per tab. It marks this device online and keeps its transfers alive. */
 export function connectLive() {
   if (sourceTab !== tab()) disconnectLive();
-  active = true;
-  if (source || retryTimer) return;
-  openSource();
-}
-
-function openSource() {
-  if (!active || source || retryTimer) return;
+  if (source) return;
   sourceTab = tab();
-  const current = new EventSource(urls.events(sourceTab));
-  source = current;
-  const ready = () => {
-    if (source !== current) return;
-    retryDelay = 1000;
+  const refresh = (opened?: ChangeStamp) => {
     reportReachable();
-    // Initial requests may also have failed while the stream was unavailable.
-    ALL.forEach(fire);
+    ALL.forEach((topic) => fire(topic, opened));
   };
-  const change = (event: Event) => {
-    if (source !== current) return;
-    try {
-      const { topics } = JSON.parse((event as MessageEvent<string>).data) as ChangeEvent;
-      (topics.length ? topics : ALL).forEach(fire);
-    } catch {
-      ALL.forEach(fire);
-    }
-  };
-  // The server revoked this session (suspension, sign-out elsewhere, password reset): stop
-  // reconnecting and let the app end the session with the reason.
-  const ended = (event: Event) => {
-    if (source !== current) return;
-    let reason: SessionEnded["reason"] = "signed-out";
-    try {
-      reason = (JSON.parse((event as MessageEvent<string>).data) as SessionEnded).reason;
-    } catch {
-      // Keep the generic reason.
-    }
-    disconnectLive();
-    window.dispatchEvent(new CustomEvent<SessionEnded>("relay-session-expired", { detail: { reason } }));
-  };
-  const reconnect = () => {
-    sourceCleanup?.();
-    sourceCleanup = undefined;
-    source = null;
-    if (retryTimer) return;
-    const delay = retryDelay;
-    retryDelay = Math.min(retryDelay * 2, 30_000);
-    retryTimer = setTimeout(() => {
-      retryTimer = undefined;
-      openSource();
-    }, delay);
-  };
-  const error = () => {
-    if (!active || source !== current) return;
-    // The stream drops the moment Relay or the connection goes, often before any request fails.
-    reportFailure();
-    if (current.readyState === EventSource.CLOSED) reconnect();
-  };
-  // A stream that went quiet was cut without closing: the same as a dropped one.
-  const silent = () => {
-    if (!active || source !== current) return;
-    reportFailure();
-    reconnect();
-  };
-  const unwatch = watchBeats(current, silent);
-  current.addEventListener("ready", ready);
-  current.addEventListener("change", change);
-  current.addEventListener("ended", ended);
-  current.addEventListener("error", error);
-  sourceCleanup = () => {
-    unwatch();
-    current.removeEventListener("ready", ready);
-    current.removeEventListener("change", change);
-    current.removeEventListener("ended", ended);
-    current.removeEventListener("error", error);
-    current.close();
-  };
+  source = eventStream(urls.events(sourceTab), {
+    // Whatever changed before the stream opened, it won't send: views read earlier load again.
+    ready: refresh,
+    // Overflow tabs still refresh their views and renew their lease on each bounded probe.
+    limited: () => refresh(),
+    change: (event) => {
+      try {
+        const { topics } = JSON.parse(event.data) as ChangeEvent;
+        (topics.length ? topics : ALL).forEach((topic) => fire(topic));
+      } catch {
+        ALL.forEach((topic) => fire(topic));
+      }
+    },
+    ended: (event) => {
+      let reason: SessionEnded["reason"] = "signed-out";
+      try {
+        reason = (JSON.parse(event.data) as SessionEnded).reason;
+      } catch {
+        /* Keep the generic reason. */
+      }
+      disconnectLive();
+      window.dispatchEvent(new CustomEvent<SessionEnded>("relay-session-expired", { detail: { reason } }));
+    },
+    failed: () => {
+      reportFailure();
+      // A refused probe has no SSE reason. Recheck the session so overflow tabs also sign out
+      // promptly after revocation, even when they have no view queries in flight.
+      fire("account");
+    },
+  });
 }
 export function disconnectLive() {
-  active = false;
-  clearTimeout(retryTimer);
-  retryTimer = undefined;
-  retryDelay = 1000;
-  sourceCleanup?.();
-  sourceCleanup = undefined;
-  source = null;
+  source?.close();
+  source = undefined;
 }
-// Once Relay can be reached again, the stream reconnects at once rather than after its backoff, and
-// every view reloads (see useLive).
+// A successful connectivity check can shorten a network retry, but cannot bypass admission limits.
 onConnectivity(() => {
-  if (connection().state !== "ok" || !retryTimer) return;
-  clearTimeout(retryTimer);
-  retryTimer = undefined;
-  retryDelay = 1000;
-  openSource();
+  if (connection().state === "ok") source?.retryNow();
 });
 
-export function onChange(topic: Topic, fn: () => void) {
+export function onChange(topic: Topic, fn: Listener) {
   if (!listeners.has(topic)) listeners.set(topic, new Set());
   listeners.get(topic)!.add(fn);
   return () => {
@@ -197,6 +124,9 @@ const FINAL = new Set([401, 403, 404, 410]);
  * Loads an endpoint and reloads it whenever one of `topics` changes. Pass `null` to load nothing.
  * `data` is the last answer this tab had for the same query, if any, or `initial` until the first
  * response arrives; `loading` is true only while there is nothing to show yet.
+ *
+ * Changes reload at most once a second and never while a load is under way, however fast they
+ * come (an upload of many files changes items with every file); `reload` loads straight away.
  */
 export function useLive<E extends Endpoint, I = Response<E>>(
   endpoint: E | null,
@@ -243,15 +173,17 @@ export function useLive<E extends Endpoint, I = Response<E>>(
   };
   const failed = useRef(false);
   failed.current = !!state.error;
-  const reload = useCallback(() => {
-    if (!endpoint) return;
+  // Resolves with the stamp of the answer it shows, or undefined when it shows none.
+  const load = useCallback((): Promise<ChangeStamp | null | undefined> => {
+    if (!endpoint) return Promise.resolve(undefined);
     const n = ++seq.current;
     const owner = tab();
-    (call as (e: E, i?: Input<E>) => Promise<Response<E>>)(endpoint, input ?? undefined)
-      .then((data) => {
+    return stamped(endpoint, input ?? undefined)
+      .then(({ data, changes }) => {
         remember(owner, key, data);
-        if (n === seq.current && query.current.generation === generation)
-          setState({ key, generation, data, loading: false, error: "", errorStatus: null });
+        if (n !== seq.current || query.current.generation !== generation) return undefined;
+        setState({ key, generation, data, loading: false, error: "", errorStatus: null });
+        return changes;
       })
       .catch((error: Error) => {
         if (error instanceof ApiError && FINAL.has(error.status) && owner === tab()) cacheFor(owner).delete(key);
@@ -264,18 +196,43 @@ export function useLive<E extends Endpoint, I = Response<E>>(
             error: error.message,
             errorStatus: error instanceof ApiError ? error.status : null,
           }));
+        return undefined;
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for endpoint and input, which callers usually recreate on every render.
   }, [key, generation]);
+  const refresher = useRef<Coalesced | null>(null);
+  const reload = useCallback(() => {
+    if (refresher.current) void refresher.current.request(true);
+    else void load();
+  }, [load]);
   useEffect(() => {
     setState(start());
-    reload();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const soon = () => {
-      clearTimeout(timer);
-      timer = setTimeout(reload, 150);
+    // The stamp of the answer shown, and a stream that opened while the next was on its way.
+    let read: ChangeStamp | null | undefined;
+    let opened: ChangeStamp | undefined;
+    let running = false;
+    let active = true;
+    const run = () => {
+      running = true;
+      return load().then((changes) => {
+        running = false;
+        if (changes !== undefined) read = changes;
+        const recheck = opened;
+        opened = undefined;
+        if (active && recheck && missed(read, recheck)) soon();
+      });
     };
-    const offs = topics.map((topic) => onChange(topic, soon));
+    const refresh = coalesce(run, { delay: 150, interval: 1000 });
+    refresher.current = refresh;
+    void refresh.request(true);
+    const soon = () => void refresh.request();
+    // A stream opening sends nothing that changed before it: load again only if this view may lack some.
+    const changed = (stream?: ChangeStamp) => {
+      if (!stream) soon();
+      else if (running) opened = stream;
+      else if (missed(read, stream)) soon();
+    };
+    const offs = topics.map((topic) => onChange(topic, changed));
     // Coming back loads again: a short drop may leave the stream connected, so nothing else would
     // replace what failed meanwhile. A check that finds nothing wrong reloads too, for the same reason.
     let was = connection().state;
@@ -296,12 +253,14 @@ export function useLive<E extends Endpoint, I = Response<E>>(
     };
     document.addEventListener("visibilitychange", visible);
     return () => {
-      clearTimeout(timer);
+      active = false;
+      refresh.cancel();
+      if (refresher.current === refresh) refresher.current = null;
       offs.forEach((off) => off());
       document.removeEventListener("visibilitychange", visible);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resubscribe only when the reload function or the topics change.
-  }, [reload, topics.join(",")]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resubscribe only when the query or the topics change.
+  }, [load, topics.join(",")]);
   // Render the new key's starting state immediately, before effects run, so an old response can
   // never flash under new parameters.
   const visible = state.key === key && state.generation === generation ? state : start();

@@ -133,9 +133,12 @@ test("joining explains and enforces the username rule while typing", async ({ pa
   const guest = await context.newPage();
   try {
     await guest.goto(`/join/${token}`);
+    await expect(guest.getByRole("heading", { name: "You’re invited to Relay" })).toBeVisible();
+    await expect(guest.getByText(/^admin invited you to join\./)).toBeVisible();
+    await guest.getByRole("button", { name: "Accept invitation" }).click();
     await expect(guest.getByRole("heading", { name: "Create your account" })).toBeVisible();
-    await expect(guest.getByText(/^admin invited you to Relay\./)).toBeVisible();
     const username = guest.getByLabel("Username");
+    await expect(username).toBeFocused();
     const hint = guest.locator("#join-username-hint");
     await expect(hint).toHaveText(
       "3–32 characters: lowercase letters, numbers, - and _, starting with a letter or number.",
@@ -154,7 +157,7 @@ test("joining explains and enforces the username rule while typing", async ({ pa
     await context.close();
   }
   // Leave the invitation unused; it expires on its own. Withdraw it so the admin list stays short.
-  await page.goto("/admin");
+  await page.goto("/admin/members");
   const invitations = page.getByRole("region", { name: "Invitations" });
   const count = await invitations.getByRole("button", { name: "Withdraw" }).count();
   for (let i = 0; i < count; i++) {
@@ -187,8 +190,127 @@ test("an invitation opened while signed in says so and offers to sign out", asyn
   // Signing out from the notice lands on the invitation itself.
   await page.goto(`/join/${token}`);
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "You’re invited to Relay" })).toBeVisible();
   expect(new URL(page.url()).pathname).toBe(`/join/${token}`);
   const session = await page.request.get(api.session.get.path);
   expect(session.status()).toBe(401);
+});
+
+test("a new member is welcomed, makes Relay theirs and adds a device, picking up after a reload", async ({
+  page,
+  browser,
+}) => {
+  await signedIn(page);
+  const token = await inviteToken(page);
+  const context = await browser.newContext({ baseURL: BASE });
+  const guest = await context.newPage();
+  const username = `member-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    await guest.goto(`/join/${token}`);
+    await expect(guest.getByRole("heading", { name: "You’re invited to Relay" })).toBeVisible();
+    await expect(guest.getByText(/^This invitation works once, until /)).toBeVisible();
+    await guest.getByRole("button", { name: "Accept invitation" }).click();
+
+    await guest.getByRole("button", { name: "Back" }).click();
+    await expect(guest.getByRole("heading", { name: "You’re invited to Relay" })).toBeFocused();
+    await guest.getByRole("button", { name: "Accept invitation" }).click();
+    await guest.getByLabel("Username").fill(username);
+    await guest.getByLabel("Password", { exact: true }).fill("Browser-test-password-only");
+    await guest.getByLabel("Confirm password").fill("Browser-test-password-only");
+    await guest.getByRole("button", { name: "Create account" }).click();
+
+    // The account exists now; the address no longer holds the spent invitation.
+    await expect(guest.getByRole("heading", { name: "Make it yours" })).toBeFocused();
+    expect(new URL(guest.url()).pathname).toBe("/welcome");
+    await expect(guest.getByRole("list", { name: "Joining steps" }).getByRole("listitem")).toHaveCount(3);
+
+    // A reload picks up at the choices.
+    await guest.reload();
+    await expect(guest.getByRole("heading", { name: "Make it yours" })).toBeVisible();
+    await expect(guest.getByText("Welcome back. A few choices are left.")).toBeVisible();
+
+    await guest.getByLabel("Your name").fill("Grace");
+    await guest
+      .getByRole("radiogroup", { name: "Move uploads to Trash after" })
+      .getByRole("radio", { name: "30 days" })
+      .click();
+    await guest.getByRole("radiogroup", { name: "Links expire after" }).getByRole("radio", { name: "30 days" }).click();
+    await guest.getByRole("radiogroup", { name: "Empty Trash after" }).getByRole("radio", { name: "90 days" }).click();
+    await guest.getByRole("button", { name: "Save and continue" }).click();
+
+    // Adding a device shows a sign-in code, and says so when the other device uses it.
+    await expect(guest.getByRole("heading", { name: "Add your other devices" })).toBeFocused();
+    const created = guest.waitForResponse((response) => response.url().endsWith(api.loginCodes.create.path));
+    await guest.getByRole("button", { name: "Add a device" }).click();
+    const { code } = await (await created).json();
+    await expect(guest.getByRole("button", { name: "Copy sign-in link" })).toBeVisible();
+    const phone = await browser.newContext({ baseURL: BASE });
+    try {
+      const signIn = await phone.request.post(api.session.code.path, { data: { code, deviceName: "Grace’s phone" } });
+      expect(signIn.ok()).toBe(true);
+    } finally {
+      await phone.close();
+    }
+    await expect(guest.getByText("Grace’s phone is signed in.")).toBeVisible();
+    await expect(guest.getByRole("button", { name: "Continue" })).toBeFocused();
+    await guest.getByRole("button", { name: "Continue" }).click();
+
+    await expect(guest.getByRole("heading", { name: "You’re all set" })).toBeFocused();
+    await expect(guest.getByText("Welcome to Relay, Grace.")).toBeVisible();
+    await guest.getByRole("button", { name: "Start using Relay" }).click();
+    await expect(composer(guest)).toBeVisible();
+    expect(new URL(guest.url()).pathname).toBe("/");
+
+    const me = await (await guest.request.get(api.session.get.path)).json();
+    expect(me.user).toMatchObject({ username, name: "Grace", admin: false, retentionDays: 30, trashDays: 90 });
+    expect(me.prefs).toMatchObject({ linkDays: 30 });
+  } finally {
+    await context.close();
+  }
+});
+
+test("a new member can leave devices for later and keep every default", async ({ page, browser }) => {
+  await signedIn(page);
+  const token = await inviteToken(page);
+  const context = await browser.newContext({ baseURL: BASE });
+  const guest = await context.newPage();
+  try {
+    await guest.goto(`/join/${token}`);
+    await guest.getByRole("button", { name: "Accept invitation" }).click();
+    await guest.getByLabel("Username").fill(`member-${Math.random().toString(36).slice(2, 10)}`);
+    await guest.getByLabel("Password", { exact: true }).fill("Browser-test-password-only");
+    await guest.getByLabel("Confirm password").fill("Browser-test-password-only");
+    await guest.getByRole("button", { name: "Create account" }).click();
+    await expect(guest.getByRole("heading", { name: "Make it yours" })).toBeVisible();
+    await expect(guest.getByText("Welcome back")).toHaveCount(0);
+
+    // Nothing changed, so nothing is sent.
+    let updates = 0;
+    guest.on("request", (request) => {
+      if (request.url().endsWith(api.account.update.path)) updates++;
+    });
+    await guest.getByRole("button", { name: "Save and continue" }).click();
+
+    // A code that was shown but not used is withdrawn when the step is left.
+    const created = guest.waitForResponse((response) => response.url().endsWith(api.loginCodes.create.path));
+    await guest.getByRole("button", { name: "Add a device" }).click();
+    const { code } = await (await created).json();
+    const revoked = guest.waitForRequest(
+      (request) => request.method() === "DELETE" && request.url().includes("/login-codes/"),
+    );
+    await guest.getByRole("button", { name: "I’ll do this later" }).click();
+    await revoked;
+    await expect(guest.getByRole("heading", { name: "You’re all set" })).toBeVisible();
+    await expect(guest.getByText("Add your phone")).toBeVisible();
+    expect(updates).toBe(0);
+    const phone = await browser.newContext({ baseURL: BASE });
+    try {
+      const signIn = await phone.request.post(api.session.code.path, { data: { code, deviceName: "Too late" } });
+      expect(signIn.ok()).toBe(false);
+    } finally {
+      await phone.close();
+    }
+  } finally {
+    await context.close();
+  }
 });

@@ -5,7 +5,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/", ".data/", "playwright-report/", "test-results/", "public/"] },
+  { ignores: ["dist/", ".data/", "playwright-report/", "test-results/", "public/", ".claude/", ".codex/", "work/"] },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
   {

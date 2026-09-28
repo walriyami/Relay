@@ -7,6 +7,14 @@ export function bytes(n: number) {
   const shown = power === 0 ? String(value) : value >= 100 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, "");
   return `${shown} ${["B", "KB", "MB", "GB", "TB"][power]}`;
 }
+/** `part` as a share of `whole`, rounded, but never "0%" for something or "100%" for less than all. */
+export function percent(part: number, whole: number) {
+  if (whole <= 0 || part <= 0) return "0%";
+  const ratio = part / whole;
+  if (ratio < 0.005) return "<1%";
+  if (ratio < 1 && ratio >= 0.995) return ">99%";
+  return `${Math.round(ratio * 100)}%`;
+}
 export const plural = (n: number, one: string, many = one + "s") => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 export function ago(time: number, now = Date.now()) {
   const s = Math.round((now - time) / 1000);

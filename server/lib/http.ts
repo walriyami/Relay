@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Auth as AuthKind, Body, Endpoint, Params, Query, Response, Schema } from "../../shared/api.ts";
 import type { Auth, Context, Member } from "../context.ts";
 import { authOf, requireAdmin, requireMember } from "./auth.ts";
+import { compressed } from "./compress.ts";
 
 export type Handler<E extends Endpoint> = (call: {
   req: FastifyRequest;
@@ -41,6 +42,7 @@ export function route<E extends Endpoint>(
       csrf: endpoint.csrf,
       auth: endpoint.auth,
       ...(options.rateLimit ? { rateLimit: { ...options.rateLimit, allowList: [] as string[] } } : {}),
+      ...(compressed.has(endpoint) ? { compress: true } : {}),
     },
     handler: async (req, reply) => {
       const member = authorize(ctx, req, endpoint.auth);

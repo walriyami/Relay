@@ -6,9 +6,19 @@ import { fail } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
 import { hashPassword } from "../../lib/secrets.ts";
+import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
 import { perAddress } from "../auth/limits.ts";
+import { allowedLinkDays } from "../auth/member-limits.ts";
 import { publicName } from "../auth/sessions.ts";
-import { LINK_SELECT, linkExpiry, linkVisits, ownedLink, toLinks, type LinkRow } from "./service.ts";
+import {
+  effectiveLinkExpiry,
+  LINK_SELECT,
+  linkExpiry,
+  linkVisits,
+  ownedLink,
+  toLinks,
+  type LinkRow,
+} from "./service.ts";
 
 export { createLinks } from "./service.ts";
 
@@ -23,19 +33,30 @@ export function registerLinks(app: FastifyInstance, ctx: Context) {
     return toLinks(ctx, rows, now);
   });
 
-  route(app, ctx, api.links.create, async ({ member, body }) => {
+  route(app, ctx, api.links.create, async ({ member, body, req }) => {
     const { password, ...settings } = body;
-    return ctx.links.create(member.userId, { ...settings, passwordHash: await linkPasswordHash(password) });
+    const passwordHash = await linkPasswordHash(password);
+    if (memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)])?.sessionHash !== member.sessionHash)
+      fail(401, "Sign in to continue.");
+    return ctx.links.create(member.userId, { ...settings, passwordHash });
   });
 
-  route(app, ctx, api.links.update, async ({ member, params, body }) => {
+  route(app, ctx, api.links.update, async ({ member, params, body, req }) => {
     const passwordHash = await linkPasswordHash(body.password);
-    const now = Date.now();
-    const link = ownedLink(ctx, member.userId, params.id, now);
-    if (link.revoked) fail(410, "This link was turned off. Create a new link instead.");
-    ctx.db.tx(() => {
+    const updated = ctx.db.tx(() => {
+      if (memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)])?.sessionHash !== member.sessionHash)
+        fail(401, "Sign in to continue.");
+      const now = Date.now();
+      const link = ownedLink(ctx, member.userId, params.id, now);
+      if (link.revoked !== null) fail(410, "This link was turned off. Create a new link instead.");
+      if (link.expires !== null && link.expires <= now) fail(410, "This link has expired. Create a new link instead.");
+      const item = ctx.library.owned(member.userId, link.item, { live: true });
       if (body.days !== undefined)
-        ctx.db.run("UPDATE links SET expires = ? WHERE id = ?", linkExpiry(body.days, now), link.id);
+        ctx.db.run(
+          "UPDATE links SET expires = ? WHERE id = ?",
+          effectiveLinkExpiry(linkExpiry(allowedLinkDays(ctx, member.userId, body.days), now), item.expires),
+          link.id,
+        );
       if (passwordHash !== undefined)
         ctx.db.run("UPDATE links SET password_hash = ? WHERE id = ?", passwordHash, link.id);
       if (body.visitorLimit !== undefined)
@@ -45,9 +66,10 @@ export function registerLinks(app: FastifyInstance, ctx: Context) {
         const issued = issuePickupCode(ctx.db, ctx.secrets, "share", link.id);
         ctx.db.run("UPDATE links SET code_hash = ? WHERE id = ?", issued.codeHash, link.id);
       }
+      return toLinks(ctx, [ownedLink(ctx, member.userId, link.id, now)], now)[0];
     });
     ctx.events.publish(member.userId, "links", "items");
-    return toLinks(ctx, [ownedLink(ctx, member.userId, link.id, now)], now)[0];
+    return updated;
   });
 
   route(app, ctx, api.links.visits, ({ member, params }) => linkVisits(ctx, member.userId, params.id));

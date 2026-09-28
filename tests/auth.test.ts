@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api } from "../shared/api.ts";
-import { DEFAULTS } from "../shared/model.ts";
+import { deviceKind, deviceLabel } from "../shared/devices.ts";
+import { DEFAULTS, LIMITS, type DeviceKind, type Me } from "../shared/model.ts";
 import { addressKey } from "../server/modules/auth/limits.ts";
 import { checkPassword } from "../server/modules/auth/passwords.ts";
+import { hashPassword, verifyPassword } from "../server/lib/secrets.ts";
 import { admin, ApiError, Client, member, start, type Instance } from "./support/harness.ts";
 
 const status = async (promise: Promise<unknown>) => {
@@ -90,6 +92,21 @@ test("failed password checks are capped per username, including concurrent attem
   } finally {
     await instance.close();
   }
+});
+
+test("password derivations share a bounded process-wide queue", async () => {
+  const encoded = await hashPassword("Queue-test-password-only");
+  const attempts = await Promise.allSettled(
+    Array.from({ length: 35 }, (_, index) =>
+      index % 2 ? hashPassword("Queue-test-password-only") : verifyPassword("Queue-test-password-only", encoded),
+    ),
+  );
+  const accepted = attempts.filter((result) => result.status === "fulfilled");
+  const rejected = attempts.filter((result) => result.status === "rejected");
+  assert.equal(accepted.length, 34, "two derivations run while up to 32 wait");
+  assert.equal(rejected.length, 1);
+  assert.equal((rejected[0].reason as { status?: number }).status, 429);
+  assert.ok(accepted.every((result) => result.status === "fulfilled" && result.value !== false));
 });
 
 test("joining consumes the invitation exactly once", async () => {
@@ -184,6 +201,7 @@ test("changing the password signs out every other session", async () => {
     );
     const there = new Client(instance);
     await there.signIn("erin", "Member-password-only", "Other");
+    const outstandingCode = await here.call(api.loginCodes.create);
     const wrong = here.call(api.account.password, {
       body: { current: "Not-the-current-one", password: "Brand-new-password" },
     });
@@ -194,6 +212,15 @@ test("changing the password signs out every other session", async () => {
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM passkeys WHERE user_id = ?", user.id), 1);
     await here.call(api.session.get);
     assert.equal(await status(there.call(api.session.get)), 401);
+    assert.equal(
+      await status(
+        new Client(instance).call(api.session.code, {
+          body: { code: outstandingCode.code, deviceName: "Stale code" },
+        }),
+      ),
+      410,
+      "changing a password retires sign-in codes from the surviving session too",
+    );
     assert.equal(await status(new Client(instance).signIn("erin", "Member-password-only")), 401);
     await new Client(instance).signIn("erin", "Brand-new-password");
   } finally {
@@ -385,35 +412,151 @@ test("login code creation is rate limited", async () => {
   }
 });
 
+const UA = {
+  iPhone:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  iPad: "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  pixel:
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+  galaxyTab:
+    "Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  firefoxAndroid: "Mozilla/5.0 (Android 15; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0",
+  edgeAndroid:
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 EdgA/130.0.0.0",
+  chromeOS:
+    "Mozilla/5.0 (X11; CrOS x86_64 16093.59.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+  windows:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+};
+
+test("a device is a phone, tablet or computer by its browser", () => {
+  assert.equal(deviceKind(UA.iPhone), "phone");
+  assert.equal(deviceKind(UA.pixel), "phone");
+  assert.equal(deviceKind(UA.firefoxAndroid), "phone");
+  assert.equal(deviceKind(UA.iPad), "tablet");
+  assert.equal(deviceKind(UA.galaxyTab), "tablet");
+  assert.equal(deviceKind(UA.mac), "computer");
+  assert.equal(deviceKind(UA.windows), "computer");
+  assert.equal(deviceKind(""), "computer");
+  assert.equal(deviceLabel(UA.edgeAndroid), "Edge on Android");
+  assert.equal(deviceLabel(UA.chromeOS), "Chrome on ChromeOS");
+  // iPadOS Safari sends a Mac user agent; its touch screen is what tells it apart.
+  assert.equal(deviceKind(UA.mac, 5), "tablet");
+  assert.equal(deviceLabel(UA.mac, 5), "Safari on iPad");
+  assert.equal(deviceKind(UA.mac, 0), "computer");
+  assert.equal(deviceLabel(UA.mac, 0), "Safari on Mac");
+  assert.equal(deviceKind(UA.windows, 10), "computer");
+});
+
+/** Signs in as a browser with this user agent, and returns its device. */
+async function signInAs(client: Client, userAgent: string, deviceName: string, kind?: DeviceKind) {
+  const res = await client.raw({
+    method: "POST",
+    url: api.session.password.path,
+    headers: { "user-agent": userAgent },
+    payload: { username: "jack", password: "Member-password-only", deviceName, deviceKind: kind },
+  });
+  assert.equal(res.statusCode, 200);
+  return res.json<Me>().device;
+}
+
+test("a signing-in browser's own kind wins over its user agent, which remains the fallback", async () => {
+  const instance = await start();
+  try {
+    await member(instance, "jack");
+    assert.equal((await signInAs(new Client(instance), UA.mac, "Safari on iPad", "tablet")).kind, "tablet");
+    assert.equal((await signInAs(new Client(instance), UA.iPhone, "Safari on iPhone")).kind, "phone");
+    const res = await new Client(instance).raw({
+      method: "POST",
+      url: api.session.password.path,
+      headers: { "user-agent": UA.mac },
+      payload: { username: "jack", password: "Member-password-only", deviceName: "Odd", deviceKind: "watch" },
+    });
+    assert.equal(res.statusCode, 400);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("automatic device names stay within the configured name limit", async () => {
+  const instance = await start();
+  try {
+    await member(instance, "jack");
+    const longName = "x".repeat(LIMITS.nameLength);
+    const first = await signInAs(new Client(instance), UA.mac, longName);
+    const second = await signInAs(new Client(instance), UA.mac, longName);
+    assert.equal(first.name, longName);
+    assert.equal(second.name.length, LIMITS.nameLength);
+    assert.ok(second.name.endsWith(" 2"));
+  } finally {
+    await instance.close();
+  }
+});
+
 test("devices can be listed, renamed and signed out", async () => {
   const instance = await start();
   try {
     const laptop = await member(instance, "jack");
     const phone = new Client(instance);
-    const phoneMe = await phone.signIn("jack", "Member-password-only", "Phone");
+    const phoneDevice = await signInAs(phone, UA.iPhone, "Phone");
+    assert.equal(phoneDevice.kind, "phone");
     const tablet = new Client(instance);
-    await tablet.signIn("jack", "Member-password-only", "Tablet");
+    await signInAs(tablet, UA.iPad, "Tablet");
 
     const devices = await laptop.call(api.devices.list);
     assert.equal(devices.length, 3);
+    // What a device is comes from its browser, and a new name doesn't change it.
+    assert.deepEqual(Object.fromEntries(devices.map((d) => [d.name, d.kind])), {
+      "jack browser": "computer",
+      Phone: "phone",
+      Tablet: "tablet",
+    });
     assert.deepEqual(
       devices.filter((d) => d.current).map((d) => d.name),
       ["jack browser"],
     );
     assert.ok(devices.every((d) => d.signedIn && !d.online));
 
-    await laptop.call(api.devices.rename, { params: { id: phoneMe.device.id }, body: { name: "Old phone" } });
-    await laptop.call(api.devices.signOut, { params: { id: phoneMe.device.id } });
+    // Signed-in devices keep distinct names, whatever the case.
+    assert.equal(
+      await status(
+        laptop.call(api.devices.update, {
+          params: { id: phoneDevice.id },
+          body: { name: "tablet", kind: "computer" },
+        }),
+      ),
+      409,
+    );
+    assert.equal((await laptop.call(api.devices.list)).find((d) => d.id === phoneDevice.id)?.kind, "phone");
+    assert.equal(
+      await status(
+        laptop.call(api.devices.update, {
+          params: { id: phoneDevice.id },
+          body: { name: "Invalid kind", kind: "console" as "computer" },
+        }),
+      ),
+      400,
+    );
+    assert.equal((await laptop.call(api.devices.list)).find((d) => d.id === phoneDevice.id)?.name, "Phone");
+    await laptop.call(api.devices.update, {
+      params: { id: phoneDevice.id },
+      body: { name: " Edited phone ", kind: "tablet" },
+    });
+    await laptop.call(api.devices.update, { params: { id: phoneDevice.id }, body: { name: "  Old phone " } });
+    assert.equal((await phone.call(api.session.get)).device.kind, "tablet");
+    await laptop.call(api.devices.signOut, { params: { id: phoneDevice.id } });
     assert.equal(await status(phone.call(api.session.get)), 401);
     const after = await laptop.call(api.devices.list);
-    const old = after.find((d) => d.id === phoneMe.device.id)!;
+    const old = after.find((d) => d.id === phoneDevice.id)!;
     assert.equal(old.name, "Old phone");
+    assert.equal(old.kind, "tablet", "renaming without a kind preserves the edited icon");
     assert.equal(old.signedIn, false, "signed-out devices stay listed");
 
     const stranger = await member(instance, "kate");
-    assert.equal(await status(stranger.call(api.devices.signOut, { params: { id: phoneMe.device.id } })), 404);
+    assert.equal(await status(stranger.call(api.devices.signOut, { params: { id: phoneDevice.id } })), 404);
     assert.equal(
-      await status(stranger.call(api.devices.rename, { params: { id: phoneMe.device.id }, body: { name: "Mine" } })),
+      await status(stranger.call(api.devices.update, { params: { id: phoneDevice.id }, body: { name: "Mine" } })),
       404,
     );
 

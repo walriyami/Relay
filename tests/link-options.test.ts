@@ -164,6 +164,21 @@ test("a link for one person lets in only the first, who can come back", async ()
   }
 });
 
+test("lowering a visitor limit preserves admitted browsers and refuses new ones", async () => {
+  const { instance, owner, link } = await setup({ visitorLimit: 3 });
+  try {
+    const admitted = [new Client(instance), new Client(instance)];
+    for (const visitor of admitted) await openShare(visitor, link.token);
+    const lowered = await owner.call(api.links.update, { params: { id: link.id }, body: { visitorLimit: 1 } });
+    assert.equal(lowered.visitors, 2);
+    assert.equal(lowered.full, true);
+    for (const visitor of admitted) assert.equal(await status(openShare(visitor, link.token)), 200);
+    assert.equal(await status(openShare(new Client(instance), link.token)), 410);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("a link can be kept until it is turned off, and a transfer can finish as one", async () => {
   const instance = await start();
   try {
@@ -213,6 +228,29 @@ test("members choose the name people see and can change their username", async (
     await new Client(instance).signIn("sara_q", "Member-password-only");
     const cleared = await client.call(api.account.update, { body: { name: null } });
     assert.equal(cleared.user.name, null);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("parallel link password guesses share the same attempt budget", async () => {
+  const { instance, link } = await setup({ password: "correct secret" });
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        instance.app.inject({
+          method: "POST",
+          url: `/api/s/${link.token}/unlock`,
+          headers: { host: "relay.test" },
+          remoteAddress: `192.0.2.${i + 1}`,
+          payload: { password: "wrong secret" },
+        }),
+      ),
+    );
+    assert.ok(results.filter((r) => r.statusCode === 403).length <= 10);
+    assert.ok(results.filter((r) => r.statusCode === 429).length >= 2);
+    assert.ok(results.every((r) => [403, 429, 503].includes(r.statusCode)));
+    assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM link_visits"), 0);
   } finally {
     await instance.close();
   }

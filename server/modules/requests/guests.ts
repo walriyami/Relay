@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Context } from "../../context.ts";
+import { principalKey, type Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
 import { LIMITS, type PublicRequest } from "../../../shared/model.ts";
 import { cookieOptions, grantFor, guestCookie } from "../../lib/auth.ts";
@@ -9,6 +9,7 @@ import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "../auth/limits.ts";
 import { autoName } from "../library/summary.ts";
 import { planNodes } from "../transfers/plan.ts";
+import { ensureTransferAvailability } from "../transfers/availability.ts";
 
 type OpenRow = {
   id: string;
@@ -36,9 +37,15 @@ function openRequest(ctx: Context, token: string): OpenRow {
 
 /** Bytes and entries a request holds, unfinished uploads included so concurrent guests cannot overshoot. */
 export function used(ctx: Context, requestId: string) {
-  return ctx.db.get<{ entries: number; bytes: number }>(
-    `SELECT COUNT(n.id) AS entries, ifnull(SUM(n.size), 0) AS bytes
+  const now = Date.now();
+  return ctx.db.get<{ entries: number; bytes: number; activeBytes: number; trashBytes: number; pendingBytes: number }>(
+    `SELECT COUNT(n.id) AS entries, ifnull(SUM(n.size), 0) AS bytes,
+       ifnull(SUM(CASE WHEN n.state = 'ready' AND i.trashed IS NULL AND (i.expires IS NULL OR i.expires > ?) THEN n.size ELSE 0 END), 0) AS activeBytes,
+       ifnull(SUM(CASE WHEN n.state = 'ready' AND (i.trashed IS NOT NULL OR i.expires <= ?) THEN n.size ELSE 0 END), 0) AS trashBytes,
+       ifnull(SUM(CASE WHEN n.state = 'pending' THEN n.size ELSE 0 END), 0) AS pendingBytes
      FROM items i JOIN nodes n ON n.item = i.id WHERE i.request_id = ?`,
+    now,
+    now,
     requestId,
   )!;
 }
@@ -50,6 +57,9 @@ export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes
     bytes: Math.max(0, request.max_bytes - held.bytes),
     entries: Math.max(0, LIMITS.requestEntries - held.entries),
     held: held.bytes,
+    activeBytes: held.activeBytes,
+    trashBytes: held.trashBytes,
+    pendingBytes: held.pendingBytes,
   };
 }
 
@@ -131,22 +141,22 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       // Each new transfer gets an independent item; retries resolve their original item by transfer ID.
       const { sender: typed, ...input } = body;
       const sender = cleanSender(typed);
-      const created = ctx.db.tx(() => {
-        const left = remaining(ctx, request);
-        const result = ctx.transfers.create(
-          { ...input, name: null },
-          {
-            owner: request.owner,
-            principal: grant,
-            requestId: request.id,
-            itemName: submissionName(request.name, sender, input),
-            limit: left,
-          },
-        );
-        if (sender !== null)
-          ctx.db.run("UPDATE items SET sender = coalesce(sender, ?) WHERE id = ?", sender, result.itemId);
-        return result;
-      });
+      const principal = principalKey(grant);
+      const target =
+        ctx.db.value<string>("SELECT item FROM transfers WHERE id = ? AND principal = ?", input.id, principal) ??
+        grant.itemId;
+      ensureTransferAvailability(ctx, { owner: request.owner, principal, ...(target ? { item: target } : {}) });
+      const created = ctx.transfers.create(
+        { ...input, name: null },
+        {
+          owner: request.owner,
+          principal: grant,
+          requestId: request.id,
+          itemName: submissionName(request.name, sender, input),
+          sender,
+          limit: remaining(ctx, request),
+        },
+      );
       ctx.events.publish(request.owner, "requests");
       return created;
     },

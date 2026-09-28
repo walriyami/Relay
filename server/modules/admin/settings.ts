@@ -1,5 +1,5 @@
 import type { Context } from "../../context.ts";
-import { DEFAULTS, type AdminOverview, type MemberDefaults } from "../../../shared/model.ts";
+import { DEFAULTS, type AdminOverview } from "../../../shared/model.ts";
 
 export type Limits = AdminOverview["limits"];
 
@@ -17,30 +17,13 @@ export function limitsOf(ctx: Context): Limits {
   return limits;
 }
 
+/** The most everyone together can keep. */
+export const capacityOf = (ctx: Context) => limitsOf(ctx).capacity;
+
 export function setLimits(ctx: Context, changes: Partial<Limits>) {
+  const before = capacityOf(ctx);
   ctx.db.tx(() => {
     for (const [key, value] of Object.entries(changes)) if (value !== undefined) ctx.db.setSetting(key, String(value));
   });
-}
-
-/** What members got before anyone chose otherwise. */
-const BUILT_IN: MemberDefaults = {
-  quota: DEFAULTS.quotaBytes,
-  retentionDays: null,
-  linkDays: DEFAULTS.linkDays,
-  trashDays: DEFAULTS.trashDays,
-};
-
-/** What a new member starts with: `memberDefaults` in `settings`, as JSON, over the built-in values. */
-export function memberDefaultsOf(ctx: Context): MemberDefaults {
-  const stored = ctx.db.setting("memberDefaults");
-  return { ...BUILT_IN, ...(stored ? (JSON.parse(stored) as Partial<MemberDefaults>) : {}) };
-}
-
-/** Changes only the values given; the rest stay as they were. */
-export function setMemberDefaults(ctx: Context, changes: Partial<MemberDefaults>) {
-  ctx.db.tx(() => {
-    const defined = Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined));
-    ctx.db.setSetting("memberDefaults", JSON.stringify({ ...memberDefaultsOf(ctx), ...defined }));
-  });
+  if (capacityOf(ctx) !== before) ctx.events.broadcast("account");
 }

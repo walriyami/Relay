@@ -28,7 +28,7 @@ function describe({ item }: Link) {
 /** "Opened by 2 · 5 min ago", "Not opened yet": at a glance, whether it reached anyone. */
 function reach(s: Link, now: number) {
   if (!s.visitors) return "Not opened yet";
-  const who = `Opened by ${plural(s.visitors, "person", "people")}`;
+  const who = `Opened by ${plural(s.visitors, "browser")}`;
   return s.lastVisit ? `${who} · ${ago(s.lastVisit, now)}` : who;
 }
 
@@ -62,7 +62,7 @@ export function LinksPage() {
   async function revoke(s: Link) {
     const ok = await confirmDialog({
       title: "Turn off this link?",
-      body: "Anyone who has it will lose access right away. Your files stay in Files.",
+      body: "Anyone who has it will lose access right away. Downloads already started may finish. Your files stay in Files.",
       confirm: "Turn off link",
       danger: true,
     });
@@ -97,7 +97,7 @@ export function LinksPage() {
         <span className="muted">
           {(live
             ? [linkLife(s.expires, now), ...linkTraits({ ...s, locked: false }), reach(s, now)]
-            : [inactiveReason(s), s.visitors ? `Opened by ${plural(s.visitors, "person", "people")}` : ""]
+            : [inactiveReason(s), s.visitors ? `Opened by ${plural(s.visitors, "browser")}` : ""]
           )
             .filter(Boolean)
             .join(" · ")}

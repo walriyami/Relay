@@ -13,12 +13,13 @@ import {
   type SelectionRename,
 } from "../lib/draft";
 import { navigate } from "../lib/router";
+import { useExpiryClock } from "../lib/refresh";
 import { Button, Field, IconButton, Spinner, toast } from "../components/ui";
 import { FileTypeIcon } from "../components/Thumbnail";
 import { DocumentArt } from "../components/DocumentArt";
 import { SHARE_GONE, ShareUnlock, ShareView, shareSummary, useShare } from "../features/incoming/ReceiveView";
 import { CodeEntryForm, codeDigits } from "../features/codes/CodeEntry";
-import { browserName } from "../features/auth/device-name";
+import { thisDevice } from "../features/auth/device-name";
 import { AuthFrame } from "../features/auth/Auth";
 import { TransferCard, useTransfers } from "../features/send/TransferList";
 import { Brand } from "./Brand";
@@ -131,7 +132,7 @@ export function PickupPage() {
             } catch (error) {
               if (!(error instanceof ApiError && error.status === 401)) throw error;
               // Signed out: the code signs this browser in at once, as it does on the sign-in card.
-              await call(api.session.code, { body: { code: codeDigits(code), deviceName: browserName() } });
+              await call(api.session.code, { body: { code: codeDigits(code), ...thisDevice() } });
               navigate("/", true);
               return;
             }
@@ -291,6 +292,8 @@ const coarse = () => typeof matchMedia === "function" && matchMedia("(pointer: c
 export function GuestUpload({ token }: { token: string }) {
   const [info, setInfo] = useState<PublicRequest | null>(null);
   const [error, setError] = useState("");
+  const now = useExpiryClock([info?.expires ?? Infinity]);
+  const expired = !!info && info.expires <= now;
   const [picks, setPicks] = useState<Pick[]>([]);
   const [dragging, setDragging] = useState(false);
   // Files found so far while a dropped folder is read; null when not reading.
@@ -333,6 +336,8 @@ export function GuestUpload({ token }: { token: string }) {
     };
   }, [token, finished, failed, looked]);
   function add(files: PickedDraftFile[], folders: PickedFolder[] = []) {
+    // A file picker or folder read may return after the deadline, before its timer runs.
+    if (!requestOpen()) return;
     setPicks((current) => {
       const normalized = normalizeSelection(
         files,
@@ -372,8 +377,8 @@ export function GuestUpload({ token }: { token: string }) {
   );
   // Dropping anywhere on the page adds to the list, so a near miss never opens the file in place of
   // this page. While the request is full or just answered, drops are refused rather than lost.
-  const accepting = useRef(false);
-  accepting.current = !!info && !sent && !full;
+  const accepting = useRef<() => boolean>(() => false);
+  accepting.current = () => !!info && !error && !sent && !full && info.expires > Date.now();
   const addDropped = useRef(add);
   addDropped.current = add;
   useEffect(() => {
@@ -382,12 +387,12 @@ export function GuestUpload({ token }: { token: string }) {
       if (!dragHasFiles(event)) return;
       event.preventDefault();
       depth++;
-      setDragging(accepting.current);
+      setDragging(accepting.current());
     };
     const over = (event: DragEvent) => {
       if (!dragHasFiles(event)) return;
       event.preventDefault();
-      event.dataTransfer!.dropEffect = accepting.current ? "copy" : "none";
+      event.dataTransfer!.dropEffect = accepting.current() ? "copy" : "none";
     };
     const leave = (event: DragEvent) => {
       if (!dragHasFiles(event)) return;
@@ -399,10 +404,11 @@ export function GuestUpload({ token }: { token: string }) {
       event.preventDefault();
       depth = 0;
       setDragging(false);
-      if (!accepting.current) return;
+      if (!accepting.current()) return;
       setReading(0);
       const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
       setReading(null);
+      if (!accepting.current()) return;
       addDropped.current(selection.files, selection.folders);
       if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
     };
@@ -418,8 +424,14 @@ export function GuestUpload({ token }: { token: string }) {
       document.removeEventListener("drop", onDrop);
     };
   }, []);
+  function requestOpen() {
+    if (!info || error) return false;
+    if (info.expires > Date.now()) return true;
+    setError("gone");
+    return false;
+  }
   function upload() {
-    if (!info || !count) return;
+    if (!requestOpen() || !count) return;
     startTransfer({
       files: picks.flatMap((p) => p.files),
       folders: picks.flatMap((p) => p.folders),
@@ -431,17 +443,25 @@ export function GuestUpload({ token }: { token: string }) {
     });
     setPicks([]);
   }
-  if (error)
+  if (error || expired)
     return (
-      <PublicFrame width="narrow">
+      <PublicFrame width={transfers.length ? "medium" : "narrow"}>
         <Unavailable
           title="Request unavailable"
           action={<Button onClick={() => setLooked((n) => n + 1)}>Try again</Button>}
         >
-          {error === "gone"
+          {error === "gone" || expired
             ? "This request has closed or was removed. Ask the person who sent it for a new link."
             : error}
         </Unavailable>
+        {transfers.length > 0 && (
+          <div className="transfer-list">
+            {busy && <p className="muted">Uploads already accepted can still finish.</p>}
+            {transfers.map((t) => (
+              <TransferCard key={t.id} t={t} onOpen={() => {}} />
+            ))}
+          </div>
+        )}
       </PublicFrame>
     );
   if (!info)

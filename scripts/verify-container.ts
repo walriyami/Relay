@@ -51,7 +51,12 @@ for (const name of [...Object.values(names), ...Object.values(volumes)])
   assert(name.startsWith("relay-verify-"), `Refusing to use ${name}.`);
 
 const docker = (...args: string[]) =>
-  execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  execFileSync("docker", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 180_000,
+    killSignal: "SIGKILL",
+  }).trim();
 // The same hardening as compose.yaml, so the image is exercised the way it is deployed.
 const hardened = [
   "--init",
@@ -62,6 +67,8 @@ const hardened = [
   "ALL",
   "--security-opt",
   "no-new-privileges:true",
+  "--pids-limit",
+  "128",
 ];
 const environment = (origin: string) => ["-e", `RELAY_ORIGIN=${origin}`, "-e", `RELAY_SECRET=${SECRET}`];
 const volumeMounts = ["-v", `${volumes.data}:/data`];
@@ -85,17 +92,20 @@ async function startContainer(name: string, storage: string[], extra: string[] =
     IMAGE,
   );
   await waitForHealth(origin, 60_000);
-  await setUpAdmin(origin, PASSWORD);
+  await setUpAdmin(origin, PASSWORD, () => docker("exec", name, "cat", "/data/setup.key"));
   const session = new Session(origin);
   await session.signIn("admin", PASSWORD, "Container verification");
   return session;
 }
-const partSize = (container: string, upload: string) =>
-  Number(
-    spawnSync("docker", ["exec", container, "stat", "-c", "%s", `/data/uploads/${upload}.part`], {
-      encoding: "utf8",
-    }).stdout.trim() || -1,
-  );
+const partSize = (container: string, upload: string) => {
+  const result = spawnSync("docker", ["exec", container, "stat", "-c", "%s", `/data/uploads/${upload}.part`], {
+    encoding: "utf8",
+    timeout: 30_000,
+    killSignal: "SIGKILL",
+  });
+  if (result.error) throw result.error;
+  return Number(result.stdout.trim() || -1);
+};
 
 async function createTransfer(session: Session, path: string, size: number) {
   return session.call(api.transfers.create, {
@@ -114,6 +124,52 @@ async function finishAndVerify(session: Session, transfer: { id: string; itemId:
   assert(got.sha256 === expected, "The downloaded SHA-256 differs from the source.");
 }
 
+/** Keep reading so server backpressure cannot masquerade as a heartbeat failure. */
+async function holdEvents(session: Session) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90_000);
+  const close = () => {
+    clearTimeout(timeout);
+    controller.abort();
+  };
+  try {
+    const response = await session.fetch(`${urls.events(session.tab)}&browser=${session.tab}`, {
+      signal: controller.signal,
+    });
+    assert(response.status === 200, `SSE admission returned ${response.status}.`);
+    const reader = response.body!.getReader();
+    let text = "";
+    while (!text.includes("event: ready")) {
+      const next = await reader.read();
+      assert(!next.done, "SSE ended before admission.");
+      text = (text + Buffer.from(next.value).toString()).slice(-1024);
+    }
+    let beat!: (received: boolean) => void;
+    const nextBeat = new Promise<boolean>((resolve) => (beat = resolve));
+    const ended = (async () => {
+      try {
+        if (text.includes("event: beat")) beat(true);
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+          text = (text + Buffer.from(next.value).toString()).slice(-1024);
+          if (text.includes("event: beat")) beat(true);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
+      } finally {
+        beat(false);
+      }
+    })();
+    // The caller may be waiting for nextBeat first; retain errors for its later ended await.
+    void ended.catch(() => {});
+    return { ended, nextBeat, timedOut: () => controller.signal.aborted, close };
+  } catch (error) {
+    close();
+    throw error;
+  }
+}
+
 const { step, timings } = stepper();
 const facts: Record<string, unknown> = { image: IMAGE, run };
 let builtImage = false;
@@ -127,6 +183,8 @@ try {
       const built = spawnSync("docker", ["build", "--progress", "plain", "-t", IMAGE, "."], {
         cwd: REPO,
         encoding: "utf8",
+        timeout: 15 * 60_000,
+        killSignal: "SIGKILL",
       });
       assert(built.status === 0, `docker build failed:\n${built.stderr.trim().split("\n").slice(-40).join("\n")}`);
       builtImage = true;
@@ -141,7 +199,7 @@ try {
     const second = spawnSync(
       "docker",
       ["run", "--name", names.second, ...hardened, ...environment("http://127.0.0.1:1"), ...volumeMounts, IMAGE],
-      { encoding: "utf8", timeout: 60_000 },
+      { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" },
     );
     facts.secondWriterMs = Date.now() - started;
     assert(second.status !== 0, "The second container kept running on a volume that is in use.");
@@ -215,18 +273,67 @@ try {
     assert(offsetAfter === 0, `The offset moved to ${offsetAfter} after ENOSPC.`);
   });
 
+  await step("real SQLite ENOSPC closes live streams without killing Relay", async () => {
+    const live = await holdEvents(session);
+    try {
+      docker(
+        "exec",
+        names.disk,
+        "node",
+        "-e",
+        "const fs=require('fs');const f=fs.openSync('/data/filler','w');const b=Buffer.alloc(4096,1);" +
+          "try{for(;;)fs.writeSync(f,b)}catch(e){if(e.code!=='ENOSPC')throw e}finally{fs.closeSync(f)}",
+      );
+      await live.ended;
+      assert(!live.timedOut(), "The durable heartbeat did not close its stream within 90 seconds of disk exhaustion.");
+      assert(
+        docker("inspect", "--format", "{{.State.Running}}", names.disk) === "true",
+        "Heartbeat disk failure killed Relay.",
+      );
+      assert(
+        docker("logs", names.disk).includes("Live connections failed"),
+        "No contained heartbeat failure was reported.",
+      );
+      const health = await session.fetch("/api/health");
+      assert(
+        health.status === 200 && ((await health.json()) as { status: string }).status === "degraded",
+        "Disk failure was not reported as degraded.",
+      );
+    } finally {
+      live.close();
+      docker("exec", names.disk, "rm", "/data/filler");
+    }
+    const recovered = await holdEvents(session);
+    try {
+      assert(await recovered.nextBeat, "No heartbeat resumed after disk space was restored.");
+      assert(!recovered.timedOut(), "Recovery heartbeat exceeded its deadline.");
+    } finally {
+      recovered.close();
+      await recovered.ended;
+    }
+    const transfer = await createTransfer(session, "recovered/heartbeat.bin", 1024);
+    const bytes = Buffer.alloc(1024, 7);
+    await upload(session, transfer.uploads[0].id, bufferSource(bytes));
+    await finishAndVerify(session, transfer, sha256(bytes));
+    facts.heartbeatEnospc = { contained: true, recovered: true };
+  });
+
   console.log(JSON.stringify({ passed: true, ...facts, timings }, null, 2));
 } catch (error) {
   process.exitCode = 1;
   console.error(`\nverify-container failed: ${errorStack(error)}`);
   console.error(JSON.stringify(facts, null, 2));
   for (const name of Object.values(names)) {
-    const logs = spawnSync("docker", ["logs", "--tail", "15", name], { encoding: "utf8" });
+    const logs = spawnSync("docker", ["logs", "--tail", "15", name], {
+      encoding: "utf8",
+      timeout: 30_000,
+      killSignal: "SIGKILL",
+    });
     if (logs.status === 0) console.error(`--- ${name} ---\n${logs.stdout}${logs.stderr}`);
   }
 } finally {
   const cleanup = (args: string[]) => {
-    const result = spawnSync("docker", args, { encoding: "utf8", timeout: 30_000 });
+    const result = spawnSync("docker", args, { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
     if (result.status !== 0 && !/No such (container|volume|image)/i.test(result.stderr ?? "")) {
       console.error(`Cleanup failed: docker ${args.join(" ")}: ${result.error ?? result.stderr}`);
       process.exitCode = 1;

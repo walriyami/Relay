@@ -12,7 +12,7 @@ import { requestOrigin } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken } from "../../lib/secrets.ts";
-import { DEFAULT_DEVICE_NAME, finishSignIn, insertSession } from "./sessions.ts";
+import { finishSignIn, insertSession, newDevice } from "./sessions.ts";
 import { addressKey, perAddress } from "./limits.ts";
 import { checkPassword } from "./passwords.ts";
 
@@ -300,7 +300,7 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
           stored.counter,
         );
         if (!updated.changes) fail(401, "This passkey is no longer registered with Relay.");
-        return insertSession(ctx, stored.user_id, body.deviceName ?? DEFAULT_DEVICE_NAME, "passkey");
+        return insertSession(ctx, stored.user_id, newDevice(req, body), "passkey");
       });
       return finishSignIn(ctx, reply, session);
     },

@@ -11,15 +11,15 @@ import {
   History,
   Link2,
   Loader2,
-  Monitor,
   Paperclip,
   PenLine,
+  Pencil,
   Plus,
   QrCode,
-  Smartphone,
   X,
 } from "lucide-react";
 import { useOnlineDevices, useSession } from "../../app/session";
+import { DeviceIcon, ThisDeviceName, useEditDevice } from "../../app/devices";
 import {
   addSelection,
   clearDraft,
@@ -33,15 +33,22 @@ import {
   useDraft,
   type DraftItem,
 } from "../../lib/draft";
-import { bytes, plural } from "../../lib/format";
-import { days, KEEP_DAYS, withCurrent } from "../../lib/options";
-import { NewLinkOptions, linkChoiceProblem, linkRequest, newLinkChoice } from "../../components/LinkOptions";
+import { autoName as nameOf, bytes, plural } from "../../lib/format";
+import { days, durations, KEEP_DAYS } from "../../lib/options";
+import {
+  NewLinkOptions,
+  NewLinkSummary,
+  linkChoiceProblem,
+  linkRequest,
+  newLinkChoice,
+  useLinkChoiceLimit,
+} from "../../components/LinkOptions";
 import { navigate, scrollMotion } from "../../lib/router";
 import { DocumentArt } from "../../components/DocumentArt";
 import {
   abandonedUploads,
   addLink,
-  contentName,
+  contentTop,
   dismiss,
   forgetAbandoned,
   awaitsChoice,
@@ -53,7 +60,7 @@ import {
   type Destination,
   type Transfer,
 } from "../../lib/transfers";
-import { onChange, useLive } from "../../lib/live";
+import { useLive } from "../../lib/live";
 import { useConnection } from "../../lib/connection";
 import { LIMITS, api, type Delivery, type DeliveryState } from "../../api";
 import { Thumbnail } from "../../components/Thumbnail";
@@ -70,8 +77,6 @@ const PAGE = 60;
 const touch = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
 
 const DRAFT_UNDO = "draft-undo";
-
-const isPhone = (name: string) => /phone|iphone|android|ipad|pixel|galaxy/i.test(name);
 
 /**
  * "4 files, 1 folder" for the picks, plus "and text" when there is text. Folders hide how much they
@@ -94,6 +99,7 @@ let composingKept = false;
 export function Composer({ children }: { children?: React.ReactNode }) {
   const { me, refreshMe, devicesLoading, devicesError, reloadDevices } = useSession();
   const devices = useOnlineDevices();
+  const editDevice = useEditDevice();
   const draft = useDraft();
   const list = useTransfers();
   // True while you compose the next thing; transfers still running show as one-line strips.
@@ -114,9 +120,11 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const folderInput = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [adding, setAdding] = useState(false);
-  const [link, setLink] = useState(() => newLinkChoice(me.prefs.linkDays));
+  const [linkDraft, setLink] = useState(() => newLinkChoice(me.prefs.linkDays));
+  const link = useLinkChoiceLimit(linkDraft, setLink);
   const [linkOptionsOpen, setLinkOptionsOpen] = useState(false);
-  const [linkError, setLinkError] = useState("");
+  // A link was asked for with settings that can't make one (a password still to type).
+  const [linkTried, setLinkTried] = useState(false);
   const defaultKeep = me.user.retentionDays || 0;
   const [keep, setKeep] = useState(defaultKeep);
   const [shown, setShown] = useState(PREVIEW);
@@ -160,10 +168,12 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const fileTotal = items.reduce((n, i) => n + (i.kind === "file" ? 1 : i.files.length), 0);
   const showing = list.length > 0 && !composing;
   // The name the transfer will get unless you type one, built from the whole selection.
-  const autoName = useMemo(() => {
+  // The selection's part is worked out when it changes, not on every keystroke in the text.
+  const top = useMemo(() => {
     const { files, folders } = draftFiles(items);
-    return contentName(files, folders, draft.text);
-  }, [items, draft.text]);
+    return contentTop(files, folders);
+  }, [items]);
+  const autoName = nameOf(top, draft.text);
   // What a reload or leaving the page stopped last time; said in place of an empty drop box until
   // you add something or dismiss it.
   const stopped = abandonedUploads();
@@ -171,16 +181,15 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     if (ready) forgetAbandoned();
   }, [ready]);
   // The server refuses a transfer that doesn't fit, so say so before anything is sent.
-  const free = Math.max(0, me.usage.quota - me.usage.used - me.usage.reserved);
+  const free = me.usage.available;
   const need = payloadBytes(size, draft.text);
   const noSpace = ready && !showing && need > free;
-  // Usage moves with every upload and deletion, here or elsewhere; check it while something waits
-  // to be sent, and when the server turned one down.
+  // Usage moves with every upload and deletion, here or elsewhere; check it when something comes to
+  // wait to be sent, and when the server turned one down. The session follows later changes itself.
   const rejected = list.some((t) => t.rejected);
   useEffect(() => {
     if (!(ready && !showing) && !rejected) return;
     void refreshMe().catch(() => {});
-    return onChange("items", () => void refreshMe().catch(() => {}));
   }, [ready, showing, rejected, refreshMe]);
   const allFinished = list.every((t) => !isBusy(t));
   // Nothing is running: each transfer is finished, or saved with only its destination to decide.
@@ -188,6 +197,20 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   // One finished item in the drop box can also go to other places from the panel.
   const finished =
     showing && allFinished && list.length === 1 && list[0].status === "done" && list[0].itemId ? list[0] : null;
+  const savedItem = useLive(
+    finished?.itemId ? api.items.get : null,
+    finished?.itemId ? { params: { id: finished.itemId } } : null,
+    ["items"],
+    null,
+  );
+  const finishedItem = savedItem.data?.id === finished?.itemId ? savedItem.data : null;
+  const checkingItem = !!finished && !finishedItem;
+  const draftLifetime = Math.min(keep || Infinity, me.user.limits.keepDays ?? Infinity);
+  const linkDeadline = finished
+    ? finishedItem?.expires
+    : Number.isFinite(draftLifetime)
+      ? Date.now() + draftLifetime * 86_400_000
+      : null;
   useEffect(() => {
     if (!list.length) setComposing(false);
   }, [list.length]);
@@ -308,7 +331,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     clearDraft();
     setName("");
     setLink(newLinkChoice(me.prefs.linkDays));
-    setLinkError("");
+    setLinkTried(false);
     setKeep(defaultKeep);
     setMode("files");
     setComposing(false);
@@ -330,9 +353,9 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     else send({ kind: "device", device: d.id, name: d.name });
   }
   function toLink() {
-    const problem = linkChoiceProblem(link);
-    if (problem) {
-      setLinkError(problem);
+    if (checkingItem) return;
+    if (linkChoiceProblem(link)) {
+      setLinkTried(true);
       setLinkOptionsOpen(true);
       return;
     }
@@ -600,26 +623,37 @@ export function Composer({ children }: { children?: React.ReactNode }) {
               <div className="composer-meta" role="group" aria-label="Details">
                 <NameChip name={name} placeholder={autoName} onChange={setName} />
                 <Menu
-                  label="Keep in Files"
+                  label="Move to Trash after"
                   trigger={
                     <>
                       <Clock size={14} aria-hidden />
-                      <span>{keep ? `Keep ${days(keep)}` : "Keep forever"}</span>
+                      <span>{keep ? `Trash after ${days(keep)}` : "Keep until deleted"}</span>
                       <ChevronDown size={14} aria-hidden />
                     </>
                   }
-                  items={withCurrent(KEEP_DAYS, defaultKeep).map((v) => ({
-                    label: v ? `Keep for ${days(v)}` : "Keep forever",
+                  items={durations(KEEP_DAYS, defaultKeep, me.user.limits.keepDays).map((v) => ({
+                    label: v ? days(v) : "Never",
                     icon: v === keep ? <Check size={16} /> : <span className="menu-icon-gap" />,
                     onSelect: () => setKeep(v),
                   }))}
                 />
               </div>
             )}
+            {ready && me.user.limits.keepDays !== null && (
+              <p className="field-hint">
+                Maximum file age: {days(me.user.limits.keepDays)} from the first saved content, including Trash.
+              </p>
+            )}
           </>
         )}
       </section>
-      <aside ref={panel} className={`send-panel card-surface${canSend ? "" : " is-idle"}`} aria-label="Send to">
+      {/* Empty drafts keep destinations discoverable. Only a transfer view without a reusable
+          finished item folds the mobile panel; send eligibility is enforced by each action. */}
+      <aside
+        ref={panel}
+        className={`send-panel card-surface${showing && !finished ? " is-showing-transfers" : ""}`}
+        aria-label="Send to"
+      >
         <h2 className="send-panel-title">{finished ? "Also send it to" : "Send to"}</h2>
         {summary && (
           <div
@@ -648,22 +682,41 @@ export function Composer({ children }: { children?: React.ReactNode }) {
           <DestinationRow
             icon={<Link2 size={18} />}
             label="Create link"
-            detail="Link, QR and code"
-            disabled={destinationsOff}
+            detail={
+              checkingItem ? (
+                savedItem.error ? (
+                  "Couldn’t check this item’s expiry."
+                ) : (
+                  "Checking item expiry…"
+                )
+              ) : (
+                <NewLinkSummary value={link} itemDeadline={linkDeadline} />
+              )
+            }
+            disabled={destinationsOff || checkingItem}
             busy={alsoBusy === "link"}
             onClick={toLink}
-            // The options can be chosen before there is anything to send; they apply to the next link.
-            extra={
-              <NewLinkOptions
-                value={link}
-                onChange={(next) => {
-                  setLink(next);
-                  setLinkError("");
-                }}
-                open={linkOptionsOpen}
-                onOpenChange={setLinkOptionsOpen}
-                error={linkError}
-              />
+            // The settings can be chosen before there is anything to send; they apply to the next link.
+            accessory={
+              checkingItem ? (
+                savedItem.error ? (
+                  <Button size="sm" onClick={savedItem.reload}>
+                    Retry
+                  </Button>
+                ) : null
+              ) : (
+                <NewLinkOptions
+                  value={link}
+                  itemDeadline={linkDeadline}
+                  onChange={(next) => {
+                    setLink(next);
+                    setLinkTried(false);
+                  }}
+                  open={linkOptionsOpen}
+                  onOpenChange={setLinkOptionsOpen}
+                  attempted={linkTried}
+                />
+              )
             }
           />
         )}
@@ -675,7 +728,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
           devices.map((d) => (
             <DestinationRow
               key={d.id}
-              icon={isPhone(d.name) ? <Smartphone size={18} /> : <Monitor size={18} />}
+              icon={<DeviceIcon device={d} />}
               label={d.name}
               detail={
                 sentTo(d.id) ? (
@@ -690,6 +743,19 @@ export function Composer({ children }: { children?: React.ReactNode }) {
               done={sentTo(d.id)}
               busy={alsoBusy === d.id}
               onClick={() => toDevice(d)}
+              revealAccessory
+              accessory={
+                <IconButton
+                  size="sm"
+                  label={`Edit ${d.name}`}
+                  icon={<Pencil size={15} aria-hidden />}
+                  onClick={(event) => {
+                    // Safari doesn't focus a clicked button; the editor returns focus to what had it.
+                    event.currentTarget.focus();
+                    editDevice(d);
+                  }}
+                />
+              }
             />
           ))
         ) : (
@@ -711,6 +777,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
           disabled={cut}
           onClick={() => setAdding(true)}
         />
+        <ThisDeviceName />
       </aside>
       {ready && !showing && !panelVisible && (
         <div className="send-jump">
@@ -735,7 +802,8 @@ function DestinationRow({
   quiet = false,
   done = false,
   busy = false,
-  extra,
+  accessory,
+  revealAccessory = false,
   onClick,
 }: {
   icon: React.ReactNode;
@@ -747,13 +815,19 @@ function DestinationRow({
   quiet?: boolean;
   done?: boolean;
   busy?: boolean;
-  extra?: React.ReactNode;
+  /** The row's own control (link settings), in place of the arrow at its end. */
+  accessory?: React.ReactNode;
+  /** The accessory is secondary (editing a device): it takes the arrow's place only while the row
+   *  is hovered or focused, except on touch screens, which can't hover. */
+  revealAccessory?: boolean;
   onClick: () => void;
 }) {
   // Named by its label; the detail ("Online now", "Sent") is read as its description.
   const id = useId();
   return (
-    <div className={`destination-wrap${extra ? " has-extra" : ""}`}>
+    <div
+      className={`destination-wrap${accessory && !revealAccessory ? " has-accessory" : ""}${revealAccessory ? " reveals-accessory" : ""}`}
+    >
       <button
         type="button"
         className={`destination${primary ? " is-primary" : ""}${quiet ? " is-quiet" : ""}${done ? " is-done" : ""}`}
@@ -775,9 +849,9 @@ function DestinationRow({
           <strong id={`${id}-label`}>{label}</strong>
           <small id={`${id}-detail`}>{detail}</small>
         </span>
-        <ChevronRight size={16} className="destination-go" aria-hidden />
+        {(!accessory || revealAccessory) && <ChevronRight size={16} className="destination-go" aria-hidden />}
       </button>
-      {extra && <div className="destination-extra">{extra}</div>}
+      {accessory && <div className="destination-accessory">{accessory}</div>}
     </div>
   );
 }

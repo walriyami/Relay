@@ -1,17 +1,22 @@
 // Receives tus bytes into <root>/uploads/<id>.part. SHA-256 and CRC32 are carried forward as each
 // chunk is written, so the last byte finishes an upload without re-reading it. Only the committed
 // state (fsynced bytes whose offset is in the database) survives a failed or superseded PATCH.
-import { createHash, type Hash } from "node:crypto";
-import { createReadStream, statSync, truncateSync, copyFileSync, renameSync, constants } from "node:fs";
-import { open } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash, randomUUID, type Hash } from "node:crypto";
+import { createReadStream, statSync, renameSync, type Stats } from "node:fs";
+import { open, stat, unlink, type FileHandle } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { crc32 } from "node:zlib";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
 import { fail } from "../../lib/errors.ts";
-import { unlinkIfPresent } from "../../storage/files.ts";
+import { fsyncDirectory, unlinkIfPresent } from "../../storage/files.ts";
+import { sameBytes, sameFile } from "../../storage/blobs.ts";
 import { publishItemChange } from "./publish.ts";
+import { startRetention } from "../library/retention.ts";
+import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
+
+const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 
 export type UploadRow = {
   id: string;
@@ -41,10 +46,20 @@ type Receiver = {
   /** Hash and CRC of the committed bytes. */
   hash: Hash;
   crc: number;
+  /** The part inode that `hash` describes, so a replaced or rewritten part is never published under it. */
+  source: Stats | null;
+  /** A failed detach may have observed different bytes, even if cancellation hid the change. */
+  rebuildRequired: boolean;
+  /**
+   * The part's directory entry may not be durable yet. Nothing committed refers to a part until its
+   * first offset commits, so that commit syncs the entry first; a file published whole never needs it.
+   */
+  unsyncedEntry: boolean;
   /** Resolves once the hash state matches the committed offset (rebuilt after a restart). */
   ready: Promise<void>;
   inflight: Inflight | null;
   publishing: Promise<void> | null;
+  cancelled: AbortController;
 };
 
 export type Received = { offset: number } | { conflict: number };
@@ -53,6 +68,10 @@ export class Receivers {
   private readonly ctx: Context;
   private readonly receivers = new Map<string, Receiver>();
   private readonly background = new Set<Promise<unknown>>();
+  private recovery = Promise.resolve();
+  private readonly closing = new AbortController();
+  private rebuilding = 0;
+  private readonly rebuildQueue: (() => void)[] = [];
   /** Bytes committed per minute over the last hour, for the admin overview. */
   private readonly perMinute = new Map<number, number>();
 
@@ -77,7 +96,17 @@ export class Receivers {
   private receiver(upload: UploadRow): Receiver {
     let receiver = this.receivers.get(upload.id);
     if (!receiver) {
-      receiver = { hash: createHash("sha256"), crc: 0, ready: Promise.resolve(), inflight: null, publishing: null };
+      receiver = {
+        hash: createHash("sha256"),
+        crc: 0,
+        source: null,
+        rebuildRequired: false,
+        unsyncedEntry: false,
+        ready: Promise.resolve(),
+        inflight: null,
+        publishing: null,
+        cancelled: new AbortController(),
+      };
       this.receivers.set(upload.id, receiver);
       if (upload.offset > 0) {
         const rebuilding = receiver;
@@ -91,31 +120,81 @@ export class Receivers {
     return receiver;
   }
 
-  /** Re-reads the committed bytes of a part file; a file that lost them restarts from zero. */
+  /** At most two rebuild streams, including requests arriving while startup recovery is running. */
   private async rebuild(upload: UploadRow, receiver: Receiver) {
-    const hash = createHash("sha256");
-    let crc = 0;
-    let read = 0;
-    let failed = false;
+    const signal = AbortSignal.any([this.closing.signal, receiver.cancelled.signal]);
+    if (this.rebuilding >= 2) await new Promise<void>((resolve) => this.rebuildQueue.push(resolve));
+    else this.rebuilding++;
     try {
-      for await (const chunk of createReadStream(this.partPath(upload.id), { start: 0, end: upload.offset - 1 })) {
-        hash.update(chunk as Buffer);
-        crc = crc32(chunk as Buffer, crc);
-        read += (chunk as Buffer).length;
+      this.checkCurrent(upload.id, receiver, signal);
+      const hash = createHash("sha256");
+      let crc = 0;
+      let read = 0;
+      let before: Stats | null = null;
+      try {
+        // The pathname can be replaced or rewritten while it is read; compare it before and after.
+        before = await stat(this.partPath(upload.id));
+        for await (const chunk of createReadStream(this.partPath(upload.id), {
+          start: 0,
+          end: upload.offset - 1,
+          signal,
+        })) {
+          hash.update(chunk as Buffer);
+          crc = crc32(chunk as Buffer, crc);
+          read += (chunk as Buffer).length;
+        }
+      } catch (error) {
+        // An I/O/access/resource error says nothing about the durable bytes. Leave both the file
+        // and committed offset intact; deleting this receiver allows the next request to retry.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          this.ctx.log.error({ err: error, upload: upload.id }, "upload hash rebuild unavailable; retry required");
+          fail(503, "Upload storage is temporarily unavailable. Retry shortly.");
+        }
       }
-    } catch (error) {
-      failed = true;
-      this.ctx.log.error({ err: error, upload: upload.id }, "upload hash rebuild failed; restarting it");
+      if (this.receivers.get(upload.id) !== receiver) return;
+      if (read === upload.offset) {
+        let current: Stats | null = null;
+        try {
+          current = await stat(this.partPath(upload.id));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        // Bytes that changed while being read, or a part replaced since, prove nothing about loss.
+        if (!before || !current || !sameBytes(before, current))
+          fail(503, "Upload storage changed while it was being read. Retry shortly.");
+        let source = current;
+        if (upload.offset === upload.size && current.size > upload.offset) {
+          // A crash may leave uncommitted trailing bytes even after every declared byte arrived.
+          // A correctly sized staged hardlink is already durable and needs no mutation or copy.
+          const file = await this.detach(upload, receiver, signal, current);
+          try {
+            this.checkCurrent(upload.id, receiver, signal);
+            if ((await file.stat()).size > upload.offset) {
+              await file.truncate(upload.offset);
+              await file.sync();
+            }
+            source = await file.stat();
+          } finally {
+            await file.close();
+          }
+        }
+        receiver.hash = hash;
+        receiver.crc = crc;
+        receiver.source = source;
+        return;
+      }
+      // Only an absent file or a successful read ending before the committed offset proves loss.
+      this.ctx.log.error({ upload: upload.id }, "upload file is missing or shorter than its offset; restarting it");
+      unlinkIfPresent(this.partPath(upload.id));
+      this.ctx.db.run("UPDATE uploads SET offset = 0 WHERE id = ?", upload.id);
+      receiver.hash = createHash("sha256");
+      receiver.crc = 0;
+      receiver.source = null;
+    } finally {
+      const next = this.rebuildQueue.shift();
+      if (next) next();
+      else this.rebuilding--;
     }
-    if (this.receivers.get(upload.id) !== receiver) return;
-    if (!failed && read === upload.offset) {
-      receiver.hash = hash;
-      receiver.crc = crc;
-      return;
-    }
-    this.ctx.log.error({ upload: upload.id }, "upload file is shorter than its offset; restarting it");
-    unlinkIfPresent(this.partPath(upload.id));
-    this.ctx.db.run("UPDATE uploads SET offset = 0 WHERE id = ?", upload.id);
   }
 
   /**
@@ -125,22 +204,50 @@ export class Receivers {
   async receive(id: string, offset: number, body: Readable, destroy: () => void): Promise<Received> {
     const initial = uploadRow(this.ctx, id);
     if (!initial || !isActive(initial)) fail(410, "This upload is no longer accepting data.");
+    ensureTransferAvailability(this.ctx, initial);
     const receiver = this.receiver(initial);
     await receiver.ready;
+    if (receiver.publishing) await receiver.publishing;
     while (receiver.inflight) {
       receiver.inflight.destroy();
       await receiver.inflight.settled;
     }
     let settle!: () => void;
-    const inflight: Inflight = { destroy, settled: new Promise((resolve) => (settle = resolve)) };
+    const abort = new AbortController();
+    const signal = AbortSignal.any([this.closing.signal, receiver.cancelled.signal, abort.signal]);
+    const disconnected = () => {
+      if (!body.readableEnded) abort.abort();
+    };
+    body.once("close", disconnected);
+    if (body.destroyed) disconnected();
+    const inflight: Inflight = {
+      destroy: () => {
+        abort.abort();
+        destroy();
+      },
+      settled: new Promise((resolve) => (settle = resolve)),
+    };
     receiver.inflight = inflight;
     try {
-      const upload = uploadRow(this.ctx, id);
+      let upload = uploadRow(this.ctx, id);
+      // A retry that waited for its own earlier request to publish the file learns where it ended.
+      if (upload?.completed != null && upload.state !== "cancelled") return { conflict: upload.size };
       if (!upload || !isActive(upload) || this.receivers.get(id) !== receiver)
         fail(410, "This upload is no longer accepting data.");
+      if (receiver.rebuildRequired) {
+        // Keep the same receiver and write slot until rebuilding finishes. Queued/superseding
+        // PATCHes must wait for this work before they can use its newly computed hash state.
+        await this.rebuild(upload, receiver);
+        receiver.rebuildRequired = false;
+        upload = uploadRow(this.ctx, id);
+        if (!upload || !isActive(upload) || this.receivers.get(id) !== receiver)
+          fail(410, "This upload is no longer accepting data.");
+      }
+      ensureTransferAvailability(this.ctx, upload);
       if (upload.offset !== offset) return { conflict: upload.offset };
-      return { offset: await this.write(upload, receiver, body) };
+      return { offset: await this.write(upload, receiver, body, signal) };
     } finally {
+      body.off("close", disconnected);
       if (receiver.inflight === inflight) receiver.inflight = null;
       settle();
       const upload = uploadRow(this.ctx, id);
@@ -148,17 +255,26 @@ export class Receivers {
     }
   }
 
-  private async write(upload: UploadRow, receiver: Receiver, body: Readable): Promise<number> {
+  private async write(upload: UploadRow, receiver: Receiver, body: Readable, signal: AbortSignal): Promise<number> {
     const hash = receiver.hash.copy();
     let crc = receiver.crc;
     let position = upload.offset;
-    this.detach(upload.id);
-    const file = await open(this.partPath(upload.id), constants.O_RDWR | constants.O_CREAT, 0o600);
+    let source: Stats;
+    const file = await this.detach(upload, receiver, signal, receiver.source).catch((error) => {
+      // A superseding PATCH can interrupt copying before the identity check detects a replaced
+      // or modified source. Never let the next PATCH reuse this potentially stale prefix hash.
+      receiver.rebuildRequired = upload.offset > 0;
+      throw error;
+    });
     try {
+      // Detachment verified the committed prefix, so its (possibly new) inode now carries the hash.
+      receiver.source = await file.stat();
+      this.checkCurrent(upload.id, receiver, signal);
       const { size } = await file.stat();
       if (size < position) throw new Error("Upload file is shorter than its committed offset.");
       if (size > position) await file.truncate(position);
       for await (const chunk of body as AsyncIterable<Buffer>) {
+        this.checkCurrent(upload.id, receiver, signal);
         if (position + chunk.length > upload.size) fail(413, "This request carries more bytes than the file's size.");
         if (position + chunk.length - upload.offset > LIMITS.chunkBytes)
           fail(413, "This request carries more than one chunk of data.");
@@ -171,6 +287,8 @@ export class Receivers {
         position += chunk.length;
       }
       await file.sync();
+      source = await file.stat();
+      this.checkCurrent(upload.id, receiver, signal);
     } catch (error) {
       await file.truncate(upload.offset).catch(() => {});
       throw error;
@@ -181,6 +299,17 @@ export class Receivers {
     const current = uploadRow(this.ctx, upload.id);
     if (!current || !isActive(current) || this.receivers.get(upload.id) !== receiver)
       fail(410, "This upload is no longer accepting data.");
+    ensureTransferAvailability(this.ctx, current);
+    // A part published whole is linked into the content store, whose staging syncs the entry. If
+    // publication fails, its committed offset outlives a lost entry only as a restart from zero.
+    if (receiver.unsyncedEntry && position < upload.size) {
+      await fsyncDirectory(dirname(this.partPath(upload.id)), true);
+      receiver.unsyncedEntry = false;
+      const latest = uploadRow(this.ctx, upload.id);
+      if (!latest || !isActive(latest) || this.receivers.get(upload.id) !== receiver)
+        fail(410, "This upload is no longer accepting data.");
+      ensureTransferAvailability(this.ctx, latest);
+    }
     this.ctx.db.run(
       "UPDATE uploads SET offset = ?, touched = CASE WHEN offset < ? THEN ? ELSE touched END WHERE id = ?",
       position,
@@ -190,7 +319,12 @@ export class Receivers {
     );
     receiver.hash = hash;
     receiver.crc = crc;
+    receiver.source = source;
     this.count(position - upload.offset);
+    // Bytes that came through someone's request link are what the owner received; the rest they sent.
+    this.ctx.usage.add(upload.owner, {
+      [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: position - upload.offset,
+    });
     if (position === upload.size) await this.publishOnce(upload.id, receiver);
     return position;
   }
@@ -208,87 +342,211 @@ export class Receivers {
 
   private async publish(id: string, receiver: Receiver) {
     const sha256 = receiver.hash.copy().digest("hex");
-    await this.ctx.blobs.stage(this.partPath(id), sha256);
+    const source = receiver.source;
+    // The hash describes one inode. Refuse to publish a part replaced or rewritten since: before
+    // staging, as staging links it (before it can replace a hash path) and after; a fresh receiver
+    // then rehashes the current bytes.
+    const changed = async (file: string) => {
+      const current = await stat(file).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return null;
+      });
+      return !source || !current || !sameBytes(source, current);
+    };
+    const refuse = (): never => {
+      if (this.receivers.get(id) === receiver) this.receivers.delete(id);
+      this.ctx.log.error({ upload: id }, "upload part changed after hashing; rehashing before publication");
+      fail(503, "Upload storage changed before the file could be saved. Retry shortly.");
+    };
+    if (await changed(this.partPath(id))) refuse();
+    try {
+      await this.ctx.blobs.stage(this.partPath(id), sha256, source!);
+    } catch (error) {
+      if (await changed(this.partPath(id))) refuse();
+      throw error;
+    }
+    if (await changed(this.partPath(id))) {
+      this.ctx.blobs.unstage(sha256, this.partPath(id));
+      refuse();
+    }
     const upload = uploadRow(this.ctx, id);
     if (!upload || !isActive(upload) || this.receivers.get(id) !== receiver) {
-      this.ctx.blobs.unstage(sha256);
+      this.ctx.blobs.unstage(sha256, this.partPath(id));
       fail(410, "This upload is no longer accepting data.");
     }
     try {
-      this.finalize(upload, sha256);
+      ensureTransferAvailability(this.ctx, upload);
+      this.finalize(upload, sha256, receiver.crc);
     } catch (error) {
-      this.ctx.blobs.unstage(sha256);
+      this.ctx.blobs.unstage(sha256, this.partPath(id));
+      ensureTransferAvailability(this.ctx, upload);
       throw error;
     }
   }
 
-  private finalize(upload: UploadRow, sha256: string) {
-    const receiver = this.receivers.get(upload.id)!;
+  private finalize(upload: UploadRow, sha256: string, crc: number) {
     const file = this.partPath(upload.id);
     if (statSync(file).size !== upload.size) throw new Error("Upload file size does not match its length.");
-    const now = Date.now();
     this.ctx.db.tx(() => {
-      this.ctx.blobs.adopt(file, sha256, upload.size, receiver.crc);
+      const now = Date.now();
+      assertTransferAvailability(this.ctx, upload, now);
+      this.ctx.blobs.adopt(file, sha256, upload.size, crc);
       this.ctx.db.run(
         "UPDATE nodes SET state = 'ready', blob = ? WHERE id = ? AND state = 'pending'",
         sha256,
         upload.node,
       );
       this.ctx.db.run("UPDATE uploads SET offset = size, completed = ?, touched = ? WHERE id = ?", now, now, upload.id);
+      startRetention(this.ctx, upload.item, now);
     });
     this.receivers.delete(upload.id);
     unlinkIfPresent(file);
+    this.ctx.usage.add(upload.owner, { files: 1 });
     publishItemChange(this.ctx, upload.owner, upload.item);
   }
 
-  /** Finishes an upload whose bytes all arrived but which was not published (a crash between the two). */
+  /**
+   * Finishes an upload whose bytes all arrived but which was not published (a crash between the two).
+   * A publication already under way is waited for, so the caller sees where it ended.
+   */
   async settle(id: string) {
+    await this.receivers.get(id)?.publishing?.catch(() => {});
     const upload = uploadRow(this.ctx, id);
-    if (!upload || !isActive(upload) || upload.offset !== upload.size) return;
+    if (!upload || !isActive(upload)) return;
+    ensureTransferAvailability(this.ctx, upload);
+    if (upload.offset !== upload.size) return;
     const receiver = this.receiver(upload);
     await receiver.ready;
     while (receiver.inflight) await receiver.inflight.settled;
     const current = uploadRow(this.ctx, id);
-    if (current && isActive(current) && current.offset === current.size && this.receivers.get(id) === receiver)
+    if (
+      !this.closing.signal.aborted &&
+      current &&
+      isActive(current) &&
+      current.offset === current.size &&
+      this.receivers.get(id) === receiver
+    )
       await this.publishOnce(id, receiver);
   }
 
   /** Forgets an upload that will receive no more bytes: stops its PATCH and removes its part file. */
   discard(id: string) {
-    this.receivers.get(id)?.inflight?.destroy();
+    const receiver = this.receivers.get(id);
+    receiver?.cancelled.abort();
+    receiver?.inflight?.destroy();
     this.receivers.delete(id);
-    unlinkIfPresent(this.partPath(id));
-  }
-
-  /** After a restart: trims part files to their committed offsets and resumes their hash state. */
-  restore(upload: UploadRow) {
-    const file = this.partPath(upload.id);
     try {
-      if (statSync(file).size > upload.offset) {
-        this.detach(upload.id);
-        truncateSync(file, upload.offset);
-      }
+      unlinkIfPresent(this.partPath(id));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    this.receiver(upload);
-    if (upload.offset === upload.size) void this.track(this.settle(upload.id));
-  }
-
-  /** Never mutate an inode that may already be linked into the content store. */
-  private detach(id: string) {
-    const file = this.partPath(id);
-    try {
-      if (statSync(file).nlink <= 1) return;
-      const fresh = `${file}.detached`;
+      // Cancellation is already committed. Startup recovery removes orphan parts; neither cleanup
+      // nor logging failure should make the caller retry a successful cancellation.
       try {
-        copyFileSync(file, fresh);
-        renameSync(fresh, file);
-      } finally {
-        unlinkIfPresent(fresh);
+        this.ctx.log.error({ err: error, upload: id }, "Upload part removal pending; recovery will retry");
+      } catch {
+        // The durable cancelled/deleted upload remains the source of truth for recovery.
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  /** Partial uploads rebuild lazily on the next PATCH. Completed parts publish serially. */
+  restore(upload: UploadRow) {
+    if (upload.offset !== upload.size) return;
+    this.recovery = this.track(
+      this.recovery.then(async () => {
+        if (!this.closing.signal.aborted) await this.settle(upload.id);
+      }),
+    );
+  }
+
+  private checkCurrent(id: string, receiver: Receiver, signal: AbortSignal) {
+    signal.throwIfAborted();
+    if (this.receivers.get(id) !== receiver) fail(410, "This upload is no longer accepting data.");
+  }
+
+  /** Opens a writable part without ever mutating a linked content-store inode. */
+  private async detach(
+    upload: UploadRow,
+    receiver: Receiver,
+    signal: AbortSignal,
+    expected: Stats | null,
+  ): Promise<FileHandle> {
+    const file = this.partPath(upload.id);
+    const temporary = `${file}.${randomUUID()}.detached`;
+    let source: FileHandle | null = null;
+    let fresh: FileHandle | null = null;
+    try {
+      this.checkCurrent(upload.id, receiver, signal);
+      try {
+        source = await open(file, "r+");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || upload.offset !== 0) throw error;
+      }
+      const before = await source?.stat();
+      this.checkCurrent(upload.id, receiver, signal);
+      // The committed prefix must come from the inode the carried hash describes. Its size and mtime
+      // may differ: an interrupted write leaves or truncates uncommitted bytes past the offset.
+      if (expected && (!before || !sameInode(before, expected)))
+        fail(503, "Upload storage changed while preparing a write. Retry shortly.");
+      // With no committed bytes, an existing part may be one whose entry was never synced.
+      if (upload.offset === 0) receiver.unsyncedEntry = true;
+      if (before && before.nlink <= 1) {
+        const result = source!;
+        source = null;
+        return result;
+      }
+      if (before && before.size < upload.offset) throw new Error("Upload file is shorter than its committed offset.");
+      fresh = await open(temporary, "wx+", 0o600);
+      // Copy only the committed prefix, with bounded memory and an abort check between async I/O.
+      // New uploads also use this private file, so an in-flight open cannot recreate a discarded part.
+      const buffer = Buffer.allocUnsafe(Math.min(256 * 1024, upload.offset));
+      for (let position = 0; position < upload.offset;) {
+        this.checkCurrent(upload.id, receiver, signal);
+        const { bytesRead } = await source!.read(
+          buffer,
+          0,
+          Math.min(buffer.length, upload.offset - position),
+          position,
+        );
+        if (!bytesRead) throw new Error("Upload file is shorter than its committed offset.");
+        for (let written = 0; written < bytesRead;) {
+          this.checkCurrent(upload.id, receiver, signal);
+          const { bytesWritten } = await fresh.write(buffer, written, bytesRead - written, position + written);
+          written += bytesWritten;
+        }
+        position += bytesRead;
+      }
+      // A new upload's part starts empty: there is nothing to make durable until its bytes arrive.
+      if (upload.offset > 0) await fresh.sync();
+      this.checkCurrent(upload.id, receiver, signal);
+      let current;
+      try {
+        current = statSync(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (before ? !current || !sameFile(before, current) : current)
+        fail(503, "Upload storage changed while preparing a write. Retry shortly.");
+      // Only this constant-size atomic publication is synchronous: discard cannot interleave
+      // between the identity/abort check and rename and accidentally resurrect the part.
+      renameSync(temporary, file);
+      if (upload.offset > 0) await fsyncDirectory(dirname(file), true);
+      const result = fresh;
+      fresh = null;
+      return result;
+    } finally {
+      try {
+        await source?.close();
+      } finally {
+        if (fresh) {
+          try {
+            await fresh.close();
+          } finally {
+            await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw error;
+            });
+          }
+        }
+      }
     }
   }
 
@@ -306,6 +564,7 @@ export class Receivers {
 
   /** Stops in-flight PATCHes and waits for background recovery, before the database closes. */
   async close() {
+    this.closing.abort();
     const settling: Promise<void>[] = [];
     for (const receiver of this.receivers.values())
       if (receiver.inflight) {

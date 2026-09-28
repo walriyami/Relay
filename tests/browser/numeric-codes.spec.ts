@@ -48,7 +48,7 @@ test("the deployment setting rotates open handoffs, updates every code field and
     const requestUrl = await copyShareUrl(requestHandoff);
     const oldRequestCode = await requestCode.innerText();
 
-    await invitePage.goto("/admin");
+    await invitePage.goto("/admin/members");
     await invitePage.getByRole("button", { name: "Invite member" }).click();
     await invitePage.getByRole("dialog").getByRole("button", { name: "Create invitation" }).click();
     const inviteHandoff = invitePage.getByRole("dialog", { name: "Invitation ready" });
@@ -59,16 +59,16 @@ test("the deployment setting rotates open handoffs, updates every code field and
 
     await guest.goto("/");
     await expect(guest.locator(".code-entry-field-slot")).toHaveCount(6);
-    await admin.goto("/admin");
+    await admin.goto("/admin/settings");
     await admin.getByRole("radio", { name: "4 digits · 1234" }).click();
     await admin.getByRole("button", { name: "Save code length" }).click();
     const confirmation = admin.getByRole("dialog", { name: "Use 4-digit codes?" });
-    await expect(confirmation).toContainText("their links and QR codes will keep working");
+    await expect(confirmation).toContainText("Links and QR codes keep working");
     await confirmation.getByRole("button", { name: "Cancel" }).click();
     expect((await (await page.request.get(api.pickup.config.path)).json()).codeLength).toBe(6);
     await admin.getByRole("button", { name: "Save code length" }).click();
     await confirmation.getByRole("button", { name: "Replace codes" }).click();
-    await expect(admin.getByText("Code length saved. Existing codes replaced.")).toBeVisible();
+    await expect(admin.getByText("Code length preference saved. Use the current codes shown in Relay.")).toBeVisible();
     await expect(shareCode).toHaveText(/^[0-9]{4}$/);
     await expect(deviceHandoff.locator(".share-access-code .code")).toHaveText(/^[0-9]{4}$/);
     await expect(requestCode).toHaveText(/^[0-9]{4}$/);

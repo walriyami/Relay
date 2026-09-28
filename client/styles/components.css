@@ -646,6 +646,7 @@ textarea.input {
   max-width: 1200px;
 }
 .modal-head {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   gap: var(--s3);
@@ -671,11 +672,13 @@ textarea.input {
   flex-shrink: 0;
 }
 .modal-body {
+  min-height: 0;
   padding: var(--s2) var(--s5) var(--s5);
   overflow: auto;
   overscroll-behavior: contain;
 }
 .modal-foot {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -842,6 +845,34 @@ textarea.input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Dialog notifications take layout space, leaving the body scrollable and footer reachable. */
+.toaster-modal {
+  flex-shrink: 0;
+  max-height: min(30dvh, 240px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  position: static;
+  z-index: auto;
+  align-items: stretch;
+  padding: 0 var(--s5) var(--s3);
+  pointer-events: auto;
+}
+.toaster-modal:empty {
+  display: none;
+}
+.toaster-modal .toast {
+  flex-shrink: 0;
+  width: auto;
+  box-shadow: none;
+}
+.toaster-modal .toast-text strong {
+  display: block;
+  overflow: visible;
+}
+.toaster-modal .toast-text .muted {
+  overflow: visible;
+  white-space: normal;
+}
 .toast-error {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
 }
@@ -857,6 +888,9 @@ textarea.input {
   }
   .toast {
     width: auto;
+  }
+  .toaster-modal {
+    padding-inline: var(--s4);
   }
 }
 

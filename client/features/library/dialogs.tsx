@@ -1,20 +1,26 @@
-import { useState } from "react";
-import { api, call, type Link } from "../../api";
-import { date, until } from "../../lib/format";
+import { useEffect, useState } from "react";
+import { api, call, type ItemSummary, type Link } from "../../api";
+import { dateTime, until } from "../../lib/format";
 import { notifyChange } from "../../lib/live";
 import { days, keepOptions } from "../../lib/options";
 import { useSession } from "../../app/session";
 import { Button, Modal, Segmented, toast, useCloseModal } from "../../components/ui";
-import { LinkOptionsFields, linkChoiceProblem, type LinkChoice } from "../../components/LinkOptions";
+import {
+  LinkOptionsFields,
+  linkChoiceProblem,
+  useLinkChoiceLimit,
+  type LinkChoice,
+} from "../../components/LinkOptions";
 import { errorToast } from "./actions";
 
-const DAY = 86400000;
-type Kept = { id: string; created: number; expires: number | null };
+import { boundedOptions, effectiveExpiry } from "../../lib/lifecycle";
+import { useExpiryClock } from "../../lib/refresh";
+type Kept = Pick<ItemSummary, "id" | "expires" | "firstSavedAt" | "maxAgeDays" | "hardExpires">;
 
-/** How long an item is kept in Files; starts from its current setting, never silently from Forever. */
+/** When an item moves to Trash; starts from its current setting, never silently from "Never". */
 export function KeepDialog({ item, onClose }: { item: Kept; onClose: () => void }) {
   return (
-    <Modal title="Keep in Files for" size="sm" onClose={onClose}>
+    <Modal title="Move to Trash after" size="sm" onClose={onClose}>
       <KeepBody item={item} />
     </Modal>
   );
@@ -24,37 +30,60 @@ function KeepBody({ item }: { item: Kept }) {
   const { me } = useSession();
   // Only the date is stored, and a new choice counts from now, so a dated item has no chosen
   // duration to show: its date is shown instead, and any choice replaces it.
-  const current = item.expires ? null : 0;
-  const options = keepOptions(null);
-  const [value, setValue] = useState<number | null>(current);
+  const current = item.expires || item.firstSavedAt === null ? null : 0;
+  const max =
+    item.maxAgeDays === null ? me.user.limits.keepDays : Math.min(item.maxAgeDays, me.user.limits.keepDays ?? Infinity);
+  const now = useExpiryClock([item.expires ?? Infinity, item.hardExpires ?? Infinity]);
+  const expired = item.firstSavedAt !== null && item.expires !== null && item.expires <= now;
+  const options = boundedOptions(keepOptions(null, max), item.hardExpires, now);
+  const [chosen, setValue] = useState<number | null>(current);
+  const value = chosen === null ? null : max === null ? chosen : Math.min(chosen || Infinity, max);
+  useEffect(() => {
+    if (value !== chosen) setValue(value);
+  }, [value, chosen]);
   const [busy, setBusy] = useState(false);
   const changed = value !== null && value !== current;
   return (
     <div className="stack keep-dialog">
       <p className="muted">
-        {!changed
-          ? item.expires
-            ? `Moves to Trash on ${date(item.expires)} (${until(item.expires)}).`
-            : "Kept until you delete it."
-          : value
-            ? `Moves to Trash on ${date(Date.now() + value * DAY)}, counted from now.`
-            : "Kept until you delete it."}{" "}
-        Items in Trash are deleted forever after {days(me.user.trashDays)}, and their links stop working.
+        {item.firstSavedAt === null
+          ? "The clock starts when the first content is saved."
+          : expired
+            ? "This item has expired and cannot be renewed."
+            : (() => {
+                const expiry = changed ? effectiveExpiry(value || null, item.hardExpires, now) : item.expires;
+                return expiry ? `Moves to Trash on ${dateTime(expiry)}.` : "Kept until you delete it.";
+              })()}{" "}
+        {item.hardExpires !== null
+          ? `Deleted forever by ${dateTime(item.hardExpires)}, including time in Trash. Renewal and restore cannot extend this deadline.`
+          : max !== null
+            ? `Maximum total age is ${days(max)} from the first saved content, including Trash.`
+            : `Trash is kept for up to ${days(me.user.trashDays)}.`}
       </p>
-      <Segmented label="Keep for" value={value ?? -1} options={options} onChange={setValue} />
+      {!expired && <Segmented label="Move to Trash after" value={value ?? -1} options={options} onChange={setValue} />}
       <div className="row end">
         <Button onClick={close}>Cancel</Button>
         <Button
           variant="primary"
           busy={busy}
+          disabled={expired}
           onClick={async () => {
             if (!changed) return close();
             setBusy(true);
             try {
-              await call(api.items.update, { params: { id: item.id }, body: { retentionDays: value || null } });
+              const saved = await call(api.items.update, {
+                params: { id: item.id },
+                body: { retentionDays: value || null },
+              });
               notifyChange("items");
               close();
-              toast(value ? `Moves to Trash on ${date(Date.now() + value * DAY)}` : "Kept until you delete it");
+              toast(
+                saved.firstSavedAt === null
+                  ? "Saved. The clock starts with the first saved content."
+                  : saved.expires
+                    ? `Moves to Trash on ${dateTime(saved.expires)}`
+                    : "Kept until you delete it",
+              );
             } catch (error) {
               errorToast(error);
               setBusy(false);
@@ -73,9 +102,10 @@ function KeepBody({ item }: { item: Kept }) {
  * sent, so saving never re-dates a link whose expiry was left alone.
  */
 export function LinkSettingsDialog({ share, onClose }: { share: Link; onClose: () => void }) {
-  const [choice, setChoice] = useState<LinkChoice>({});
+  const [draft, setChoice] = useState<LinkChoice>({});
+  const choice = useLinkChoiceLimit(draft, setChoice);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [attempted, setAttempted] = useState(false);
   const changes: LinkChoice = {
     ...(choice.days !== undefined ? { days: choice.days } : {}),
     ...(choice.password !== undefined ? { password: choice.password } : {}),
@@ -87,21 +117,29 @@ export function LinkSettingsDialog({ share, onClose }: { share: Link; onClose: (
   const problem = linkChoiceProblem(changes);
   const changed = Object.keys(changes).length > 0;
   async function save() {
+    if (!share.available || Math.min(share.expires ?? Infinity, share.item?.expires ?? Infinity) <= Date.now()) {
+      toast("This link is no longer available.");
+      return onClose();
+    }
     if (!changed) return onClose();
-    if (problem) return setError(problem);
+    if (problem) return setAttempted(true);
     setBusy(true);
     try {
       const saved = await call(api.links.update, { params: { id: share.id }, body: changes });
       notifyChange("links");
       notifyChange("items");
+      const expiry = Math.min(saved.expires ?? Infinity, saved.item?.expires ?? Infinity);
       toast(
-        typeof changes.password === "string"
-          ? "Password changed. People need the new one to open the link."
-          : changes.days === undefined
-            ? "Link settings saved"
-            : saved.expires === null
-              ? "The link now works until you turn it off"
-              : `Link now expires ${until(saved.expires)}`,
+        [
+          typeof changes.password === "string" ? "Password changed." : "Link settings saved.",
+          !saved.available
+            ? "This link is no longer available."
+            : expiry <= Date.now()
+              ? "This link has expired."
+              : Number.isFinite(expiry)
+                ? `Expires on ${dateTime(expiry)} (${until(expiry)}).`
+                : "Works until you turn it off.",
+        ].join(" "),
       );
       onClose();
     } catch (e) {
@@ -133,16 +171,13 @@ export function LinkSettingsDialog({ share, onClose }: { share: Link; onClose: (
         <LinkOptionsFields
           value={choice}
           current={share}
+          itemDeadline={share.item?.expires}
+          attempted={attempted}
           onChange={(next) => {
             setChoice(next);
-            setError("");
+            setAttempted(false);
           }}
         />
-        {error && (
-          <p className="field-error" role="alert">
-            {error}
-          </p>
-        )}
       </form>
     </Modal>
   );

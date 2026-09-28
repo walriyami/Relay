@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Clock, Download, Link2, MoreHorizontal, Pencil, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
 import { api, type ItemDetail, type Link } from "../../api";
-import { ago, bytes, date } from "../../lib/format";
+import { ago, bytes, dateTime } from "../../lib/format";
 import { ownerSource } from "../../lib/source";
+import { useExpiryClock } from "../../lib/refresh";
 import { useLive } from "../../lib/live";
 import { useOnlineDevices, useSession } from "../../app/session";
 import {
@@ -27,7 +28,6 @@ import { ItemShareDialog } from "./ItemShareDialog";
 import { ContentView, isSingleFile } from "../../components/ContentView";
 import { Button, LoadFailed, Menu, Modal, Spinner, useCloseModal } from "../../components/ui";
 
-const DAY = 86400000;
 /** The item's own address; opening it (after a reload, or from a shared URL) reopens this popup. */
 export const itemAddress = (id: string, trash = false) => `${trash ? "/trash" : "/files"}/${encodeURIComponent(id)}`;
 
@@ -50,14 +50,13 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
   const unavailable = errorStatus !== null && [401, 403, 404, 410].includes(errorStatus);
   const data = unavailable ? null : cached;
   const single = !!data && isSingleFile(data.nodes);
-  const { me } = useSession();
   return (
     <Modal
       size="xl"
       className={`item-window${single ? " is-single" : ""}`}
       url={url ?? itemAddress(id)}
       title={data ? data.name : error ? "Unavailable" : "Loading…"}
-      subtitle={data ? summary(data, me.user.trashDays) : undefined}
+      subtitle={data ? summary(data) : undefined}
       onClose={onClose}
       footer={data ? data.trashed ? <TrashFooter c={data} /> : <ItemFooter c={data} /> : undefined}
     >
@@ -82,13 +81,15 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
   );
 }
 
-function summary(c: ItemDetail, trashDays: number) {
+function summary(c: ItemDetail) {
   const parts = [];
   if (itemParts(c) > 1 || c.topFolders) parts.push(composition(c.topFiles, c.topFolders, c.texts));
   if (c.files) parts.push(`${c.topFolders ? allFiles(c.files, c.topFiles) + " · " : ""}${bytes(c.bytes)}`);
   parts.push(`Added ${ago(c.created)}`);
-  if (c.trashed) parts.push(`Deleted forever on ${date(c.trashed + trashDays * DAY)}`);
-  else if (c.expires) parts.push(`Moves to Trash ${date(c.expires)}`);
+  if (c.trashed && c.purgeAt !== null) parts.push(`Deleted forever on ${dateTime(c.purgeAt)}`);
+  else if (c.firstSavedAt === null) parts.push("Clock starts with the first saved content");
+  else if (c.expires) parts.push(`Moves to Trash ${dateTime(c.expires)}`);
+  if (!c.trashed && c.hardExpires !== null) parts.push(`Deleted forever by ${dateTime(c.hardExpires)}`);
   return parts.join(" · ");
 }
 
@@ -125,7 +126,7 @@ function ItemFooter({ c }: { c: ItemDetail }) {
           items={[
             { label: "Rename…", icon: <Pencil size={16} />, onSelect: () => void renameItem(c).catch(errorToast) },
             { label: "Add files…", icon: <Plus size={16} />, onSelect: () => void addFilesTo(c).catch(errorToast) },
-            { label: "Keep for…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
+            { label: "Move to Trash after…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
             ...(c.uploading ? [] : devices).map((device) => ({
               label: `Send to ${device.name}`,
               icon: <Send size={16} />,
@@ -159,6 +160,8 @@ function ItemFooter({ c }: { c: ItemDetail }) {
 function TrashFooter({ c }: { c: ItemDetail }) {
   const close = useCloseModal();
   const [busy, setBusy] = useState("");
+  const now = useExpiryClock([c.hardExpires ?? Infinity, c.purgeAt ?? Infinity]);
+  const expired = Math.min(c.hardExpires ?? Infinity, c.purgeAt ?? Infinity) <= now;
   async function run(label: string, work: () => Promise<unknown>) {
     setBusy(label);
     try {
@@ -185,6 +188,7 @@ function TrashFooter({ c }: { c: ItemDetail }) {
         variant="primary"
         icon={<RotateCcw size={16} />}
         busy={busy === "restore"}
+        disabled={expired}
         onClick={() => void run("restore", () => restoreItem(c).then(close))}
       >
         Restore

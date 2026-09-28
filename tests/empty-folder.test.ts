@@ -76,10 +76,14 @@ test("an empty folder can be saved, shared as a public ZIP, and accepted on anot
     const base = await instance.app.listen({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve, reject) => {
       const cookie = [...phone.cookies].map(([key, value]) => `${key}=${value}`).join("; ");
-      const req = request(base + urls.events(phone.tab), { agent: false, headers: { cookie } }, (res) => {
-        res.once("data", () => resolve());
-        res.resume();
-      });
+      const req = request(
+        base + urls.events(phone.tab) + `&browser=${phone.tab}`,
+        { agent: false, headers: { cookie, host: "relay.test" } },
+        (res) => {
+          res.once("data", () => resolve());
+          res.resume();
+        },
+      );
       req.on("error", reject);
       req.end();
     });

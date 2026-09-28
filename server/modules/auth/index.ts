@@ -19,14 +19,13 @@ export function registerAuth(app: FastifyInstance, ctx: Context) {
 }
 
 /** Removes credentials that can no longer be used. Signed-out devices stay listed as history. */
-export function sweepAuth(ctx: Context, now: number) {
-  ctx.db.tx(() => {
-    ctx.db.run("DELETE FROM sessions WHERE expires <= ?", now);
-    // Used rows remain until their normal expiry so the issuing device can confirm which device
-    // redeemed its code. Revoked and expired codes no longer need a status record.
-    ctx.db.run("DELETE FROM login_codes WHERE expires <= ? OR revoked IS NOT NULL", now);
-    ctx.db.run("DELETE FROM invites WHERE expires <= ?", now);
-    ctx.db.run("DELETE FROM guest_grants WHERE expires <= ?", now);
-  });
+export async function sweepAuth(ctx: Context, now: number) {
   challengesOf(ctx).sweep(now);
+  await ctx.db.deleteBatched("sessions", "expires <= ?", now);
+  // Used rows remain until their normal expiry so the issuing device can confirm which device
+  // redeemed its code. Revoked and expired codes no longer need a status record.
+  await ctx.db.deleteBatched("login_codes", "expires <= ?", now);
+  await ctx.db.deleteBatched("login_codes", "revoked IS NOT NULL");
+  await ctx.db.deleteBatched("invites", "expires <= ?", now);
+  await ctx.db.deleteBatched("guest_grants", "expires <= ?", now);
 }

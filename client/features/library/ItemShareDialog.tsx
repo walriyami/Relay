@@ -3,13 +3,14 @@ import { api, call, type Link } from "../../api";
 import { FileShareDialog } from "../../components/FileShareDialog";
 import { confirmDialog, toast } from "../../components/ui";
 import { notifyChange, useLive } from "../../lib/live";
+import { useExpiryClock } from "../../lib/refresh";
 import { errorToast } from "./actions";
 import { LinkSettingsDialog } from "./dialogs";
 
 /** Why a link that was on screen stopped working. */
 function stopped(s: Link) {
   if (s.revoked) return "This link was turned off.";
-  if (s.expires !== null && s.expires <= Date.now()) return "This link has expired.";
+  if (Math.min(s.expires ?? Infinity, s.item?.expires ?? Infinity) <= Date.now()) return "This link has expired.";
   return "This link stopped working because its item left Files.";
 }
 
@@ -24,7 +25,9 @@ export function ItemShareDialog({ share, onClose }: { share: Link; onClose: () =
   const [editing, setEditing] = useState(false);
   // A link created a moment ago may not be in the list yet; until then, show what we have.
   const live = data.find((l) => l.id === share.id) ?? share;
-  const dead = !live.available;
+  const deadline = Math.min(live.expires ?? Infinity, live.item?.expires ?? Infinity);
+  const now = useExpiryClock([deadline]);
+  const dead = !live.available || deadline <= now;
   useEffect(() => {
     if (!dead) return;
     toast(stopped(live));
@@ -34,7 +37,7 @@ export function ItemShareDialog({ share, onClose }: { share: Link; onClose: () =
   async function revoke() {
     const ok = await confirmDialog({
       title: "Turn off this link?",
-      body: "People with the link or code will no longer be able to open it. Your files stay in Files.",
+      body: "People with the link or code will no longer be able to open it. Downloads already started may finish. Your files stay in Files.",
       confirm: "Turn off link",
       danger: true,
     });

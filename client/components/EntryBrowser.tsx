@@ -9,7 +9,9 @@ import { Button, InlineEmpty } from "./ui";
 /** A folder with the files anywhere beneath it. */
 export type FolderInfo = { node: Node; files: number; size: number };
 const PAGE = 90;
-const byName = (a: Node, b: Node) => a.name.localeCompare(b.name);
+// One collator compares as localeCompare does, without resolving the locale on every comparison.
+const collator = new Intl.Collator();
+const byName = (a: Node, b: Node) => collator.compare(a.name, b.name);
 
 // Folder-aware grid of files, built from the node tree. Text nodes are shown elsewhere as inline blocks.
 export function EntryBrowser({
@@ -59,9 +61,14 @@ export function EntryBrowser({
   }, [nodes]);
   // A folder that is no longer there (the item was reloaded without it) falls back to the top level.
   const current = folder && byId.has(folder) ? folder : root;
-  const inside = children.get(current) || [];
-  const folders = inside.filter((n) => n.kind === "folder").sort(byName);
-  const files = inside.filter((n) => n.kind === "file").sort(byName);
+  // Sorted once per folder shown, not on every render: a folder can hold thousands of files.
+  const { folders, files } = useMemo(() => {
+    const inside = children.get(current) || [];
+    return {
+      folders: inside.filter((n) => n.kind === "folder").sort(byName),
+      files: inside.filter((n) => n.kind === "file").sort(byName),
+    };
+  }, [children, current]);
   const crumbs: Node[] = [];
   for (let at = current; at && at !== root; at = byId.get(at)?.parent ?? null) crumbs.unshift(byId.get(at)!);
   const items = [...folders, ...files];

@@ -45,6 +45,12 @@ export function FileShareDialog({
         <>
           <span>{linkSummary(share, now)}</span>
           <LinkReach link={share} />
+          {share.visitorLimit !== null && (
+            <span>
+              Visitors are recognised by browser cookies. Previously admitted browsers keep access if the limit is
+              reduced. Downloads already started may finish.
+            </span>
+          )}
         </>
       }
       url={shareUrl(share.token)}

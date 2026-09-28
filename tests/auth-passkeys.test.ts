@@ -249,7 +249,7 @@ test("passkey challenges expire", async () => {
     const owner = await member(instance, "nora");
     const registration = await owner.call(api.account.passkeyOptions, { body: { password: "Member-password-only" } });
     const response = new SoftwareAuthenticator().create(registration.options as RegistrationOptions);
-    sweepAuth(instance.ctx, Date.now() + 5 * 60_000 + 1);
+    await sweepAuth(instance.ctx, Date.now() + 5 * 60_000 + 1);
     const late = owner.call(api.account.addPasskey, {
       body: { challenge: registration.challenge, name: "Late", response },
     });

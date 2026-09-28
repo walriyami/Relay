@@ -35,7 +35,7 @@ export function createActivity(ctx: Context): Activity {
       ctx.events.publish(owner, "activity");
     },
     sweep(now) {
-      ctx.db.run("DELETE FROM activity WHERE created <= ?", now - ACTIVITY_DAYS * DAY_MS);
+      return ctx.db.deleteBatched("activity", "created <= ?", now - ACTIVITY_DAYS * DAY_MS);
     },
   };
 }

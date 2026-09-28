@@ -159,9 +159,9 @@ test("the sweep deletes activity older than its retention", async () => {
   try {
     const client = await member(instance, "hal");
     assert.equal((await feed(client)).entries.length, 1);
-    instance.ctx.activity.sweep(Date.now() + (ACTIVITY_DAYS - 1) * DAY);
+    await instance.ctx.activity.sweep(Date.now() + (ACTIVITY_DAYS - 1) * DAY);
     assert.equal((await feed(client)).entries.length, 1);
-    instance.ctx.activity.sweep(Date.now() + (ACTIVITY_DAYS + 1) * DAY);
+    await instance.ctx.activity.sweep(Date.now() + (ACTIVITY_DAYS + 1) * DAY);
     assert.deepEqual((await feed(client)).entries, []);
   } finally {
     await instance.close();

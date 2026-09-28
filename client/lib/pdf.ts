@@ -6,45 +6,90 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 const CHUNK = 64 * 1024;
 const BYTE_BUDGET = 16 * 1024 * 1024;
 
-// One worker serves every thumbnail; starting one per PDF re-parses the worker script each time.
-// Cold worker download is network startup, not PDF processing. Over a slow connection it can take
-// longer than the bounded read/render allowance, so it gets its own timeout. A worker that fails
-// to start is dropped so the next thumbnail tries again.
-let shared: Promise<PDFWorker> | null = null;
-export function sharedWorker(pdf: typeof PdfJs) {
-  shared ??= (async () => {
-    pdf.GlobalWorkerOptions.workerSrc = pdfWorker;
-    const worker = new pdf.PDFWorker();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        worker.promise,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("PDF worker startup timed out")), 60_000);
-        }),
-      ]);
-      return worker;
-    } catch (error) {
-      worker.destroy();
-      shared = null;
-      throw error;
-    } finally {
+// One explicitly owned native worker serves every thumbnail. pdf.js only owns its internally
+// created Worker after the handshake, and supplying a port resolves PDFWorker.promise before
+// initialization. Wait for the real worker's ready message before starting document deadlines.
+type ThumbnailWorker = {
+  ready: Promise<PDFWorker>;
+  failed: Error | null;
+  listeners: Set<(error: Error) => void>;
+  stop: (error: Error) => void;
+};
+let shared: ThumbnailWorker | null = null;
+function sharedWorker(pdf: typeof PdfJs): ThumbnailWorker {
+  if (shared) return shared;
+  let nativeWorker: Worker | undefined;
+  let worker: PDFWorker | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolve!: (worker: PDFWorker) => void;
+  let reject!: (error: Error) => void;
+  const ready = new Promise<PDFWorker>((ok, fail) => {
+    resolve = ok;
+    reject = fail;
+  });
+  const entry: ThumbnailWorker = {
+    ready,
+    failed: null,
+    listeners: new Set(),
+    stop(error) {
+      if (entry.failed) return;
+      entry.failed = error;
+      if (shared === entry) shared = null;
       clearTimeout(timer);
+      nativeWorker?.removeEventListener("message", initialized);
+      nativeWorker?.removeEventListener("error", failed);
+      nativeWorker?.removeEventListener("messageerror", failed);
+      worker?.destroy();
+      nativeWorker?.terminate();
+      reject(error);
+      for (const listener of entry.listeners) listener(error);
+      entry.listeners.clear();
+    },
+  };
+  function failed() {
+    entry.stop(new Error("PDF worker failed"));
+  }
+  function initialized(event: MessageEvent<{ sourceName?: string; targetName?: string; action?: string }>) {
+    const message = event.data;
+    if (message?.sourceName !== "worker" || message.targetName !== "main" || message.action !== "ready") return;
+    nativeWorker!.removeEventListener("message", initialized);
+    clearTimeout(timer);
+    try {
+      worker = pdf.PDFWorker.create({ port: nativeWorker! });
+      resolve(worker);
+    } catch {
+      failed();
     }
-  })();
-  return shared;
+  }
+  shared = entry;
+  try {
+    nativeWorker = new Worker(pdfWorker, { type: "module" });
+    nativeWorker.addEventListener("message", initialized);
+    nativeWorker.addEventListener("error", failed);
+    nativeWorker.addEventListener("messageerror", failed);
+    timer = setTimeout(() => entry.stop(new Error("PDF worker startup timed out")), 60_000);
+  } catch {
+    failed();
+  }
+  return entry;
 }
 
 export async function pdfThumbnail(file: File | undefined, url: string, length: number) {
   if (!Number.isSafeInteger(length) || length <= 0) throw new Error("PDF size unavailable");
   const pdf = await import("pdfjs-dist");
-  const worker = await sharedWorker(pdf);
+  const shared = sharedWorker(pdf);
+  const worker = await shared.ready;
   const controller = new AbortController();
   let used = 0;
   async function read(begin: number, end: number): Promise<Uint8Array> {
-    if (controller.signal.aborted || begin < 0 || end > length || end <= begin || (used += end - begin) > BYTE_BUDGET)
+    controller.signal.throwIfAborted();
+    if (begin < 0 || end > length || end <= begin || (used += end - begin) > BYTE_BUDGET)
       throw new Error("PDF thumbnail byte limit");
-    if (file) return new Uint8Array(await file.slice(begin, end).arrayBuffer());
+    if (file) {
+      const data = new Uint8Array(await file.slice(begin, end).arrayBuffer());
+      controller.signal.throwIfAborted();
+      return data;
+    }
     const response = await fetch(url, {
       credentials: "same-origin",
       headers: { Range: `bytes=${begin}-${end - 1}` },
@@ -76,24 +121,30 @@ export async function pdfThumbnail(file: File | undefined, url: string, length: 
   let render:
     | ReturnType<Awaited<ReturnType<Awaited<ReturnType<typeof pdf.getDocument>["promise"]>["getPage"]>>["render"]>
     | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    timer = setTimeout(() => {
-      controller.abort();
-      render?.cancel();
-      void task?.destroy();
-    }, 15_000);
+  let canvas: HTMLCanvasElement | undefined;
+  let reject!: (error: Error) => void;
+  const cancelled = new Promise<never>((_, fail) => {
+    reject = fail;
+  });
+  const fail = (error: Error) => {
+    if (controller.signal.aborted) return;
+    controller.abort(error);
+    render?.cancel();
+    reject(error);
+  };
+  shared.listeners.add(fail);
+  if (shared.failed) fail(shared.failed);
+  const timer = setTimeout(() => fail(new Error("PDF thumbnail timed out")), 15_000);
+  async function draw() {
     const initial = await read(0, Math.min(CHUNK, length));
+    controller.signal.throwIfAborted();
     class Transport extends pdf.PDFDataRangeTransport {
       requestDataRange(begin: number, end: number) {
         void read(begin, end)
           .then((bytes) => {
             if (!controller.signal.aborted) this.onDataRange(begin, bytes);
           })
-          .catch(() => {
-            controller.abort();
-            void task?.destroy();
-          });
+          .catch((error: Error) => fail(error));
       }
       abort() {
         controller.abort();
@@ -111,31 +162,59 @@ export async function pdfThumbnail(file: File | undefined, url: string, length: 
       canvasMaxAreaInBytes: 8_000_000,
     });
     const document = await task.promise;
+    controller.signal.throwIfAborted();
     const page = await document.getPage(1);
-    const natural = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({
-      scale: Math.min(1, 480 / Math.max(natural.width, natural.height)),
-    });
-    const canvas = window.document.createElement("canvas");
-    canvas.width = Math.max(1, Math.ceil(viewport.width));
-    canvas.height = Math.max(1, Math.ceil(viewport.height));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas unavailable");
-    render = page.render({
-      canvas,
-      canvasContext: context,
-      viewport,
-      background: "#fff",
-    });
-    await render.promise;
-    const result = canvas.toDataURL("image/webp", 0.8);
-    page.cleanup();
-    canvas.width = canvas.height = 0;
-    return result;
+    try {
+      controller.signal.throwIfAborted();
+      const natural = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({
+        scale: Math.min(1, 480 / Math.max(natural.width, natural.height)),
+      });
+      canvas = window.document.createElement("canvas");
+      canvas.width = Math.max(1, Math.ceil(viewport.width));
+      canvas.height = Math.max(1, Math.ceil(viewport.height));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas unavailable");
+      render = page.render({
+        canvas,
+        canvasContext: context,
+        viewport,
+        background: "#fff",
+      });
+      await render.promise;
+      controller.signal.throwIfAborted();
+      return canvas.toDataURL("image/webp", 0.8);
+    } finally {
+      page.cleanup();
+      if (canvas) canvas.width = canvas.height = 0;
+    }
+  }
+  try {
+    return await Promise.race([draw(), cancelled]);
   } finally {
     clearTimeout(timer);
     controller.abort();
-    // Destroying the document leaves the shared worker for the next thumbnail.
-    await task?.destroy().catch(() => {});
+    shared.listeners.delete(fail);
+    render?.cancel();
+    // Healthy documents release their resources without interrupting concurrent thumbnails.
+    // A missing setup/termination reply can leave pdf.js destroy pending forever: bound it,
+    // recycle that worker, and reject any remaining thumbnails using the same failed port.
+    let shutdown: ReturnType<typeof setTimeout> | undefined;
+    if (task) {
+      try {
+        await Promise.race([
+          task.destroy().catch(() => shared.stop(new Error("PDF worker cleanup failed"))),
+          new Promise<void>((resolve) => {
+            shutdown = setTimeout(() => {
+              shared.stop(new Error("PDF worker cleanup timed out"));
+              resolve();
+            }, 1000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(shutdown);
+      }
+    }
+    if (canvas) canvas.width = canvas.height = 0;
   }
 }

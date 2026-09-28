@@ -3,10 +3,11 @@ import { join } from "node:path";
 import type { Destination, TransferCancelled, TransferResult } from "../../../shared/model.ts";
 import { linkPasswordHash } from "../links/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
-import { principalKey, type Context, type Principal } from "../../context.ts";
-import { fail, notFound } from "../../lib/errors.ts";
+import { leaseRenewalMs, principalKey, type Context, type Principal } from "../../context.ts";
+import { fail, HttpError, notFound } from "../../lib/errors.ts";
 import { publishItemChange } from "./publish.ts";
-import { isActive, type Receivers, type UploadRow } from "./receivers.ts";
+import { assertTransferAvailability, ensureTransferAvailability, settleTransferAvailability } from "./availability.ts";
+import { isActive, uploadRow, type Receivers, type UploadRow } from "./receivers.ts";
 
 import { DAY_MS } from "../../lib/time.ts";
 
@@ -37,8 +38,8 @@ export const transferRow = (ctx: Context, id: string) =>
 export function renewTab(ctx: Context, tab: string, principal: Principal): boolean {
   const key = principalKey(principal);
   const lease = Date.now() + ctx.config.tabLeaseMs;
-  const row = ctx.db.get<{ principal: string; closed: number | null }>(
-    "SELECT principal, closed FROM tabs WHERE id = ?",
+  const row = ctx.db.get<{ principal: string; closed: number | null; lease_expires: number }>(
+    "SELECT principal, closed, lease_expires FROM tabs WHERE id = ?",
     tab,
   );
   if (!row) {
@@ -46,7 +47,10 @@ export function renewTab(ctx: Context, tab: string, principal: Principal): boole
     return true;
   }
   if (row.closed !== null || row.principal !== key) return false;
-  ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE id = ?", lease, tab);
+  // Every upload request renews its tab. Writing each time would commit (and fsync) twice per
+  // request only to move the deadline by milliseconds, so a recent lease is left as it is.
+  if (row.lease_expires <= lease - leaseRenewalMs(ctx))
+    ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE id = ?", lease, tab);
   return true;
 }
 
@@ -66,7 +70,7 @@ function cancelTransfer(ctx: Context, receivers: Receivers, transferId: string):
       Date.now(),
       transferId,
     );
-    for (const upload of unfinished) receivers.discard(upload.id);
+    for (const upload of unfinished) ctx.db.afterCommit(() => receivers.discard(upload.id));
     return ctx.db.value<number>(
       "SELECT count(*) FROM uploads WHERE transfer = ? AND completed IS NOT NULL",
       transferId,
@@ -82,7 +86,9 @@ export function abandon(ctx: Context, receivers: Receivers, transfer: TransferRo
   const saved = cancelTransfer(ctx, receivers, transfer.id);
   const unused = ctx.db.get(
     `SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE item = ? AND kind != 'folder')
-       AND NOT EXISTS (SELECT 1 FROM transfers WHERE item = ? AND state = 'open')`,
+       AND NOT EXISTS (SELECT 1 FROM transfers WHERE item = ? AND state = 'open')
+       AND NOT EXISTS (SELECT 1 FROM items WHERE id = ? AND first_saved_at IS NOT NULL)`,
+    transfer.item,
     transfer.item,
     transfer.item,
   );
@@ -91,14 +97,22 @@ export function abandon(ctx: Context, receivers: Receivers, transfer: TransferRo
   return { saved, removed: !!unused };
 }
 
-export function cancelForItem(ctx: Context, receivers: Receivers, itemId: string) {
-  for (const t of ctx.db.all<{ id: string }>("SELECT id FROM transfers WHERE item = ? AND state = 'open'", itemId))
+export function cancelForItem(ctx: Context, receivers: Receivers, itemId: string, principal?: string) {
+  const owner = ctx.db.value<string>("SELECT owner FROM items WHERE id = ?", itemId);
+  for (const t of ctx.db.all<{ id: string }>(
+    "SELECT id FROM transfers WHERE item = ? AND state = 'open' AND (? IS NULL OR principal = ?)",
+    itemId,
+    principal ?? null,
+    principal ?? null,
+  ))
     cancelTransfer(ctx, receivers, t.id);
+  if (owner) publishItemChange(ctx, owner, itemId);
 }
 
 export function cancelForRequest(ctx: Context, receivers: Receivers, requestId: string) {
   for (const t of ctx.db.all<{ id: string }>(
-    "SELECT t.id FROM transfers t JOIN items i ON i.id = t.item WHERE i.request_id = ? AND t.state = 'open'",
+    `SELECT t.id FROM transfers t JOIN items i ON i.id = t.item
+     WHERE i.request_id = ? AND t.state = 'open' AND t.principal LIKE 'grant:%'`,
     requestId,
   ))
     abandon(ctx, receivers, transferRow(ctx, t.id)!);
@@ -107,6 +121,7 @@ export function cancelForRequest(ctx: Context, receivers: Receivers, requestId: 
 /** A transfer the caller owns, else 404. */
 export function ownTransfer(ctx: Context, principalOf: (key: string) => Principal | null, id: string) {
   const transfer = transferRow(ctx, id);
+  if (transfer) settleTransferAvailability(ctx, transfer);
   const principal = transfer ? principalOf(transfer.principal) : null;
   if (!transfer || !principal) return notFound("That transfer");
   return { transfer, principal };
@@ -124,6 +139,7 @@ export async function complete(
   principal: Principal,
   destination: Destination,
 ): Promise<TransferResult> {
+  ensureTransferAvailability(ctx, transfer);
   if (principal.kind === "grant" && destination.kind !== "save") fail(403, "Guests can only save files.");
   const passwordHash = destination.kind === "link" ? await linkPasswordHash(destination.password) : undefined;
   const settled = stored(destination);
@@ -134,66 +150,74 @@ export async function complete(
     );
     for (const upload of arrived) await receivers.settle(upload.id);
   }
-  const result = ctx.db.tx(() => {
-    const current = transferRow(ctx, transfer.id) ?? notFound("That transfer");
-    if (current.state === "cancelled") fail(410, "This transfer was cancelled.");
-    let saved: StoredResult;
-    if (current.state === "complete") {
-      saved = JSON.parse(current.result!) as StoredResult;
-      if (JSON.stringify(saved.destination) !== JSON.stringify(settled))
-        fail(409, "This transfer was already completed with another destination.");
-    } else {
-      if (
-        ctx.db.get(
-          "SELECT 1 FROM uploads WHERE transfer = ? AND completed IS NULL AND node IS NOT NULL LIMIT 1",
-          current.id,
+  ensureTransferAvailability(ctx, transfer);
+  let result: TransferResult;
+  try {
+    result = ctx.db.tx(() => {
+      const current = transferRow(ctx, transfer.id) ?? notFound("That transfer");
+      assertTransferAvailability(ctx, current);
+      if (current.state === "cancelled") fail(410, "This transfer was cancelled.");
+      let saved: StoredResult;
+      if (current.state === "complete") {
+        saved = JSON.parse(current.result!) as StoredResult;
+        if (JSON.stringify(saved.destination) !== JSON.stringify(settled))
+          fail(409, "This transfer was already completed with another destination.");
+      } else {
+        if (
+          ctx.db.get(
+            "SELECT 1 FROM uploads WHERE transfer = ? AND completed IS NULL AND node IS NOT NULL LIMIT 1",
+            current.id,
+          )
         )
-      )
-        fail(409, "Some files have not finished uploading.");
-      ctx.library.owned(current.owner, current.item, { live: true });
-      saved = {
-        destination: settled,
-        ...(destination.kind === "link" ? { link: uuidv7() } : {}),
-        ...(destination.kind === "device" ? { delivery: uuidv7() } : {}),
-      };
-      ctx.db.run(
-        "UPDATE transfers SET state = 'complete', finished = ?, result = ? WHERE id = ?",
-        Date.now(),
-        JSON.stringify(saved),
-        current.id,
-      );
-      // A finished guest submission is what the owner's open tabs announce.
-      if (principal.kind === "grant") {
+          fail(409, "Some files have not finished uploading.");
+        ctx.library.owned(current.owner, current.item, { live: true });
+        saved = {
+          destination: settled,
+          ...(destination.kind === "link" ? { link: uuidv7() } : {}),
+          ...(destination.kind === "device" ? { delivery: uuidv7() } : {}),
+        };
         ctx.db.run(
-          "UPDATE requests SET last_received = ? WHERE id = (SELECT request_id FROM items WHERE id = ?)",
+          "UPDATE transfers SET state = 'complete', finished = ?, result = ? WHERE id = ?",
           Date.now(),
-          current.item,
+          JSON.stringify(saved),
+          current.id,
         );
-        recordSubmission(ctx, current);
+        // A finished guest submission is what the owner's open tabs announce.
+        if (principal.kind === "grant") {
+          ctx.db.run(
+            "UPDATE requests SET last_received = ? WHERE id = (SELECT request_id FROM items WHERE id = ?)",
+            Date.now(),
+            current.item,
+          );
+          recordSubmission(ctx, current);
+        }
       }
-    }
-    // Both creates are idempotent by id, so a retry returns the link or delivery made the first time.
-    const link =
-      destination.kind === "link"
-        ? ctx.links.create(current.owner, {
-            id: saved.link!,
-            item: current.item,
-            days: destination.days,
-            passwordHash,
-            visitorLimit: destination.visitorLimit,
-            note: destination.note,
-          })
-        : null;
-    const delivery =
-      destination.kind === "device"
-        ? ctx.deliveries.create(current.owner, principal.kind === "member" ? principal.deviceId : null, {
-            id: saved.delivery!,
-            item: current.item,
-            device: destination.device,
-          })
-        : null;
-    return { itemId: current.item, link, delivery };
-  });
+      // Both creates are idempotent by id, so a retry returns the link or delivery made the first time.
+      const link =
+        destination.kind === "link"
+          ? ctx.links.create(current.owner, {
+              id: saved.link!,
+              item: current.item,
+              days: destination.days,
+              passwordHash,
+              visitorLimit: destination.visitorLimit,
+              note: destination.note,
+            })
+          : null;
+      const delivery =
+        destination.kind === "device"
+          ? ctx.deliveries.create(current.owner, principal.kind === "member" ? principal.deviceId : null, {
+              id: saved.delivery!,
+              item: current.item,
+              device: destination.device,
+            })
+          : null;
+      return { itemId: current.item, link, delivery };
+    });
+  } catch (error) {
+    ensureTransferAvailability(ctx, transfer);
+    throw error;
+  }
   publishItemChange(ctx, transfer.owner, transfer.item);
   return result;
 }
@@ -238,7 +262,7 @@ export function removeUpload(ctx: Context, receivers: Receivers, upload: UploadR
   if (!isActive(upload)) return;
   ctx.db.tx(() => {
     ctx.db.run("DELETE FROM nodes WHERE id = ? AND state = 'pending'", upload.node);
-    receivers.discard(upload.id);
+    ctx.db.afterCommit(() => receivers.discard(upload.id));
   });
   publishItemChange(ctx, upload.owner, upload.item);
 }
@@ -267,7 +291,21 @@ export function closeTab(
     abandon(ctx, receivers, transferRow(ctx, t.id)!);
 }
 
-export function sweep(ctx: Context, receivers: Receivers, now: number) {
+export async function sweep(ctx: Context, receivers: Receivers, now: number) {
+  // Request/grant expiry releases guest reservations even when no endpoint is visited. Member
+  // appends to a saved submission have their own lifetime and remain valid after the request ends.
+  for (const t of ctx.db.all<{ id: string }>(
+    `SELECT t.id FROM transfers t
+     LEFT JOIN guest_grants g ON g.token_hash = substr(t.principal, 7)
+     LEFT JOIN requests r ON r.id = g.request_id
+     WHERE t.state = 'open' AND t.principal LIKE 'grant:%'
+       AND (g.token_hash IS NULL OR g.expires <= ? OR r.id IS NULL OR r.closed IS NOT NULL OR r.expires <= ?)`,
+    now,
+    now,
+  )) {
+    const transfer = transferRow(ctx, t.id);
+    if (transfer?.state === "open") abandon(ctx, receivers, transfer);
+  }
   for (const t of ctx.db.all<{ id: string }>(
     `SELECT t.id FROM transfers t JOIN tabs b ON b.id = t.tab
      WHERE t.state = 'open' AND (b.closed IS NOT NULL OR b.lease_expires <= ?)`,
@@ -276,9 +314,13 @@ export function sweep(ctx: Context, receivers: Receivers, now: number) {
     const transfer = transferRow(ctx, t.id);
     if (transfer?.state === "open") abandon(ctx, receivers, transfer);
   }
-  ctx.db.run("DELETE FROM transfers WHERE state != 'open' AND finished <= ?", now - DAY_MS);
-  ctx.db.run(
-    "DELETE FROM tabs WHERE lease_expires <= ? AND NOT EXISTS (SELECT 1 FROM transfers WHERE tab = tabs.id)",
+  // A transfer can hold thousands of uploads, so they go first, in batches of their own.
+  const finished = "SELECT id FROM transfers WHERE state != 'open' AND finished <= ?";
+  await ctx.db.deleteBatched("uploads", `transfer IN (${finished})`, now - DAY_MS);
+  await ctx.db.deleteBatched("transfers", "state != 'open' AND finished <= ?", now - DAY_MS);
+  await ctx.db.deleteBatched(
+    "tabs",
+    "lease_expires <= ? AND NOT EXISTS (SELECT 1 FROM transfers WHERE tab = tabs.id)",
     now - DAY_MS,
   );
 }
@@ -294,8 +336,27 @@ export async function recover(ctx: Context, receivers: Receivers) {
      FROM uploads u JOIN transfers t ON t.id = u.transfer
      WHERE u.completed IS NULL AND u.node IS NOT NULL AND t.state = 'open'`,
   );
-  const keep = new Set(active.map((u) => `${u.id}.part`));
+  // A restart must not publish complete parts or retain reservations past their destination's lifetime.
+  const viable = active.filter((upload) => {
+    try {
+      ensureTransferAvailability(ctx, upload);
+      return true;
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      // Suspended owners retain accepted bytes; the upload can resume after re-enabling.
+      return uploadRow(ctx, upload.id)?.state === "open";
+    }
+  });
+  const keep = new Set(viable.map((u) => `${u.id}.part`));
   const directory = join(ctx.config.root, "uploads");
   for (const name of await readdir(directory)) if (!keep.has(name)) await unlink(join(directory, name));
-  for (const upload of active) receivers.restore(upload);
+  for (const upload of viable) {
+    try {
+      assertTransferAvailability(ctx, upload);
+      receivers.restore(upload);
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      // Availability is checked again by HEAD/PATCH after a temporary owner suspension.
+    }
+  }
 }

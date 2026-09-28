@@ -1,11 +1,14 @@
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import workerThreads from "node:worker_threads";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
-import { MAX_QUEUED_RENDITIONS } from "../server/modules/downloads/thumbnails.ts";
+import { MAX_QUEUED_RENDITIONS, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { Client, member, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
@@ -136,7 +139,7 @@ test("content authorization: other members, signed-out browsers and pending node
 
     // A blob whose file went missing is refused rather than streamed short.
     instance.ctx.db.run("UPDATE nodes SET size = size + 1 WHERE id = ?", node.id);
-    assert.equal((await get(client, urls.nodeContent(node.id))).statusCode, 500);
+    assert.equal((await get(client, urls.nodeContent(node.id))).statusCode, 503);
   } finally {
     await instance.close();
   }
@@ -273,7 +276,7 @@ test("thumbnails: failed image renders are cached and TIFF is not admitted", asy
     );
     const broken = nodes.get("broken.png")!;
     assert.equal((await get(client, urls.nodeThumbnail(broken.id))).statusCode, 415);
-    const marker = join(instance.root, "thumbnails", `${sha(bad)}.failed`);
+    const marker = join(instance.root, "thumbnails", `${sha(bad)}-image.failed`);
     assert.equal(existsSync(marker), true);
     assert.equal((await get(client, urls.nodeThumbnail(broken.id))).statusCode, 415);
     assert.equal((await get(client, urls.nodeThumbnail(nodes.get("photo.tiff")!.id))).statusCode, 415);
@@ -282,6 +285,99 @@ test("thumbnails: failed image renders are cached and TIFF is not admitted", asy
     await client.call(api.items.remove, { params: { id: result.itemId } });
     assert.equal(existsSync(marker), false, "collecting the blob removes its cached failure");
   } finally {
+    await instance.close();
+  }
+});
+
+for (const concurrent of [false, true]) {
+  test(`thumbnail decoder failures do not poison a valid alias (${concurrent ? "concurrent" : "cached"})`, async () => {
+    const instance = await start();
+    const original = workerThreads.Worker;
+    let began!: () => void;
+    const rendering = new Promise<void>((resolve) => (began = resolve));
+    class ObservedWorker extends original {
+      constructor(...args: ConstructorParameters<typeof original>) {
+        super(...args);
+        if ((args[1]?.workerData as { format?: string })?.format === "heif") began();
+      }
+    }
+    try {
+      const client = await member(instance, "thumbnail-decoder-owner");
+      const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: "red" } })
+        .png()
+        .toBuffer();
+      const { result } = await send(client, [
+        { path: "alias.heic", data: png, mime: "image/heic" },
+        { path: "valid.png", data: png, mime: "image/png" },
+      ]);
+      const nodes = new Map(
+        (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((node) => [node.name, node]),
+      );
+      workerThreads.Worker = ObservedWorker;
+      syncBuiltinESMExports();
+      const wrong = get(client, urls.nodeThumbnail(nodes.get("alias.heic")!.id));
+      await rendering;
+      if (!concurrent) assert.equal((await wrong).statusCode, 415);
+      const valid = get(client, urls.nodeThumbnail(nodes.get("valid.png")!.id));
+      const [wrongResult, validResult] = await Promise.all([wrong, valid]);
+      assert.equal(wrongResult.statusCode, 415);
+      assert.equal(validResult.statusCode, 200);
+      assert.equal((await sharp(validResult.rawPayload).metadata()).format, "webp");
+      assert.equal(existsSync(join(instance.root, "thumbnails", `${sha(png)}-heif.failed`)), true);
+      assert.equal(existsSync(join(instance.root, "thumbnails", `${sha(png)}-image.failed`)), false);
+      assert.equal((await get(client, urls.nodeThumbnail(nodes.get("valid.png")!.id, "l"))).statusCode, 200);
+      await client.call(api.items.trash, { params: { id: result.itemId } });
+      await client.call(api.items.remove, { params: { id: result.itemId } });
+      assert.equal(existsSync(join(instance.root, "thumbnails", `${sha(png)}-heif.failed`)), false);
+    } finally {
+      workerThreads.Worker = original;
+      syncBuiltinESMExports();
+      await instance.close();
+    }
+  });
+}
+
+test("thumbnail worker outages return 503 with bounded backoff and recover without persistent failure markers", async (t) => {
+  const instance = await start();
+  const original = workerThreads.Worker;
+  let attempted = 0;
+  class FailingWorker extends EventEmitter {
+    constructor() {
+      super();
+      attempted++;
+      queueMicrotask(() => this.emit("error", new Error("temporary worker I/O failure")));
+    }
+    terminate() {
+      return Promise.resolve(1);
+    }
+  }
+  try {
+    const client = await member(instance, "thumbnail-retry-owner");
+    const png = await sharp({ create: { width: 100, height: 100, channels: 3, background: "red" } })
+      .png()
+      .toBuffer();
+    const { result } = await send(client, [{ path: "photo.png", data: png, mime: "image/png" }]);
+    const node = (await client.call(api.items.get, { params: { id: result.itemId } })).nodes[0];
+    const url = urls.nodeThumbnail(node.id);
+    workerThreads.Worker = FailingWorker as unknown as typeof original;
+    syncBuiltinESMExports();
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const first = await get(client, url);
+    assert.equal(first.statusCode, 503);
+    assert.equal(first.headers["retry-after"], "5");
+    assert.equal(existsSync(join(instance.root, "thumbnails", `${sha(png)}-image.failed`)), false);
+    assert.equal((await get(client, urls.nodeThumbnail(node.id, "l"))).statusCode, 503);
+    assert.equal(attempted, 1, "both sizes share transient backoff");
+    workerThreads.Worker = original;
+    syncBuiltinESMExports();
+    t.mock.timers.tick(RENDITION_RETRY_MS + 1);
+    // An unclassified failure marker cannot poison the decoder-scoped failure cache.
+    writeFileSync(join(instance.root, "thumbnails", `${sha(png)}.failed`), "old unclassified failure");
+    assert.equal((await get(client, url)).statusCode, 200);
+  } finally {
+    workerThreads.Worker = original;
+    syncBuiltinESMExports();
+    t.mock.timers.reset();
     await instance.close();
   }
 });

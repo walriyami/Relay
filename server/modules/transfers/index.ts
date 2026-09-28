@@ -34,7 +34,7 @@ export function createTransfers(ctx: Context): Transfers {
   return {
     create: (input, options) => createTransfer(ctx, input, options),
     renewTab: (tab, principal) => renewTab(ctx, tab, principal),
-    cancelForItem: (itemId) => cancelForItem(ctx, receivers, itemId),
+    cancelForItem: (itemId, principal) => cancelForItem(ctx, receivers, itemId, principal),
     cancelForRequest: (requestId) => cancelForRequest(ctx, receivers, requestId),
     outstandingBytes: () => count("coalesce(sum(u.size - u.offset), 0)"),
     activeUploads: () => count("count(*)"),

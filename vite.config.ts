@@ -13,7 +13,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
     // The app shell is one ~160 kB (gzipped) bundle; rarely visited pages and pdf.js load on demand.
-    // Splitting React into its own chunk breaks WebKit's retry of a page chunk that failed to load.
+    // A page chunk must depend on the shell alone: WebKit can't retry one that failed to load when it
+    // imports another chunk, so React and code shared by pages stay in the shell.
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       // Dependencies ship some comments Rollup can't place; it drops them harmlessly, so don't report it.

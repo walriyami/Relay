@@ -4,6 +4,14 @@ node_modules
 dist
 .data
 .env
+.env.*
+secret.key
+setup.key
+*.sqlite
+*.sqlite-*
+.claude
+.codex
+work
 docs
 tests
 playwright-report

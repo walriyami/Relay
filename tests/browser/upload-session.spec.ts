@@ -3,6 +3,9 @@ import { signedIn, fileInput, textFile, unique, destinations } from "./helpers";
 
 for (const status of [401, 404]) {
   test(`upload ${status} recognizes a lapsed session`, async ({ page }) => {
+    // Hold the independent account stream: its quota refreshes are not upload-error diagnostics.
+    // The page context closes this pending request when the test ends.
+    await page.route("**/api/events?*", () => {});
     await signedIn(page);
     let probes = 0;
     // Picking refreshes the session to re-check free space; the session only lapses once sending starts.
@@ -15,7 +18,9 @@ for (const status of [401, 404]) {
     await page.route("**/uploads/**", async (route) => {
       await route.fulfill({ status, json: { error: "Upload unavailable." } });
     });
+    const quota = page.waitForResponse("**/api/session");
     await fileInput(page).setInputFiles(textFile(unique("expired") + ".txt"));
+    expect((await quota).ok()).toBe(true);
     const save = destinations(page).getByRole("button", { name: "Save to Files" });
     await expect(save).toBeEnabled();
     armed = true;
@@ -27,6 +32,8 @@ for (const status of [401, 404]) {
 }
 
 test("a missing upload with a valid session stays a file error", async ({ page }) => {
+  // Keep live account refreshes separate from the one diagnostic shared by all failed files.
+  await page.route("**/api/events?*", () => {});
   await signedIn(page);
   let probes = 0;
   let armed = false;
@@ -37,12 +44,14 @@ test("a missing upload with a valid session stays a file error", async ({ page }
   await page.route("**/uploads/**", async (route) => {
     await route.fulfill({ status: 404, json: { error: "This upload no longer exists." } });
   });
-  await fileInput(page).setInputFiles(textFile(unique("missing") + ".txt"));
+  const quota = page.waitForResponse("**/api/session");
+  await fileInput(page).setInputFiles([1, 2, 3].map((n) => textFile(`${unique("missing")}-${n}.txt`)));
+  expect((await quota).ok()).toBe(true);
   const save = destinations(page).getByRole("button", { name: "Save to Files" });
   await expect(save).toBeEnabled();
   armed = true;
   await save.click();
-  await expect(page.locator(".transfer")).toContainText("couldn’t upload");
+  await expect(page.locator(".transfer")).toContainText("3 files couldn’t upload");
   expect(probes).toBe(1);
   await page.locator(".transfer").getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.locator(".transfer")).toContainText("Cancelled");

@@ -1,16 +1,30 @@
 import { test, expect } from "@playwright/test";
+import { api } from "../../shared/api";
 import { composer, destinations, deviceContext, fileInput, signedIn, textFile, unique, writeText } from "./helpers";
 
 test("only live devices are offered, and they disappear when closed", async ({ page, browser }) => {
   await signedIn(page, "Laptop");
-  // Phones only show the destinations once there is something to send.
-  await writeText(page, "something to send");
   const targets = destinations(page);
   await expect(targets.getByRole("button", { name: "Phone" })).toHaveCount(0);
   const phone = await deviceContext(browser, "Phone");
-  await expect(targets.getByRole("button", { name: "Phone" })).toHaveCount(1, { timeout: 20_000 });
-  await phone.context.close();
+  try {
+    // Other browser projects can already own these names; use the server's canonical labels.
+    const current = await (await page.request.get(api.session.get.path)).json();
+    const remote = await (await phone.page.request.get(api.session.get.path)).json();
+    const destination = targets.getByRole("button", { name: remote.device.name, exact: true });
+    await expect(destination).toBeVisible({ timeout: 20_000 });
+    await expect(destination).toBeDisabled();
+    await expect(targets.getByRole("button", { name: current.device.name, exact: true })).toHaveCount(0);
+    await writeText(page, "something to send");
+    await expect(destination).toBeEnabled();
+    await composer(page).getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(destination).toBeVisible();
+    await expect(destination).toBeDisabled();
+  } finally {
+    await phone.context.close();
+  }
   await expect(targets.getByRole("button", { name: "Phone" })).toHaveCount(0, { timeout: 45_000 });
+  await expect(targets.getByText("Devices show up here while Relay is open on them.")).toBeVisible();
 });
 
 test("a device accepts what your others send it: it downloads and opens in a popup, no new tabs", async ({

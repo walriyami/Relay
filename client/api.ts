@@ -1,9 +1,10 @@
 import { api, headers, type Endpoint, type Input, type NoFields, type Response } from "../shared/api";
+import type { ChangeStamp } from "../shared/model";
 import { uuidv7 } from "../shared/ids";
 import { isProxyFailure, reportFailure, reportReachable } from "./lib/connection";
 
 export { api, urls } from "../shared/api";
-export { LIMITS, DEFAULTS, LINK_USED_UP, displayName } from "../shared/model";
+export { LIMITS, DEFAULTS, NO_LIMITS, LINK_USED_UP, displayName, missed } from "../shared/model";
 export type * from "../shared/model";
 
 /** This page load. Transfers belong to it: closing or reloading the tab abandons them. */
@@ -74,6 +75,14 @@ export async function call<E extends Endpoint>(
   endpoint: E,
   ...[input]: NoFields extends Input<E> ? [Input<E>?] : [Input<E>]
 ): Promise<Response<E>> {
+  return (await stamped(endpoint, input)).data;
+}
+
+/** Like `call`, also saying where changes stood when the server began its answer. */
+export async function stamped<E extends Endpoint>(
+  endpoint: E,
+  input?: Input<E>,
+): Promise<{ data: Response<E>; changes: ChangeStamp | null }> {
   const { params, query, body } = (input ?? {}) as {
     params?: Record<string, string>;
     query?: Record<string, string | number | boolean | undefined>;
@@ -118,7 +127,7 @@ export async function call<E extends Endpoint>(
     const wait = res.status === 429 ? Number(res.headers.get("retry-after")) : NaN;
     throw new ApiError(res.status, message, wait > 0 ? Math.ceil(wait) : undefined);
   }
-  return data as Response<E>;
+  return { data: data as Response<E>, changes: res.headers.get(headers.changes) as ChangeStamp | null };
 }
 
 const STABLE_IDS = "relay.stable-ids";

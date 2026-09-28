@@ -111,6 +111,36 @@ test("a saved transfer can get a link from the panel, shown in place", async ({ 
   await expect(destinations(page).getByRole("button", { name: "Create link" })).toHaveCount(0);
 });
 
+test("the next link's settings open from its row, which says what the link will be", async ({ page }) => {
+  await writeText(page, unique("guarded"));
+  const link = destinations(page).getByRole("button", { name: "Create link" });
+  await expect(link).toHaveAccessibleDescription(/^(Expires in \d+ (day|days|year)|Never expires)$/);
+  const button = destinations(page).getByRole("button", { name: "Link settings" });
+  await button.click();
+  const settings = page.getByRole("dialog", { name: "Link settings" });
+  // "Add a note" and Done share the last line.
+  const add = await settings.getByRole("button", { name: "Add a note" }).boundingBox();
+  const done = await settings.getByRole("button", { name: "Done" }).boundingBox();
+  expect(Math.abs(add!.y + add!.height / 2 - (done!.y + done!.height / 2))).toBeLessThan(1);
+  await settings.getByRole("switch", { name: /^Password/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await expect(link).toHaveAccessibleDescription(/ · Password$/);
+  // Asking for the link without the password reopens the settings at the field that needs it.
+  await link.click();
+  const password = settings.getByRole("textbox", { name: "Link password" });
+  await expect(password).toBeFocused();
+  await expect(password).toHaveAttribute("aria-invalid", "true");
+  await expect(password).toHaveAccessibleDescription("Enter a password.");
+  await password.fill("hunter22");
+  await expect(password).toHaveAccessibleDescription(/^Tell it to the people you share with/);
+  await password.press("Enter");
+  await expect(settings).toHaveCount(0);
+  await link.click();
+  await expect(composer(page).locator(".transfer")).toContainText("Link ready");
+});
+
 test("a folder and files mix in one share", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "Directory inputs are only automatable in Chromium");
   const dir = await mkdtemp(join(tmpdir(), "relay-folder-"));

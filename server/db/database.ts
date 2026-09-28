@@ -1,19 +1,39 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type Value = SQLInputValue;
 
-/** Bump this, and add an upgrade step here, whenever schema.sql changes after a release. */
 const SCHEMA_VERSION = 1;
+/** Distinct SQL strings kept prepared; the application uses fewer, so dynamic SQL cannot grow it unboundedly. */
+const STATEMENT_CACHE = 256;
+/** Rows a batched delete removes per transaction. */
+const DELETE_BATCH = 500;
+const schema = readFileSync(join(import.meta.dirname, "schema.sql"), "utf8");
+const schemaQuery =
+  "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name";
+let expectedSchema: string | undefined;
+function schemaDefinition(sqlite: DatabaseSync) {
+  return JSON.stringify(sqlite.prepare(schemaQuery).all());
+}
+function currentSchema() {
+  if (expectedSchema) return expectedSchema;
+  const reference = new DatabaseSync(":memory:");
+  try {
+    reference.exec(schema);
+    return (expectedSchema = schemaDefinition(reference));
+  } finally {
+    reference.close();
+  }
+}
 
 /**
  * The single connection to relay.sqlite.
  *
  * Concurrency model: the process is single-threaded and every statement is synchronous, so a
  * `tx()` callback (which must not await) is atomic with respect to all other request handling.
- * Code that must keep the database and the filesystem in step does both inside one synchronous
- * block, so no other handler can observe the state in between.
+ * Filesystem changes inside a transaction must remain safe if it rolls back. Destructive cleanup
+ * runs through `afterCommit()`, synchronously after the outer transaction commits.
  *
  * The connection holds SQLite's exclusive lock for its whole life. A second process opening the
  * same data directory fails at once, and the operating system releases the lock when this process
@@ -21,7 +41,8 @@ const SCHEMA_VERSION = 1;
  */
 export class Database {
   readonly sqlite: DatabaseSync;
-  private depth = 0;
+  private committed: (() => void)[] | null = null;
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(file: string) {
     this.sqlite = new DatabaseSync(file, { timeout: 0 });
@@ -51,50 +72,100 @@ export class Database {
     }
   }
 
-  /** Creates the schema in a new database, and refuses one made by a different schema version. */
+  /** This unreleased product supports one schema. Never silently open incompatible or partial data. */
   private initialize() {
-    const version = Number(this.get<{ user_version: number }>("PRAGMA user_version")!.user_version);
-    if (version === SCHEMA_VERSION) return;
-    if (version !== 0)
-      throw new Error(`This database has schema version ${version}, but this Relay build expects ${SCHEMA_VERSION}.`);
-    this.tx(() => {
-      this.sqlite.exec(readFileSync(join(import.meta.dirname, "schema.sql"), "utf8"));
-      this.sqlite.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-    });
+    const version = this.value<number>("PRAGMA user_version");
+    const empty = !this.get("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1");
+    if (empty && version === 0) {
+      this.tx(() => this.sqlite.exec(`${schema}\nPRAGMA user_version = ${SCHEMA_VERSION};`));
+      return;
+    }
+    if (version !== SCHEMA_VERSION || schemaDefinition(this.sqlite) !== currentSchema())
+      throw Object.assign(
+        new Error(
+          "This data directory has an incompatible Relay schema. Relay has not changed your data. " +
+            "Use the matching build to export it, or preserve a backup and start with a new empty directory. " +
+            "Unreleased database formats are not migrated automatically.",
+        ),
+        { code: "RELAY_SCHEMA_INCOMPATIBLE" },
+      );
+  }
+
+  /**
+   * The prepared form of `sql`, reused across calls: a small upload runs dozens of statements, and
+   * preparing each one again costs more than running it. Least recently used first out.
+   */
+  private prepare(sql: string): StatementSync {
+    let statement = this.statements.get(sql);
+    if (statement) this.statements.delete(sql);
+    else {
+      statement = this.sqlite.prepare(sql);
+      if (this.statements.size >= STATEMENT_CACHE) this.statements.delete(this.statements.keys().next().value!);
+    }
+    this.statements.set(sql, statement);
+    return statement;
   }
 
   get<T>(sql: string, ...args: Value[]): T | undefined {
-    return this.sqlite.prepare(sql).get(...args) as T | undefined;
+    return this.prepare(sql).get(...args) as T | undefined;
   }
   all<T>(sql: string, ...args: Value[]): T[] {
-    return this.sqlite.prepare(sql).all(...args) as T[];
+    return this.prepare(sql).all(...args) as T[];
   }
   run(sql: string, ...args: Value[]): { changes: number } {
-    const result = this.sqlite.prepare(sql).run(...args);
+    const result = this.prepare(sql).run(...args);
     return { changes: Number(result.changes) };
+  }
+  /**
+   * Deletes the rows of `table` that `where` matches, a bounded batch per transaction, and lets other
+   * work run between batches: a backlog (after a long outage, say) never holds requests up for long.
+   */
+  async deleteBatched(table: string, where: string, ...args: Value[]) {
+    const sql = `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${where} LIMIT ${DELETE_BATCH})`;
+    while (this.run(sql, ...args).changes >= DELETE_BATCH) await new Promise((resolve) => setImmediate(resolve));
   }
   /** A scalar from the first column of the first row. */
   value<T extends Value>(sql: string, ...args: Value[]): T | undefined {
-    const row = this.sqlite.prepare(sql).get(...args) as Record<string, T> | undefined;
+    const row = this.prepare(sql).get(...args) as Record<string, T> | undefined;
     return row ? Object.values(row)[0] : undefined;
   }
 
   /** Runs `fn` atomically. Nested calls join the outer transaction. `fn` must be synchronous. */
   tx<T>(fn: () => T): T {
-    if (this.depth > 0) return fn();
+    if (this.committed) return fn();
     this.sqlite.exec("BEGIN IMMEDIATE");
-    this.depth++;
+    const committed: (() => void)[] = [];
+    this.committed = committed;
+    let result: T;
     try {
-      const result = fn();
+      result = fn();
       if (result instanceof Promise) throw new Error("Database.tx callbacks must be synchronous.");
       this.sqlite.exec("COMMIT");
-      return result;
     } catch (error) {
-      this.sqlite.exec("ROLLBACK");
+      // SQLite can already have rolled back after FULL/IOERR. Preserve the original failure.
+      if (this.sqlite.isTransaction) this.sqlite.exec("ROLLBACK");
       throw error;
     } finally {
-      this.depth--;
+      this.committed = null;
     }
+    // The transaction is already durable. A cleanup failure must neither roll it back nor prevent
+    // other committed actions from running, and actions can start their own transactions.
+    const errors: unknown[] = [];
+    for (const action of committed) {
+      try {
+        action();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, "Database committed, but post-commit actions failed.");
+    return result;
+  }
+
+  /** Runs synchronous cleanup after the outermost commit, or now if no transaction is open. */
+  afterCommit(fn: () => void) {
+    if (this.committed) this.committed.push(fn);
+    else fn();
   }
 
   setting(key: string): string | undefined {
@@ -109,7 +180,8 @@ export class Database {
   }
 
   close() {
-    this.sqlite.close();
+    this.statements.clear();
+    if (this.sqlite.isOpen) this.sqlite.close();
   }
 }
 

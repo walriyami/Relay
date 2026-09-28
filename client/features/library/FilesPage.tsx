@@ -17,7 +17,7 @@ import {
 } from "../../components/ui";
 import { undoKey } from "./actions";
 import { plural } from "../../lib/format";
-import { KEEP_DAYS, days as dayLabel } from "../../lib/options";
+import { KEEP_DAYS, days as dayLabel, durations } from "../../lib/options";
 import { useSession } from "../../app/session";
 import { CollectionModal, itemAddress } from "./CollectionModal";
 
@@ -311,7 +311,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       operation === "trash" &&
       !(await confirmDialog({
         title: `Move ${plural(ids.length, "item")} to Trash?`,
-        body: `${plural(ids.length, "item")} will move to Trash. You can restore them for ${dayLabel(me.user.trashDays)}; their links will stop working.`,
+        body: `${plural(ids.length, "item")} will move to Trash. You can restore them until their saved deletion deadline, at most ${dayLabel(me.user.trashDays)}; their links will stop working.`,
         confirm: "Move to Trash",
         danger: true,
       }))
@@ -344,12 +344,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       } else if (operation === "restore") {
         toast(`${plural(ids.length, "item")} restored`, { tone: "success" });
       } else {
-        toast(
-          keep
-            ? `${plural(ids.length, "item")} will move to Trash in ${dayLabel(keep)}`
-            : `${plural(ids.length, "item")} will be kept until you delete ${ids.length === 1 ? "it" : "them"}`,
-          { tone: "success" },
-        );
+        toast(`Retention saved for ${plural(ids.length, "item")}. Each item’s saved deadline is shown in its details.`);
       }
     } catch (e) {
       toast((e as Error).message, { tone: "error" });
@@ -379,7 +374,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           <h1>{trash ? "Trash" : "Files"}</h1>
           <p className="muted">
             {trash
-              ? `Items in Trash are deleted forever after ${dayLabel(me.user.trashDays)}. Their links no longer work.`
+              ? `Items in Trash keep their saved deletion dates and may be deleted sooner by their hard deadline. Their links no longer work.`
               : total
                 ? debounced
                   ? plural(total, "match", "matches")
@@ -523,15 +518,15 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                   ) : selected.size ? (
                     <>
                       <Menu
-                        label={`Keep ${plural(selected.size, "item")} for`}
+                        label={`Move ${plural(selected.size, "item")} to Trash after`}
                         variant="secondary"
                         trigger={
                           <>
-                            <Clock size={16} aria-hidden /> Keep for…
+                            <Clock size={16} aria-hidden /> Trash after…
                           </>
                         }
-                        items={KEEP_DAYS.map((d) => ({
-                          label: d ? dayLabel(d) : "Until I delete them",
+                        items={durations(KEEP_DAYS, null, me.user.limits.keepDays).map((d) => ({
+                          label: d ? dayLabel(d) : "Never",
                           onSelect: () => void applyBulk("retention", d),
                         }))}
                       />
@@ -577,7 +572,8 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           </EmptyState>
         ) : trash ? (
           <EmptyState icon={<Trash2 size={28} />} title="Trash is empty">
-            Anything you delete waits here for {dayLabel(me.user.trashDays)}, so you can restore it.
+            Items can be restored until their saved deletion deadline, for at most {dayLabel(me.user.trashDays)}.
+            Maximum file age includes this time.
           </EmptyState>
         ) : (
           <EmptyState

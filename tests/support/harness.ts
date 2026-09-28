@@ -1,5 +1,6 @@
 // In-process test harness: a disposable Relay instance and typed clients that keep cookies and CSRF.
 import { mkdtemp, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InjectOptions, LightMyRequestResponse } from "fastify";
@@ -37,16 +38,20 @@ export async function start(
 }
 
 /**
- * Sets up a first start as a browser would, keeping the built-in member values, then removes the
+ * Sets up a first start as a browser would, keeping the built-in choices, then removes the
  * setup browser's device, session and sign-in so tests begin with no devices. Does nothing on an
  * instance that is already set up.
  */
 export async function setUp(instance: Pick<App, "app" | "ctx">, password: string) {
   const client = new Client(instance as Instance);
-  if ((await client.call(api.setup.status)).state !== "account") return;
-  await client.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup" } });
-  const { defaults, limits } = await client.call(api.admin.overview);
-  await client.call(api.setup.finish, { body: { ...defaults, capacity: limits.capacity } });
+  const status = await client.call(api.setup.status);
+  if (status.state !== "account") return;
+  const setupKey = status.keyRequired
+    ? readFileSync(join(instance.ctx.config.root, "setup.key"), "utf8").trim()
+    : undefined;
+  await client.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup", setupKey } });
+  const { limits } = await client.call(api.admin.overview);
+  await client.call(api.setup.finish, { body: { capacity: limits.capacity } });
   const { db } = instance.ctx;
   db.tx(() => {
     for (const table of ["sessions", "devices", "activity"]) db.run(`DELETE FROM ${table}`);
@@ -76,7 +81,10 @@ export class Client {
   }
 
   async raw(options: InjectOptions): Promise<LightMyRequestResponse> {
-    const headers: Record<string, string> = { ...(options.headers as Record<string, string>) };
+    const headers: Record<string, string> = {
+      host: new URL(this.instance.ctx.config.origin ?? "http://localhost").host,
+      ...(options.headers as Record<string, string>),
+    };
     if (this.cookies.size) headers.cookie = [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
     if (this.csrf && !headers["x-relay-csrf"]) headers["x-relay-csrf"] = this.csrf;
     const res = await this.instance.app.inject({ ...options, headers });

@@ -144,23 +144,19 @@ test("pickup codes resolve to the link; wrong codes are limited per address and 
         headers: { "x-forwarded-for": ip },
         payload: { code },
       });
-    // Eleven tries from one address: the eleventh is refused by the per-address limit.
+    // Five tries from one address: the fifth starts its one-minute pause.
     const single: number[] = [];
-    for (let i = 0; i < 11; i++) single.push((await pickup("10.0.0.1", wrong)).statusCode);
-    assert.deepEqual(single, [...Array<number>(10).fill(404), 429]);
+    for (let i = 0; i < 5; i++) single.push((await pickup("10.0.0.1", wrong)).statusCode);
+    assert.deepEqual(single, [...Array<number>(4).fill(404), 429]);
 
-    // Once the global code budget is exhausted, even a clean address waits for the window to reset.
-    let failures = 2 + 10;
-    let address = 2;
-    while (failures < 60) {
-      for (let i = 0; i < 10 && failures < 60; i++, failures++)
-        assert.equal((await pickup(`10.0.0.${address}`, wrong)).statusCode, 404);
-      address++;
-    }
+    // Ten failures across addresses start the deployment-wide pause; the tenth is refused.
+    assert.equal((await pickup("10.0.1.1", wrong)).statusCode, 404);
+    assert.equal((await pickup("10.0.1.2", wrong)).statusCode, 404);
+    assert.equal((await pickup("10.0.1.3", wrong)).statusCode, 429);
     const clean = await pickup("10.0.1.1", link.code);
     assert.equal(clean.statusCode, 429);
     assert.match(clean.json<{ error: string }>().error, /Too many incorrect codes/);
-    const capped = await pickup(`10.0.0.${address - 1}`, link.code);
+    const capped = await pickup("10.0.0.1", link.code);
     assert.equal(capped.statusCode, 429);
     assert.match(capped.json<{ error: string }>().error, /Too many incorrect codes/);
   } finally {
@@ -168,22 +164,29 @@ test("pickup codes resolve to the link; wrong codes are limited per address and 
   }
 });
 
-test("expiry, extension and revocation", async () => {
+test("live links can be renewed; expiry and revocation are final", async (t) => {
   const { instance, owner, link } = await setup();
   try {
     const visitor = new Client(instance);
     const open = () => status(visitor.call(api.links.open, { params: { token: link.token } }));
     const pickup = () => status(visitor.call(api.pickup.resolve, { body: { code: link.code } }));
 
-    instance.ctx.db.run("UPDATE links SET expires = ? WHERE id = ?", Date.now() - 1, link.id);
-    assert.equal(await open(), 404);
-    assert.equal(await pickup(), 404);
-    assert.equal((await owner.call(api.links.list))[0].available, false);
-
     const extended = await owner.call(api.links.update, { params: { id: link.id }, body: { days: 2 } });
     assert.equal(extended.available, true);
     assert.ok(Math.abs(extended.expires! - (Date.now() + 2 * 86_400_000)) < 60_000);
     assert.equal(await open(), 200);
+
+    t.mock.timers.enable({ apis: ["Date"], now: extended.expires! - 1 });
+    assert.equal(await open(), 200);
+    t.mock.timers.setTime(extended.expires!);
+    assert.equal(await open(), 404);
+    assert.equal(await pickup(), 404);
+    assert.equal((await owner.call(api.links.list))[0].available, false);
+    assert.equal(await status(owner.call(api.links.update, { params: { id: link.id }, body: { days: 2 } })), 410);
+    assert.equal(
+      await status(owner.call(api.links.update, { params: { id: link.id }, body: { note: "Changed" } })),
+      410,
+    );
 
     await owner.call(api.links.revoke, { params: { id: link.id } });
     assert.equal(await open(), 404);
@@ -193,6 +196,39 @@ test("expiry, extension and revocation", async () => {
     assert.equal(revoked.available, false);
     assert.equal(await status(owner.call(api.links.update, { params: { id: link.id }, body: { days: 3 } })), 410);
   } finally {
+    t.mock.timers.reset();
+    await instance.close();
+  }
+});
+
+test("shares save the earlier item deadline; item renewal alone never extends them", async (t) => {
+  const { instance, owner, itemId } = await setup();
+  try {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ["Date"], now });
+    const kept = await owner.call(api.items.update, { params: { id: itemId }, body: { retentionDays: 2 } });
+    const shared = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: itemId, days: 7 },
+    });
+    assert.equal(shared.expires, kept.expires);
+    assert.equal(instance.ctx.db.value("SELECT expires FROM links WHERE id = ?", shared.id), kept.expires);
+    assert.equal((await openShare(new Client(instance), shared.token)).expires, kept.expires);
+
+    await owner.call(api.items.update, { params: { id: itemId }, body: { retentionDays: 5 } });
+    const unchanged = (await owner.call(api.links.list)).find((link) => link.id === shared.id)!;
+    assert.equal(unchanged.expires, kept.expires);
+    const shorter = await owner.call(api.links.update, { params: { id: shared.id }, body: { days: 1 } });
+    assert.equal(shorter.expires, now + 86_400_000);
+    const renewed = await owner.call(api.links.update, { params: { id: shared.id }, body: { days: null } });
+    assert.equal(renewed.expires, now + 5 * 86_400_000, "explicit renewal stays within the item deadline");
+
+    await owner.call(api.items.update, { params: { id: itemId }, body: { retentionDays: 1 } });
+    const tightened = (await owner.call(api.links.list)).find((link) => link.id === shared.id)!;
+    assert.equal(tightened.expires, now + 86_400_000, "owner list reports the shortened usable lifetime");
+    assert.equal(instance.ctx.db.value("SELECT expires FROM links WHERE id = ?", shared.id), tightened.expires);
+    assert.equal((await openShare(new Client(instance), shared.token)).expires, tightened.expires);
+  } finally {
+    t.mock.timers.reset();
     await instance.close();
   }
 });
@@ -245,6 +281,9 @@ test("a transfer can finish as a link, and a disabled owner's links stop working
     const { user } = await owner.call(api.session.get);
     await boss.call(api.admin.updateMember, { params: { id: user.id }, body: { disabled: true } });
     assert.equal(await status(visitor.call(api.links.open, { params: { token: result.link.token } })), 404);
+    await boss.call(api.admin.updateMember, { params: { id: user.id }, body: { disabled: false } });
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: result.link.token } })), 200);
+    assert.equal(instance.ctx.db.value("SELECT revoked FROM links WHERE id = ?", result.link.id), null);
   } finally {
     await instance.close();
   }
@@ -253,19 +292,19 @@ test("a transfer can finish as a link, and a disabled owner's links stop working
 test("pickup throttles IPv6 hosts together within a /64", async () => {
   const { instance, link } = await setup();
   try {
-    for (let i = 1; i <= 11; i++) {
+    for (let i = 1; i <= 5; i++) {
       const res = await instance.app.inject({
         method: "POST",
         url: api.pickup.resolve.path,
-        headers: { "x-forwarded-for": `2001:db8:abcd:1234::${i}` },
+        headers: { host: "relay.test", "x-forwarded-for": `2001:db8:abcd:1234::${i}` },
         payload: { code: "short" },
       });
-      assert.equal(res.statusCode, i <= 10 ? 404 : 429);
+      assert.equal(res.statusCode, i <= 4 ? 404 : 429);
     }
     const clean = await instance.app.inject({
       method: "POST",
       url: api.pickup.resolve.path,
-      headers: { "x-forwarded-for": "2001:db8:abcd:1235::1" },
+      headers: { host: "relay.test", "x-forwarded-for": "2001:db8:abcd:1235::1" },
       payload: { code: link.code },
     });
     assert.equal(clean.statusCode, 200);
@@ -279,8 +318,8 @@ test("expired pickup codes count as failed attempts", async () => {
   try {
     instance.ctx.db.run("UPDATE links SET expires = ? WHERE id = ?", Date.now() - 1, link.id);
     const visitor = new Client(instance);
-    for (let i = 0; i < 11; i++)
-      assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), i < 10 ? 404 : 429);
+    for (let i = 0; i < 5; i++)
+      assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), i < 4 ? 404 : 429);
   } finally {
     await instance.close();
   }

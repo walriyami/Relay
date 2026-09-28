@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
-import { createWriteStream, openSync, closeSync, readSync } from "node:fs";
+import { createWriteStream, openSync, closeSync, readFileSync, readSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { crc32 } from "node:zlib";
@@ -42,7 +42,12 @@ export class Session {
       h.set("origin", this.origin);
       if (this.csrf) h.set(headers.csrf, this.csrf);
     }
-    const res = await fetch(this.origin + path, { ...init, headers: h, redirect: "manual" });
+    const res = await fetch(this.origin + path, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(120_000),
+      headers: h,
+      redirect: "manual",
+    });
     for (const cookie of res.headers.getSetCookie()) {
       const [pair, ...attributes] = cookie.split(";");
       const at = pair.indexOf("=");
@@ -81,16 +86,61 @@ export class Session {
   }
 }
 
+/** Opens the member event stream and resolves once the server says it is ready. */
+export async function holdEvents(session: Session, signal: AbortSignal, readyTimeoutMs = 30_000) {
+  const admission = new AbortController();
+  const deadline = setTimeout(
+    () => admission.abort(new Error(`The event stream was not ready within ${readyTimeoutMs} ms.`)),
+    readyTimeoutMs,
+  );
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const res = await session.fetch(`${urls.events(session.tab)}&browser=${session.tab}`, {
+      signal: AbortSignal.any([signal, admission.signal]),
+    });
+    assert(res.status === 200, `The event stream answered ${res.status}.`);
+    reader = res.body!.getReader();
+    let seen = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      assert(!done, "The event stream closed before it was ready.");
+      seen += Buffer.from(value).toString("utf8");
+      if (seen.includes("event: ready\n")) break;
+      seen = seen.slice(-1024);
+    }
+    const active = reader;
+    void (async () => {
+      try {
+        while (!(await active.read()).done);
+      } catch {
+        // The stream was closed; that's the end of it.
+      } finally {
+        active.releaseLock();
+      }
+    })();
+  } catch (error) {
+    const failure: unknown = admission.signal.aborted ? admission.signal.reason : error;
+    admission.abort();
+    reader?.releaseLock();
+    throw failure;
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
 /**
- * Sets up a first start as a person would in the browser: the administrator "admin", with the
- * built-in member values, then signs out. Does nothing once Relay is set up.
+ * Sets up a first start as a person would in the browser: the administrator "admin", keeping the
+ * built-in choices, then signs out. Does nothing once Relay is set up.
  */
-export async function setUpAdmin(origin: string, password: string) {
+export async function setUpAdmin(origin: string, password: string, readSetupKey: () => string) {
   const session = new Session(origin);
-  if ((await session.call(api.setup.status)).state !== "account") return;
-  await session.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup" } });
-  const { defaults, limits } = await session.call(api.admin.overview);
-  await session.call(api.setup.finish, { body: { ...defaults, capacity: limits.capacity } });
+  const status = await session.call(api.setup.status);
+  if (status.state !== "account") return;
+  // The key is read only from a server started with RELAY_SETUP_KEY=true.
+  const setupKey = status.keyRequired ? readSetupKey() : undefined;
+  await session.call(api.setup.account, { body: { username: "admin", password, deviceName: "Setup", setupKey } });
+  const { limits } = await session.call(api.admin.overview);
+  await session.call(api.setup.finish, { body: { capacity: limits.capacity } });
   await session.call(api.session.signOut);
 }
 
@@ -281,7 +331,9 @@ export async function download(session: Session, path: string, init: RequestInit
  */
 export async function resumedDownload(session: Session, path: string, fraction = 0.5) {
   const controller = new AbortController();
-  const first = await session.fetch(path, { signal: controller.signal });
+  const first = await session.fetch(path, {
+    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+  });
   if (first.status !== 200) throw new HttpError(first.status, await first.text());
   const total = Number(first.headers.get("content-length"));
   const etag = first.headers.get("etag")!;
@@ -548,7 +600,7 @@ export async function startServer(options: {
   child.once("close", () => log.end());
   try {
     await waitForHealth(origin, 30_000, () => !exited);
-    await setUpAdmin(origin, LOCAL_PASSWORD);
+    await setUpAdmin(origin, LOCAL_PASSWORD, () => readFileSync(join(options.root, "setup.key"), "utf8").trim());
   } catch (error) {
     child.kill("SIGKILL");
     await exit;

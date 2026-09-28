@@ -56,13 +56,15 @@ test("taps on the boxes reach the input, so the browser can offer Paste", async 
   expect(hit).toContain("code-entry-field-native");
 });
 
-test("the code field uses one numeric text input and password-manager hints", async ({ page }) => {
+test("the code field is a numeric text input that opts out of password managers", async ({ page }) => {
   await expect(field(page)).toHaveAttribute("type", "text");
   await expect(field(page)).toHaveAttribute("name", "relay-code");
-  await expect(field(page)).toHaveAttribute("autocomplete", "one-time-code");
+  await expect(field(page)).toHaveAttribute("autocomplete", "off");
   await expect(field(page)).toHaveAttribute("inputmode", "numeric");
   await expect(field(page)).toHaveAttribute("data-1p-ignore", "true");
   await expect(field(page)).toHaveAttribute("data-lpignore", "true");
+  await expect(field(page)).toHaveAttribute("data-bwignore", "true");
+  await expect(field(page)).toHaveAttribute("data-form-type", "other");
 });
 
 test("six numeric digits auto-submit once and preserve leading zeroes", async ({ page }) => {

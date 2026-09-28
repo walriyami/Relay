@@ -10,9 +10,11 @@ import type { Context, ItemRow } from "../../context.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { cleanName } from "../../lib/names.ts";
 import { DAY_MS } from "../../lib/time.ts";
+import { earlier, hardDeadline, setRetention } from "./retention.ts";
 import { EXCERPT_CHARS, summarize, type StoredSummary, type SummaryNode } from "./summary.ts";
 
-const ITEM_COLUMNS = "id, owner, name, created, expires, trashed, request_id";
+const ITEM_COLUMNS =
+  "id, owner, name, created, expires, first_saved_at, retention_days, max_age_days, trashed, purge_at, request_id";
 
 export const isLive = (item: Pick<ItemRow, "trashed" | "expires">, now = Date.now()) =>
   item.trashed === null && (item.expires === null || item.expires > now);
@@ -22,6 +24,22 @@ export function owned(ctx: Context, owner: string, itemId: string, options: { li
     ctx.db.get<ItemRow>(`SELECT ${ITEM_COLUMNS} FROM items WHERE id = ? AND owner = ?`, itemId, owner) ??
     notFound("That item");
   if (options.live && !isLive(item)) fail(410, "This item is in Trash or has expired.");
+  return item;
+}
+
+/** Owner previews include recoverable Trash, but never content past its final deadline. */
+function readable(ctx: Context, item: ItemRow, now: number) {
+  let end = earlier(item.purge_at, hardDeadline(item));
+  if (item.trashed === null && item.expires !== null && item.expires <= now) {
+    const days = ctx.db.value<number>("SELECT trash_days FROM users WHERE id = ?", item.owner)!;
+    end = earlier(end, item.expires + days * DAY_MS);
+  }
+  return end === null || end > now;
+}
+
+export function ownedReadable(ctx: Context, owner: string, itemId: string): ItemRow {
+  const item = owned(ctx, owner, itemId);
+  if (!readable(ctx, item, Date.now())) fail(410, "This item's recovery period has ended.");
   return item;
 }
 
@@ -79,13 +97,17 @@ export function summaries(ctx: Context, ids: string[]): Map<string, ItemSummary>
   );
   for (const id of ids) {
     const row = rows.get(id);
-    if (!row || result.has(id)) continue;
+    if (!row || result.has(id) || !readable(ctx, row, now)) continue;
     const { name, ...stored } = JSON.parse(row.summary) as StoredSummary;
     result.set(id, {
       id,
       name: row.name ?? name ?? (uploading.has(id) ? "Uploading…" : "Empty"),
       autoName: row.name === null,
       created: row.created,
+      firstSavedAt: row.first_saved_at,
+      hardExpires: hardDeadline(row),
+      maxAgeDays: row.max_age_days,
+      purgeAt: row.purge_at,
       expires: row.expires,
       trashed: row.trashed,
       requestId: row.request_id,
@@ -103,13 +125,15 @@ type NodeRow = Omit<Node, "text"> & { text: string | null };
 export function nodes(ctx: Context, itemId: string): Node[] {
   return ctx.db
     .all<NodeRow>(
-      `WITH RECURSIVE tree(id, path) AS (
-         SELECT id, name FROM nodes WHERE item = ? AND parent IS NULL AND state = 'ready'
+      // The walk carries every column: joining back to nodes lets the planner scan the whole table.
+      `WITH RECURSIVE tree(id, name, path, kind, size, mime, parent, created, text) AS (
+         SELECT id, name, name, kind, size, mime, parent, created, text
+         FROM nodes WHERE item = ? AND parent IS NULL AND state = 'ready'
          UNION ALL
-         SELECT n.id, tree.path || '/' || n.name FROM nodes n JOIN tree ON n.parent = tree.id WHERE n.state = 'ready'
+         SELECT n.id, n.name, tree.path || '/' || n.name, n.kind, n.size, n.mime, n.parent, n.created, n.text
+         FROM nodes n JOIN tree ON n.parent = tree.id WHERE n.state = 'ready'
        )
-       SELECT n.id, n.name, tree.path, n.kind, n.size, n.mime, n.parent, n.created, n.text
-       FROM tree JOIN nodes n ON n.id = tree.id ORDER BY tree.path`,
+       SELECT id, name, path, kind, size, mime, parent, created, text FROM tree ORDER BY path`,
       itemId,
     )
     .map(({ text, ...node }) => (node.kind === "text" ? { ...node, text: text ?? "" } : node));
@@ -117,6 +141,7 @@ export function nodes(ctx: Context, itemId: string): Node[] {
 
 export function listItems(ctx: Context, owner: string, query: Query<typeof api.items.list>): ItemPage {
   const now = Date.now();
+  expireItems(ctx, owner, now);
   refresh(
     ctx,
     ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ? AND summary_dirty = 1", owner).map((r) => r.id),
@@ -135,9 +160,11 @@ export function listItems(ctx: Context, owner: string, query: Query<typeof api.i
   const inText = "n.state = 'ready' AND n.kind = 'text' AND instr(lower(n.text), lower(?)) > 0";
   const matching = `FROM items i
     WHERE i.owner = ? AND ${view}
+      AND (i.purge_at IS NULL OR i.purge_at > ?)
+      AND (i.first_saved_at IS NULL OR i.max_age_days IS NULL OR i.first_saved_at + i.max_age_days * ${DAY_MS} > ?)
       AND (? = '' OR instr(${displayName}, lower(?)) > 0
         OR EXISTS (SELECT 1 FROM nodes n WHERE n.item = i.id AND (${inName} OR ${inText})))`;
-  const args = [owner, ...(query.view === "trash" ? [] : [now]), q, q, q, q];
+  const args = [owner, ...(query.view === "trash" ? [] : [now]), now, now, q, q, q, q];
   // An item whose own name matches needs no explanation; otherwise say what inside it matched.
   const rows = ctx.db.all<{ id: string; name: string | null; text: string | null }>(
     `SELECT i.id,
@@ -159,14 +186,16 @@ export function listItems(ctx: Context, owner: string, query: Query<typeof api.i
     rows.map((r) => r.id),
   );
   return {
-    items: rows.map(({ id, name, text }) => {
+    items: rows.flatMap(({ id, name, text }) => {
+      const summary = found.get(id);
+      if (!summary) return [];
       const match: SearchMatch | null =
         name !== null
           ? { in: "name", text: name }
           : text !== null
             ? { in: "text", text: excerpt(...(JSON.parse(text) as [number, number, string])) }
             : null;
-      return { ...found.get(id)!, ...(match ? { match } : {}) };
+      return [{ ...summary, ...(match ? { match } : {}) }];
     }),
     total,
   };
@@ -190,9 +219,9 @@ function excerpt(from: number, length: number, slice: string) {
 }
 
 export function itemDetail(ctx: Context, owner: string, itemId: string): ItemDetail {
-  owned(ctx, owner, itemId);
+  ownedReadable(ctx, owner, itemId);
   return {
-    ...summaries(ctx, [itemId]).get(itemId)!,
+    ...(summaries(ctx, [itemId]).get(itemId) ?? fail(410, "This item's recovery period has ended.")),
     nodes: nodes(ctx, itemId),
     links: ctx.links.forItem(owner, itemId),
   };
@@ -208,20 +237,11 @@ export function updateItem(
   if (body.name === undefined && body.retentionDays === undefined) fail(400, "Nothing to change.");
   const name = body.name == null ? body.name : cleanName(body.name);
   ctx.db.tx(() => {
-    const item = owned(ctx, owner, itemId);
-    if (name !== undefined) {
-      // Trash is read-only: restore an item before renaming it.
-      if (item.trashed !== null) fail(409, "Restore this item before renaming it.");
-      ctx.db.run("UPDATE items SET name = ? WHERE id = ?", name, itemId);
-    }
-    if (body.retentionDays !== undefined)
-      ctx.db.run(
-        "UPDATE items SET expires = ? WHERE id = ?",
-        body.retentionDays === null ? null : Date.now() + body.retentionDays * DAY_MS,
-        itemId,
-      );
+    const item = owned(ctx, owner, itemId, { live: true });
+    if (name !== undefined) ctx.db.run("UPDATE items SET name = ? WHERE id = ?", name, itemId);
+    if (body.retentionDays !== undefined) setRetention(ctx, item, body.retentionDays);
   });
-  ctx.events.publish(owner, "items", "links", "deliveries");
+  ctx.events.publish(owner, "items", "links", "deliveries", "requests");
   return summaries(ctx, [itemId]).get(itemId)!;
 }
 
@@ -230,14 +250,39 @@ export function trashItem(ctx: Context, owner: string, itemId: string) {
   const item = owned(ctx, owner, itemId);
   if (item.trashed !== null) return;
   const now = Date.now();
-  ctx.db.tx(() => trashItemInTransaction(ctx, itemId, now));
-  ctx.events.publish(owner, "items", "links", "deliveries");
+  ctx.db.tx(() => trashItemInTransaction(ctx, item, item.expires === null ? now : Math.min(now, item.expires)));
+  ctx.events.publish(owner, "items", "links", "deliveries", "requests");
 }
 
-function trashItemInTransaction(ctx: Context, itemId: string, now: number) {
-  ctx.db.run("UPDATE items SET trashed = ? WHERE id = ?", now, itemId);
-  ctx.db.run("UPDATE links SET revoked = ? WHERE item = ? AND revoked IS NULL", now, itemId);
-  ctx.transfers.cancelForItem(itemId);
+function trashItemInTransaction(ctx: Context, item: ItemRow, at: number) {
+  const days = ctx.db.value<number>("SELECT trash_days FROM users WHERE id = ?", item.owner)!;
+  const purgeAt = earlier(at + days * DAY_MS, hardDeadline(item));
+  ctx.db.run("UPDATE items SET trashed = ?, purge_at = ? WHERE id = ?", at, purgeAt, item.id);
+  ctx.db.run("UPDATE links SET revoked = ? WHERE item = ? AND revoked IS NULL", at, item.id);
+  ctx.transfers.cancelForItem(item.id);
+}
+
+/** Freeze automatic Trash deadlines under the current setting before that setting can change. */
+export function expireItems(ctx: Context, owner: string, now = Date.now()) {
+  ctx.db.tx(() => {
+    for (const item of ctx.db.all<ItemRow>(
+      `SELECT ${ITEM_COLUMNS} FROM items WHERE owner = ? AND trashed IS NULL AND expires IS NOT NULL AND expires <= ?`,
+      owner,
+      now,
+    ))
+      trashItemInTransaction(ctx, item, item.expires!);
+  });
+}
+
+function recoverable(item: ItemRow, now: number) {
+  const end = earlier(item.purge_at, hardDeadline(item));
+  return item.trashed !== null && end !== null && end > now;
+}
+
+function restoreInTransaction(ctx: Context, item: ItemRow, now: number) {
+  if (!recoverable(item, now)) fail(410, "This item's recovery period has ended.");
+  setRetention(ctx, item, null, now);
+  ctx.db.run("UPDATE items SET trashed = NULL, purge_at = NULL WHERE id = ?", item.id);
 }
 
 /** Applies a bounded visible-page operation after validating every selected row inside one transaction. */
@@ -245,8 +290,8 @@ export function bulkItems(ctx: Context, owner: string, body: Body<typeof api.ite
   const now = Date.now();
   const result = ctx.db.tx(() => {
     const ids = JSON.stringify(body.ids);
-    const rows = ctx.db.all<Pick<ItemRow, "id" | "trashed" | "expires">>(
-      "SELECT id, trashed, expires FROM items WHERE owner = ? AND id IN (SELECT value FROM json_each(?))",
+    const rows = ctx.db.all<ItemRow>(
+      `SELECT ${ITEM_COLUMNS} FROM items WHERE owner = ? AND id IN (SELECT value FROM json_each(?))`,
       owner,
       ids,
     );
@@ -254,41 +299,34 @@ export function bulkItems(ctx: Context, owner: string, body: Body<typeof api.ite
     if (
       rows.some((item) =>
         body.operation === "restore"
-          ? item.trashed === null
+          ? !recoverable(item, now)
           : item.trashed !== null || (item.expires !== null && item.expires <= now),
       )
     )
       fail(409, "Some selected items are no longer in that view. Refresh and try again.");
 
-    if (body.operation === "retention") {
-      const expires = body.retentionDays === null ? null : now + body.retentionDays * DAY_MS;
-      ctx.db.run(
-        "UPDATE items SET expires = ? WHERE owner = ? AND id IN (SELECT value FROM json_each(?))",
-        expires,
-        owner,
-        ids,
-      );
-    } else if (body.operation === "restore") {
-      ctx.db.run(
-        "UPDATE items SET trashed = NULL, expires = NULL WHERE owner = ? AND id IN (SELECT value FROM json_each(?))",
-        owner,
-        ids,
-      );
-    } else {
-      for (const item of rows) trashItemInTransaction(ctx, item.id, now);
+    for (const item of rows) {
+      if (body.operation === "retention") setRetention(ctx, item, body.retentionDays, now);
+      else if (body.operation === "restore") restoreInTransaction(ctx, item, now);
+      else trashItemInTransaction(ctx, item, now);
     }
     return rows.length;
   });
-  ctx.events.publish(owner, "items", "links", "deliveries");
+  ctx.events.publish(owner, "items", "links", "deliveries", "requests");
   return { updated: result };
 }
 
-/** Restoring keeps the item indefinitely; links revoked by trashing stay revoked. */
+/**
+ * Restoring keeps the item until deleted, or as long as the member may keep uploads; links revoked
+ * by trashing stay revoked.
+ */
 export function restoreItem(ctx: Context, owner: string, itemId: string) {
-  const item = owned(ctx, owner, itemId);
-  if (item.trashed === null) fail(409, "That item is not in Trash.");
-  ctx.db.run("UPDATE items SET trashed = NULL, expires = NULL WHERE id = ?", itemId);
-  ctx.events.publish(owner, "items", "links", "deliveries");
+  ctx.db.tx(() => {
+    const item = owned(ctx, owner, itemId);
+    if (item.trashed === null) fail(409, "That item is not in Trash.");
+    restoreInTransaction(ctx, item, Date.now());
+  });
+  ctx.events.publish(owner, "items", "links", "deliveries", "requests");
 }
 
 export function removeItem(ctx: Context, owner: string, itemId: string) {
@@ -312,21 +350,47 @@ export function purge(ctx: Context, itemId: string) {
     ctx.transfers.cancelForItem(itemId);
     ctx.db.run("DELETE FROM items WHERE id = ?", itemId);
   });
-  ctx.blobs.collect(blobs);
-  ctx.events.publish(owner, "items", "links", "deliveries");
+  try {
+    ctx.blobs.collect(blobs);
+  } catch (error) {
+    // Unreferenced blob rows are durable cleanup work; maintenance retries after filesystem recovery.
+    ctx.log.error({ err: error, item: itemId }, "Physical deletion pending; blob cleanup will retry");
+  }
+  ctx.events.publish(owner, "items", "links", "deliveries", "requests");
+  ctx.events.broadcast("account");
 }
 
-/** Expired items move to Trash; each member's Trash is emptied after their own `trash_days`. */
-export function sweep(ctx: Context, now: number) {
-  for (const item of ctx.db.all<{ id: string; owner: string }>(
-    "SELECT id, owner FROM items WHERE trashed IS NULL AND expires IS NOT NULL AND expires <= ?",
+/**
+ * Deadlines remain anchored through outages; one broken item cannot stop independent cleanup. Each
+ * item is its own transaction, and other work runs between them, so a backlog never stalls requests.
+ */
+export async function sweep(ctx: Context, now: number) {
+  const next = () => new Promise((resolve) => setImmediate(resolve));
+  const errors: unknown[] = [];
+  const owners = new Set<string>();
+  for (const item of ctx.db.all<ItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM items WHERE trashed IS NULL AND expires IS NOT NULL AND expires <= ?`,
     now,
-  ))
-    trashItem(ctx, item.owner, item.id);
+  )) {
+    try {
+      ctx.db.tx(() => trashItemInTransaction(ctx, item, item.expires!));
+      owners.add(item.owner);
+    } catch (error) {
+      errors.push(error);
+    }
+    await next();
+  }
   for (const item of ctx.db.all<{ id: string }>(
-    "SELECT i.id FROM items i JOIN users u ON u.id = i.owner WHERE i.trashed IS NOT NULL AND i.trashed <= ? - u.trash_days * ?",
+    "SELECT id FROM items WHERE trashed IS NOT NULL AND purge_at <= ?",
     now,
-    DAY_MS,
-  ))
-    purge(ctx, item.id);
+  )) {
+    try {
+      purge(ctx, item.id);
+    } catch (error) {
+      errors.push(error);
+    }
+    await next();
+  }
+  for (const owner of owners) ctx.events.publish(owner, "items", "links", "deliveries", "account", "requests");
+  if (errors.length) throw new AggregateError(errors, "Some items could not be expired or purged");
 }

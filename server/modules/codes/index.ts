@@ -6,14 +6,27 @@ import { route } from "../../lib/http.ts";
 import { normalizeCode } from "../../lib/secrets.ts";
 import { addressKey } from "../auth/limits.ts";
 import { checkAvailable, LINK_SELECT, type LinkRow } from "../links/service.ts";
-import { checkPickupCodeAttempt, recordPickupCodeFailure } from "../../lib/pickup-code-guard.ts";
-import { codeLengthOf, currentOwnedPickupCode } from "../../lib/pickup-codes.ts";
+import { checkPickupCodeAttempt, pickupProtectionOf, recordPickupCodeFailure } from "../../lib/pickup-code-guard.ts";
+import {
+  codeLengthOf,
+  currentOwnedPickupCode,
+  ensurePickupCodeResolutionAvailable,
+  reconcilePickupCodeMode,
+} from "../../lib/pickup-codes.ts";
 
 /** One entry point classifies a code, then its recipient flow applies its own access rules. */
 export function registerCodes(app: FastifyInstance, ctx: Context) {
-  route(app, ctx, api.pickup.config, () => ({ codeLength: codeLengthOf(ctx.db) }));
+  route(app, ctx, api.pickup.config, ({ req }) => {
+    const now = Date.now();
+    reconcilePickupCodeMode(ctx, now);
+    return {
+      codeLength: codeLengthOf(ctx.db),
+      protection: pickupProtectionOf(ctx, addressKey(req.ip), now),
+    };
+  });
 
   route(app, ctx, api.pickup.current, ({ body, member }) => {
+    reconcilePickupCodeMode(ctx);
     const code = normalizeCode(body.code);
     const current = code ? currentOwnedPickupCode(ctx, member.userId, code) : null;
     return { code: current };
@@ -22,8 +35,13 @@ export function registerCodes(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.pickup.resolve, ({ body, req }) => {
     const address = addressKey(req.ip);
     const now = Date.now();
+    reconcilePickupCodeMode(ctx, now);
+    ensurePickupCodeResolutionAvailable(ctx.db);
     const reject = (status: number, message: string): never => {
-      recordPickupCodeFailure(ctx, address, now);
+      const outcome = recordPickupCodeFailure(ctx, address, now);
+      if (outcome.addressTriggered || outcome.globalTriggered) reconcilePickupCodeMode(ctx, now);
+      if (outcome.addressTriggered || outcome.globalTriggered)
+        fail(429, "Too many incorrect codes. Code entry is temporarily paused.");
       fail(status, message);
     };
     checkPickupCodeAttempt(ctx, address, now);

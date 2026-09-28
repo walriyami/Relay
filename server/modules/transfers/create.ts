@@ -1,21 +1,23 @@
 // POST /api/transfers: one synchronous transaction checks every limit, creates (or appends to) the
 // item, its folders, the text node, a pending node and an upload row per file. Zero-byte files are
 // completed on the spot. Retrying the same id with the same manifest returns the same result.
-import { closeSync, fsyncSync, openSync, statfsSync } from "node:fs";
-import { join } from "node:path";
-import { DEFAULTS, LIMITS, type TransferCreated } from "../../../shared/model.ts";
+import { statfsSync } from "node:fs";
+import { LIMITS, type TransferCreated } from "../../../shared/model.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { principalKey, type Context, type CreateTransferOptions, type TransferInput } from "../../context.ts";
 import { isUniqueViolation } from "../../db/database.ts";
 import { fail } from "../../lib/errors.ts";
+import { cleanName } from "../../lib/names.ts";
 import { sha256 } from "../../lib/secrets.ts";
-import { DAY_MS } from "../../lib/time.ts";
-import { unlinkIfPresent } from "../../storage/files.ts";
+import { EMPTY_SHA256 } from "../../storage/blobs.ts";
+import { capacityOf } from "../admin/settings.ts";
+import { allowedKeepDays } from "../auth/member-limits.ts";
 import { foldCase, planNodes, type PlannedNode } from "./plan.ts";
 import { publishItemChange } from "./publish.ts";
+import { startRetention } from "../library/retention.ts";
+import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const DISK_HEADROOM = 256 * 1024 ** 2;
-const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 export const TAB_CLOSED = "This tab was closed, so its transfer was cancelled.";
 const NAME_TAKEN = "A file or folder with that name already exists there.";
 
@@ -34,27 +36,33 @@ export function bytesLabel(bytes: number) {
 function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entries: number) {
   if (options.limit) {
     const room = options.limit;
-    if (room.bytes === 0 || room.entries === 0) fail(413, "This request is full.");
+    if ((bytes > 0 && room.bytes === 0) || room.entries === 0) fail(413, "This request is full.");
     if (bytes > room.bytes) fail(413, `This request has room for ${bytesLabel(room.bytes)} more.`);
     if (entries > room.entries) fail(413, "This request cannot take that many more files.");
   }
 
   const reserved = (where: string, ...args: string[]) =>
     ctx.db.value<number>(`SELECT coalesce(sum(size), 0) FROM nodes WHERE state = 'pending' ${where}`, ...args)!;
-  const user = ctx.db.get<{ quota: number; bytes_used: number }>(
+  const user = ctx.db.get<{ quota: number | null; bytes_used: number }>(
     "SELECT quota, bytes_used FROM users WHERE id = ?",
     options.owner,
   )!;
-  if (user.bytes_used + reserved("AND owner = ?", options.owner) + bytes > user.quota)
+  if (
+    bytes > 0 &&
+    user.quota !== null &&
+    user.bytes_used + reserved("AND owner = ?", options.owner) + bytes > user.quota
+  )
     fail(
       413,
-      options.principal.kind === "grant" ? "The recipient's storage is full." : "This would exceed your storage quota.",
+      options.principal.kind === "grant"
+        ? "The recipient's storage is full."
+        : "This would go over your storage limit. Free up space, or ask your administrator for more.",
     );
-  const capacity = Number(ctx.db.setting("capacity") ?? DEFAULTS.capacityBytes);
+  const capacity = capacityOf(ctx);
   const stored = ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
-  if (stored + reserved("") + bytes > capacity) fail(507, "The server has reached its storage capacity.");
+  if (bytes > 0 && stored + reserved("") + bytes > capacity) fail(507, "The server has reached its storage capacity.");
   const disk = statfsSync(ctx.config.root);
-  if (disk.bavail * disk.bsize - ctx.transfers.outstandingBytes() - DISK_HEADROOM < bytes)
+  if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes() - DISK_HEADROOM < bytes)
     fail(507, "The server's disk does not have enough free space for this transfer.");
 }
 
@@ -86,20 +94,11 @@ function uniqueName(name: string, taken: Set<string>, preserveExtension = false)
   }
 }
 
-/** A durable empty file to adopt as the empty blob; removed by the caller. */
-function emptyFile(ctx: Context) {
-  const path = join(ctx.config.root, "uploads", `${uuidv7()}.empty`);
-  const fd = openSync(path, "w", 0o600);
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  return path;
-}
-
 export function createTransfer(ctx: Context, input: TransferInput, options: CreateTransferOptions): TransferCreated {
+  if (ctx.db.sqlite.isTransaction) throw new Error("Transfers must be created outside an existing transaction.");
   const principal = principalKey(options.principal);
+  const target = { owner: options.owner, principal, ...(options.itemId ? { item: options.itemId } : {}) };
+  ensureTransferAvailability(ctx, target);
   // itemId and itemName are derived server-side for guest retries. Only the request itself,
   // stable principal and request identity define an idempotent create.
   const requestHash = sha256(JSON.stringify([input, principal, options.requestId ?? null]));
@@ -108,21 +107,24 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
     return ids.map((id, i) => ({ id, path: paths[i].path }));
   };
 
-  let empty: string | null = null;
   let emptyPrepared = false;
 
   try {
     // Retry lookup precedes planning, admission, and filesystem preparation. This keeps a guest
     // retry idempotent after its grant has acquired the submission itemId.
-    const initial = ctx.db.get<{ principal: string; request_hash: string; item: string }>(
-      "SELECT principal, request_hash, item FROM transfers WHERE id = ?",
+    const initial = ctx.db.get<{ principal: string; request_hash: string; item: string; state: string }>(
+      "SELECT principal, request_hash, item, state FROM transfers WHERE id = ?",
       input.id,
     );
     if (initial) {
       if (initial.principal !== principal || initial.request_hash !== requestHash)
         fail(409, "This transfer was already created with different contents.");
+      ensureTransferAvailability(ctx, { ...target, item: initial.item });
+      if (initial.state === "cancelled") fail(410, "This transfer was cancelled.");
       const plan = planNodes(input);
       const ids = ctx.db.all<{ id: string }>("SELECT id FROM uploads WHERE transfer = ? ORDER BY rowid", input.id);
+      if (options.sender != null)
+        ctx.db.run("UPDATE items SET sender = coalesce(sender, ?) WHERE id = ?", options.sender, initial.item);
       return {
         id: input.id,
         itemId: initial.item,
@@ -133,16 +135,15 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       };
     }
 
-    if (
-      input.files.some((file) => file.size === 0) &&
-      !ctx.db.get("SELECT 1 FROM blobs WHERE sha256 = ?", EMPTY_SHA256)
-    ) {
-      empty = emptyFile(ctx);
-      ctx.blobs.adopt(empty, EMPTY_SHA256, 0, 0);
+    if (input.files.some((file) => file.size === 0)) {
+      // Empty files bypass the receiver, so recreate their proven bytes here on every new upload.
+      // A blob row alone cannot certify that an existing payload is still present and intact.
       emptyPrepared = true;
+      ctx.blobs.adoptEmpty();
     }
 
     const result = ctx.db.tx(() => {
+      assertTransferAvailability(ctx, target);
       const plan = planNodes(input);
       if (
         options.principal.kind === "grant" &&
@@ -156,22 +157,28 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       admit(ctx, options, bytes, plan.length + (text === null ? 0 : 1));
 
       const now = Date.now();
+      const itemName = options.itemName ?? input.name?.normalize("NFC") ?? null;
+      const safeItemName = itemName === null ? null : cleanName(itemName);
       let itemId = options.itemId;
       if (itemId) ctx.library.owned(options.owner, itemId, { live: true });
       else {
         itemId = uuidv7();
-        const days =
-          input.retentionDays ??
-          ctx.db.value<number | null>("SELECT retention_days FROM users WHERE id = ?", options.owner) ??
-          null;
+        // Null is a choice too: kept until deleted. Left out, the owner's own setting applies.
+        const chosen =
+          input.retentionDays !== undefined
+            ? input.retentionDays
+            : ctx.db.value<number | null>("SELECT retention_days FROM users WHERE id = ?", options.owner)!;
+        const days = allowedKeepDays(ctx, options.owner, chosen);
         ctx.db.run(
-          "INSERT INTO items(id, owner, name, created, expires, request_id) VALUES(?, ?, ?, ?, ?, ?)",
+          "INSERT INTO items(id, owner, name, created, retention_days, max_age_days, request_id, sender) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
           itemId,
           options.owner,
-          options.itemName ?? input.name?.normalize("NFC") ?? null,
+          safeItemName,
           now,
-          days === null ? null : now + days * DAY_MS,
+          days,
+          ctx.db.value<number | null>("SELECT max_retention_days FROM users WHERE id = ?", options.owner)!,
           options.requestId ?? null,
+          options.sender ?? null,
         );
       }
       ctx.db.run(
@@ -288,23 +295,30 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
         if (isUniqueViolation(error)) fail(409, NAME_TAKEN);
         throw error;
       }
+      assertTransferAvailability(ctx, { ...target, item: itemId });
+      if (text !== null || input.files.some((f) => f.size === 0) || (!input.files.length && plan.length))
+        startRetention(ctx, itemId);
+      // Uploaded files count as they finish; empty files are complete already. A note is data, not a file.
+      ctx.usage.add(options.owner, {
+        files: input.files.filter((f) => f.size === 0).length,
+        [options.principal.kind === "member" ? "uploaded" : "received"]: text === null ? 0 : Buffer.byteLength(text),
+      });
       publishItemChange(ctx, options.owner, itemId);
       return { id: input.id, itemId, uploads: uploadsInOrder(plan, uploads) };
     });
     return result;
+  } catch (error) {
+    ensureTransferAvailability(ctx, target);
+    throw error;
   } finally {
-    if (empty) unlinkIfPresent(empty);
-    // A guest request wraps create() in its own outer transaction. Delay collection until that
-    // transaction commits or rolls back, preserving a referenced empty blob and cleaning an
-    // orphaned staged link after an outer rollback.
-    if (emptyPrepared)
-      queueMicrotask(() => {
-        try {
-          ctx.blobs.collect([EMPTY_SHA256]);
-          ctx.blobs.unstage(EMPTY_SHA256);
-        } catch (error) {
-          ctx.log.error({ err: error }, "empty blob cleanup failed");
-        }
-      });
+    if (emptyPrepared) {
+      // This runs after our publication transaction resolves, including a failed adoption. Its
+      // durable blob row or cleanup intent survives any remaining unlink or directory-sync failure.
+      try {
+        ctx.blobs.collect([EMPTY_SHA256]);
+      } catch (error) {
+        ctx.log.error({ err: error }, "empty blob cleanup failed");
+      }
+    }
   }
 }

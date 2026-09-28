@@ -189,7 +189,7 @@ test("the signed-in Enter code button uses the same six-box code field", async (
   const popover = page.getByRole("dialog", { name: "Enter a code" });
   const input = popover.getByRole("textbox", { name: "Code" });
   await expect(input).toBeFocused();
-  await expect(input).toHaveAttribute("autocomplete", "one-time-code");
+  await expect(input).toHaveAttribute("autocomplete", "off");
   await expect(popover.locator(".code-entry-field-slot")).toHaveCount(6);
   await input.pressSequentially("123456");
   await expect(input).toHaveValue("123-456");

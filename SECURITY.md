@@ -2,21 +2,24 @@
 
 ## Reporting a vulnerability
 
-Please **don't** open a public issue for security problems. Instead, report them privately through [GitHub's security advisories](https://github.com/walriyami/Relay/security/advisories/new).
+Please **don't** open a public issue for security problems. Report them privately through [GitHub's security advisories](https://github.com/walriyami/Relay/security/advisories/new).
 
-Include what you found, how to reproduce it, and what an attacker could do with it. You'll get an acknowledgement within a few days. Once a fix is available, the advisory will credit you, unless you'd rather stay anonymous.
-
-Only the latest release receives security fixes.
+Include what you found, how to reproduce it, and what an attacker could do with it. Once a fix is available, the advisory will credit you unless you prefer anonymity. Only the latest release receives security fixes.
 
 ## Security model
 
-Relay is built for a trusted group on a server you control.
+Relay is built for a trusted group on a server you control. Public access to a shared link does not make the recipient a trusted member.
 
-- **Accounts** exist only by invitation, apart from the administrator's, which is created during setup by whoever finishes that step first. Finish setup as soon as Relay is reachable. Until then, keep it on a private address (Docker Compose publishes it on `127.0.0.1` only). Passwords are hashed with scrypt, and passkeys (WebAuthn) are supported.
-- **Sessions** use `HttpOnly` cookies, which get the `__Host-` prefix and the `Secure` flag over HTTPS. Every state-changing request needs a matching origin and a CSRF token. Set `RELAY_ORIGIN` on a public server to accept only that address.
-- **Links and requests** are bearer URLs derived with an HMAC key. The database stores only hashes of them. Links can expire, have a password, be limited to one person, and be revoked at any time.
-- **Short codes** are rate-limited per address and across the service, and a retired code is never reused.
-- **Privacy between accounts.** Administrators manage accounts and limits, but they can't open members' files, links or activity through Relay.
-- **Hardened container.** It runs as a non-root user with a read-only root filesystem, no capabilities and `no-new-privileges`.
+- **Initial setup can require a local secret.** Until the administrator exists, whoever reaches the setup page first creates it. Finish setup before exposing Relay, or start it with `RELAY_SETUP_KEY=true`: the server then writes a random, one-time setup key to `/data/setup.key` in the container, readable only by its owner, and setup asks for it. Read it with `docker compose exec relay cat /data/setup.key`; with Node directly, the default path is `.data/setup.key`. It survives a restart while setup is pending and is removed after the administrator is created, or when Relay starts without the setting. The HTTP API never returns it. Later accounts require invitations.
+- **The public origin must be pinned.** Set `RELAY_ORIGIN=https://your-relay-host` and provide HTTPS at a trusted reverse proxy. Requests for other hostnames are rejected. Without an origin, only `localhost` and literal IP hosts work; arbitrary hostnames are rejected to prevent DNS rebinding. The public health probe is exempt and reveals no account or file data.
+- **Cookies and request protection.** Sessions use `HttpOnly`, `SameSite=Lax` cookies, with the `__Host-` prefix and `Secure` flag over HTTPS. Unsafe requests reject mismatched origins and cross-site Fetch Metadata; authenticated state changes require a matching CSRF token. Passwords use scrypt, with bounded concurrent hashing; passkeys are also supported.
+- **Bearer URLs are credentials.** Anyone holding a link, request, invitation, or device sign-in URL can exercise its authority until it expires or is revoked. URLs derive from an HMAC key; the database stores token hashes. Shared file links can require a password, expire, or be limited to one recipient. Avoid posting private URLs in public places. Relay's own request log records route patterns rather than bearer URLs; configure your proxy logs likewise.
+- **Numeric codes trade security for convenience.** Four- and six-digit codes can reveal bearer URLs, including device sign-in links. There are only 10,000 four-digit values (including `0000`). A successful guess before a lockout can grant access; more active codes increase that risk. Escalating address lockouts, a service-wide pause, and temporary six-digit mode reduce guessing opportunities but cannot make short codes equivalent to random URLs. Retired codes are never reused. Use a password on sensitive file shares, revoke unused links, and prefer bearer URLs or QR codes for sensitive handoffs.
+- **Protection is visible.** Code-entry screens and sharing dialogs display active protection. Signed-in users and administrators see protection events and advice to review links; admins control the preferred code length. Automatic code rotation preserves existing bearer URLs and QR codes. A service-wide pause deliberately sacrifices numeric-code availability during suspected guessing; it does not mean no prior guess succeeded.
+- **Proxy trust is explicit.** `RELAY_TRUST_PROXY` must name only proxies that you control and that sanitize forwarding headers. Direct Node deployments trust loopback by default; Compose also trusts its dedicated gateway address. The gateway only accepts forwarded addresses from explicitly configured upstream proxies. Do not trust every private-network address or blindly accept Internet-supplied forwarding headers. Without a verified client-address chain, proxied users share one rate-limit bucket. See [self-hosting](docs/self-hosting.md).
+- **Members' data is isolated through the API.** The administrator dashboard does not browse members' files, links, or activity. Administrators are nevertheless fully trusted: they can reset a member's password and impersonate that member. Anyone with host, volume, database, backup, or secret-key access is also trusted.
+- **Resource limits reduce abuse.** Upload limits, download authorization, archive entry/text limits, decoder limits, and bounded hashing protect common resource-exhaustion paths. The app container runs as non-root with a read-only root filesystem, no capabilities, process/memory limits, and `no-new-privileges`. The Caddy gateway has only its executable's required `NET_BIND_SERVICE` capability. These controls do not eliminate denial of service.
 
-Relay is **not** end-to-end encrypted. Anyone with access to the server's disk can read the stored files. Encrypt the disk and restrict access to the host according to how sensitive your content is.
+Relay is **not end-to-end encrypted**. The host can read stored files. Restrict host and backup access, use disk encryption appropriate to your data, keep dependencies and the host patched, and avoid running unrelated untrusted workloads on the same Docker network. Thumbnail worker threads provide scheduling and memory limits, **not an operating-system sandbox** against a native decoder vulnerability.
+
+A source audit does not certify a live deployment, tunnel configuration, host, or all future changes. See [the audit record](docs/security-audit.md) for reviewed scope, fixes, validation, and limitations.

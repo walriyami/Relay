@@ -314,7 +314,12 @@ test("retention: expired items move to Trash, and Trash is purged after 30 days"
     await client.call(api.items.trash, { params: { id: old.result.itemId } });
 
     instance.ctx.db.run("UPDATE items SET expires = ? WHERE id = ?", Date.now() - 1, expiring.result.itemId);
-    instance.ctx.db.run("UPDATE items SET trashed = ? WHERE id = ?", Date.now() - 31 * DAY_MS, old.result.itemId);
+    instance.ctx.db.run(
+      "UPDATE items SET trashed = trashed - ?, purge_at = purge_at - ? WHERE id = ?",
+      31 * DAY_MS,
+      31 * DAY_MS,
+      old.result.itemId,
+    );
     assert.deepEqual((await client.call(api.items.list)).items, [], "an expired item leaves the library at once");
     await instance.sweep();
     const { items: trash } = await client.call(api.items.list, { query: { view: "trash" } });
@@ -397,7 +402,7 @@ test("what was sent is immutable: only the item's name and how long it is kept c
     const stranger = await member(instance, "una");
     assert.equal(await status(stranger.call(api.items.update, { params: { id: itemId }, body: { name: "X" } })), 404);
     await client.call(api.items.trash, { params: { id: single } });
-    assert.equal(await status(client.call(api.items.update, { params: { id: single }, body: { name: "X" } })), 409);
+    assert.equal(await status(client.call(api.items.update, { params: { id: single }, body: { name: "X" } })), 410);
   } finally {
     await instance.close();
   }

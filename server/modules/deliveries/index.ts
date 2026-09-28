@@ -113,8 +113,8 @@ export function registerDeliveries(app: FastifyInstance, ctx: Context) {
 
   route(app, ctx, api.deliveries.update, ({ member, params, body }) => {
     const found =
-      ctx.db.get<{ state: DeliveryState }>(
-        "SELECT state FROM deliveries WHERE id = ? AND owner = ? AND to_device = ?",
+      ctx.db.get<{ item: string; state: DeliveryState }>(
+        "SELECT item, state FROM deliveries WHERE id = ? AND owner = ? AND to_device = ?",
         params.id,
         member.userId,
         member.deviceId,
@@ -122,6 +122,7 @@ export function registerDeliveries(app: FastifyInstance, ctx: Context) {
     // Downloading a declined delivery later accepts it after all; an accepted one stays accepted.
     const changed = found.state === "available" || (found.state === "declined" && body.state === "accepted");
     if (changed) {
+      ctx.library.owned(member.userId, found.item, { live: true });
       ctx.db.run("UPDATE deliveries SET state = ?, answered = ? WHERE id = ?", body.state, Date.now(), params.id);
       ctx.events.publish(member.userId, "deliveries");
     }

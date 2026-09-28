@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { api, headers, urls } from "../shared/api.ts";
+import { NO_LIMITS } from "../shared/model.ts";
 import type { TransferInput } from "../server/context.ts";
 import { ApiError, admin, Client, member, patchUpload, send, start } from "./support/harness.ts";
 
@@ -49,6 +50,30 @@ test("create is idempotent by id; a different manifest under the same id is refu
     const other = await member(instance, "uma");
     assert.equal(await status(other.call(api.transfers.create, { body: { ...input, tab: other.tab } })), 409);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM items"), 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("transfer names reject spoofing controls and malformed Unicode before creating an item", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "name-safety");
+    const before = instance.ctx.db.value<number>("SELECT count(*) FROM items");
+    const make = (name: string | null, path: string) =>
+      client.call(api.transfers.create, {
+        body: {
+          id: crypto.randomUUID(),
+          tab: client.tab,
+          name,
+          folders: [],
+          files: [{ path, size: 0, mime: "" }],
+        },
+      });
+
+    assert.equal(await status(make("report.\u202Etxt", "safe.txt")), 400, "item titles cannot override display order");
+    assert.equal(await status(make(null, "broken\uD800.txt")), 400, "file names must contain valid Unicode");
+    assert.equal(instance.ctx.db.value<number>("SELECT count(*) FROM items"), before);
   } finally {
     await instance.close();
   }
@@ -113,22 +138,30 @@ test("paths: folders are created mkdir -p style; duplicates and file/folder clas
   }
 });
 
-test("admission: quota (including reserved bytes), capacity, disk space and guest limits", async () => {
+test("admission: storage limit (including reserved bytes), capacity, disk space and guest limits", async () => {
   const instance = await start();
   try {
     const boss = await admin(instance);
     const client = await member(instance, "tia", boss);
     const me = await client.call(api.session.get);
 
-    await boss.call(api.admin.updateMember, { params: { id: me.user.id }, body: { quota: 1000 } });
+    await boss.call(api.admin.updateMember, {
+      params: { id: me.user.id },
+      body: { limits: { storage: 1000, keepDays: null, linkDays: null }, expectedLimits: NO_LIMITS },
+    });
     await client.call(api.transfers.create, { body: body(client, [{ size: 600 }]) }); // reserves 600
     assert.equal(await status(client.call(api.transfers.create, { body: body(client, [{ size: 500 }]) })), 413);
     await client.call(api.transfers.create, { body: body(client, [{ size: 400 }]) });
-    await boss.call(api.admin.updateMember, { params: { id: me.user.id }, body: { quota: 10 ** 15 } });
+    await boss.call(api.admin.updateMember, {
+      params: { id: me.user.id },
+      body: { limits: NO_LIMITS, expectedLimits: { storage: 1000, keepDays: null, linkDays: null } },
+    });
 
-    await boss.call(api.admin.settings, { body: { capacity: 2000 } });
+    await boss.call(api.admin.settings, {
+      body: { capacity: 2000, expectedCapacity: (await boss.call(api.admin.overview)).limits.capacity },
+    });
     assert.equal(await status(client.call(api.transfers.create, { body: body(client, [{ size: 1500 }]) })), 507);
-    await boss.call(api.admin.settings, { body: { capacity: 10 ** 15 } });
+    await boss.call(api.admin.settings, { body: { capacity: 10 ** 15, expectedCapacity: 2000 } });
 
     const huge = Array.from({ length: 8 }, (_, i) => ({ path: `huge-${i}.bin`, size: 1024 ** 4 }));
     assert.equal(
@@ -172,25 +205,26 @@ test("a manifest with about 20,000 long paths is accepted by the transfer route"
   }
 });
 
-test("an outer transaction rollback cleans an empty blob prepared by create", async () => {
+test("create rejects an outer transaction before preparing filesystem state", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
     const me = await client.call(api.session.get);
     const principal = { kind: "member", userId: me.user.id } as never;
-    assert.throws(() =>
-      instance.ctx.db.tx(() => {
-        instance.ctx.transfers.create(body(client, [{ path: "empty.bin", size: 0 }]), {
-          owner: me.user.id,
-          principal,
-        });
-        throw new Error("rollback");
-      }),
+    assert.throws(
+      () =>
+        instance.ctx.db.tx(() => {
+          instance.ctx.transfers.create(body(client, [{ path: "empty.bin", size: 0 }]), {
+            owner: me.user.id,
+            principal,
+          });
+        }),
+      /outside an existing transaction/,
     );
-    await Promise.resolve();
     const emptySha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     assert.equal(existsSync(instance.ctx.blobs.path(emptySha)), false);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM blobs"), 0);
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM blob_cleanup"), 0);
     assert.deepEqual(readdirSync(join(instance.root, "uploads")), []);
   } finally {
     await instance.close();
@@ -337,10 +371,10 @@ test("an expired tab lease cancels its open transfers in the sweep; PATCHes rene
     await patchUpload(client, kept.uploads[0].id, 0, Buffer.alloc(10)); // renews
     const renewed = instance.ctx.db.value<number>("SELECT lease_expires FROM tabs WHERE id = ?", client.tab)!;
     assert.ok(renewed > beforePatch, "PATCH renews the lease");
-    instance.ctx.transfers.sweep(renewed - 1);
+    await instance.ctx.transfers.sweep(renewed - 1);
     assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", kept.id), "open");
 
-    instance.ctx.transfers.sweep(renewed);
+    await instance.ctx.transfers.sweep(renewed);
     assert.equal(await status(client.call(api.items.get, { params: { id: kept.itemId } })), 404);
     assert.equal((await patchUpload(client, kept.uploads[0].id, 10, Buffer.alloc(10))).statusCode, 404);
     assert.equal(instance.ctx.transfers.activeUploads(), 0);
@@ -490,16 +524,16 @@ test("guest reservations survive stale byte progress while their tab lease remai
     instance.ctx.db.run("UPDATE uploads SET touched = ?", now - hour);
     instance.ctx.db.run("UPDATE uploads SET touched = ? WHERE transfer = ?", now, transfers[0].id);
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", now + 3 * hour);
-    instance.ctx.transfers.sweep(now);
+    await instance.ctx.transfers.sweep(now);
     const state = (id: string) => instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", id);
     assert.equal(state(transfers[0].id), "open", "recent byte progress retains the reservation");
     assert.equal(state(transfers[1].id), "open", "stale bytes do not override the renewed tab lease");
     assert.equal(state(transfers[2].id), "open", "stale empty transfers remain open while the tab is active");
     assert.equal(state(memberTransfer.id), "open", "members may pause indefinitely within their lease");
-    instance.ctx.transfers.sweep(now + hour);
+    await instance.ctx.transfers.sweep(now + hour);
     assert.equal(state(transfers[1].id), "open", "the byte inactivity age does not shorten the active lease");
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE principal LIKE 'grant:%'", now + 2 * hour);
-    instance.ctx.transfers.sweep(now + 2 * hour);
+    await instance.ctx.transfers.sweep(now + 2 * hour);
     assert.equal(state(transfers[1].id), undefined, "lease expiry cancels and removes an empty guest submission");
     assert.equal(instance.ctx.db.get("SELECT 1 FROM items WHERE id = ?", transfers[1].itemId), undefined);
     assert.equal(state(memberTransfer.id), "open");

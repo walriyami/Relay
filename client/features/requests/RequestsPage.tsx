@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Ban, ChevronRight, FolderInput, Inbox, Link2, Pencil, Plus, RotateCcw } from "lucide-react";
+import { Ban, ChevronRight, FolderInput, Inbox, Link2, Pencil, Plus } from "lucide-react";
 import { ApiError, api, call, stableId, urls, type UploadRequest } from "../../api";
 import type { Body } from "../../../shared/api";
 import { DEFAULTS, LIMITS } from "../../../shared/model";
@@ -8,7 +8,8 @@ import { notifyChange, useLive } from "../../lib/live";
 import { takeModalAddress, useRoute } from "../../lib/router";
 import { useExpiryClock } from "../../lib/refresh";
 import { requestAddress } from "./address";
-import { linkOptions } from "../../lib/options";
+import { useSession } from "../../app/session";
+import { requestOptions } from "../../lib/options";
 import {
   Button,
   EmptyState,
@@ -21,6 +22,7 @@ import {
   confirmDialog,
   toast,
   LoadFailed,
+  PageLink,
 } from "../../components/ui";
 import { CollectionModal } from "../library/CollectionModal";
 import { LinkDialog } from "../../components/LinkDialog";
@@ -50,12 +52,17 @@ export function RequestsPage() {
   const edited =
     editing && (data.find((r) => r.id === editing.id) ?? (created?.id === editing.id ? created : undefined));
   useEffect(() => {
-    if (!editing || (edited && !edited.closed)) return;
+    if (!editing || (edited && !edited.closed && edited.expires > now)) return;
     setEditing(null);
     // An open share dialog for the same request says so itself.
-    if (edited && sharingRequest?.id !== edited.id) toast("This request was closed.");
+    if (edited && sharingRequest?.id !== edited.id)
+      toast(
+        edited.expires <= now
+          ? "This request has expired. Create a new request to collect more files."
+          : "This request was closed.",
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edited?.closed, !!edited]);
+  }, [edited?.closed, !!edited, edited?.expires, now]);
   const edit = (r: UploadRequest, limits = false) => setEditing({ id: r.id, limits });
   const [viewingId, setViewingId] = useState<string | null>(null);
   const viewing = viewingId ? (data.find((r) => r.id === viewingId) ?? null) : null;
@@ -108,7 +115,7 @@ export function RequestsPage() {
               : "Nothing received yet",
             live
               ? r.full
-                ? "No room for more · raise its limit or close it"
+                ? "No room for more · review saved, retained and reserved space"
                 : `Closes ${until(r.expires)}`
               : r.closed
                 ? "Closed"
@@ -147,9 +154,7 @@ export function RequestsPage() {
                   onSelect: () => void close(r),
                 },
               ]
-            : r.closed
-              ? []
-              : [{ label: "Reopen request", icon: <RotateCcw size={16} />, onSelect: () => edit(r) }]),
+            : [{ label: "Create new request", icon: <Plus size={16} />, onSelect: () => setCreating(true) }]),
         ]}
       />
     </li>
@@ -242,10 +247,20 @@ export function RequestsPage() {
           onClose={() => setCreated(null)}
         />
       )}
-      {edited && !edited.closed && (
+      {edited && !edited.closed && edited.expires > now && (
         <EditRequest request={edited} limitsOpen={editing.limits} onClose={() => setEditing(null)} />
       )}
-      {viewing && <Submissions request={viewing} onEdit={() => edit(viewing)} onClose={() => setViewing(null)} />}
+      {viewing && (
+        <Submissions
+          request={viewing}
+          onEdit={() => edit(viewing)}
+          onNew={() => {
+            setViewing(null);
+            setCreating(true);
+          }}
+          onClose={() => setViewing(null)}
+        />
+      )}
     </div>
   );
 }
@@ -293,11 +308,18 @@ function RequestForm({
   limitsOpen?: boolean;
   onSubmit: (settings: Settings) => Promise<void>;
 }) {
-  const expired = !!request && request.expires <= Date.now();
+  const linkCap = useSession().me.user.limits.linkDays;
   const [name, setName] = useState(request?.name ?? "");
   const [description, setDescription] = useState(request?.description ?? "");
-  // An open request keeps its closing time until a duration is chosen; a new or expired one needs one.
-  const [days, setDays] = useState<number | null>(request && !expired ? null : DEFAULTS.linkDays);
+  // An open request keeps its closing time until a duration is chosen; a new request needs one.
+  const [chosenDays, setDays] = useState<number | null>(
+    request ? null : Math.min(DEFAULTS.linkDays, linkCap ?? Infinity),
+  );
+  const days = chosenDays === null ? null : Math.min(chosenDays, linkCap ?? Infinity);
+  // Reconcile the draft as well as its preview, so a later relaxed cap cannot restore an old choice.
+  useEffect(() => {
+    if (days !== chosenDays) setDays(days);
+  }, [days, chosenDays]);
   const initialGb = request ? gbText(request.maxBytes) : "10";
   const [gb, setGb] = useState(initialGb);
   const [limits, setLimits] = useState(limitsOpen);
@@ -306,11 +328,13 @@ function RequestForm({
   const sizeField = useRef<HTMLInputElement>(null);
   const held = request?.usedBytes ?? 0;
   const maxBytes = gb === initialGb && request ? request.maxBytes : Math.round(Number(gb) * GB);
-  const sizeHint = held > 0 ? `Already holds ${bytes(held)}.` : undefined;
+  const sizeHint = request
+    ? `${bytes(request.activeBytes)} active · ${bytes(request.trashBytes)} in Trash or expired · ${bytes(request.pendingBytes)} reserved. Accepted uploads can finish if limits are reduced.`
+    : undefined;
   const closing =
     days === null
       ? `Closes ${date(request!.expires)} (${until(request!.expires)}).`
-      : `${expired ? "Open until" : "Closes"} ${date(Date.now() + days * DAY)}${request ? ", counted from now" : ""}.`;
+      : `Closes ${date(Date.now() + days * DAY)}${request ? ", counted from now" : ""}.`;
   function fail(field: "name" | "size" | null, message: string) {
     setError({ field, message });
     if (field === "size") setLimits(true);
@@ -366,8 +390,11 @@ function RequestForm({
       </Field>
       <div className="stack-sm">
         <span className="field-label">Stays open for</span>
-        <Segmented label="Stays open for" value={days ?? -1} options={linkOptions()} onChange={setDays} />
-        <p className="field-hint">{closing}</p>
+        <Segmented label="Stays open for" value={days ?? -1} options={requestOptions(linkCap)} onChange={setDays} />
+        <p className="field-hint">
+          {closing}
+          {linkCap !== null && " Upload-request URLs follow your administrator’s link limit."}
+        </p>
       </div>
       {!limits ? (
         <p className="limits-summary muted">
@@ -440,7 +467,7 @@ function CreateRequest({ onClose, onCreated }: { onClose: () => void; onCreated:
   );
 }
 
-/** Edits an open request in place, or reopens an expired one; its link, code and received files stay. */
+/** Edits an unexpired request in place; expired requests must be replaced. */
 function EditRequest({
   request,
   limitsOpen,
@@ -451,17 +478,16 @@ function EditRequest({
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const expired = request.expires <= Date.now();
   return (
     <Modal
-      title={expired ? "Reopen request" : "Edit request"}
-      subtitle={expired ? "The same link and code work again." : "The link and code stay the same."}
+      title="Edit request"
+      subtitle="The link and code stay the same."
       onClose={onClose}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" type="submit" form="edit-request" busy={busy}>
-            {expired ? "Reopen request" : "Save"}
+            Save
           </Button>
         </>
       }
@@ -479,10 +505,10 @@ function EditRequest({
           if (unchanged) return onClose();
           setBusy(true);
           try {
-            await call(api.requests.update, { params: { id: request.id }, body: settings });
+            const saved = await call(api.requests.update, { params: { id: request.id }, body: settings });
             notifyChange("requests");
             onClose();
-            toast(expired ? "Request reopened" : "Request updated");
+            toast(`Request updated. Closes ${date(saved.expires)} (${until(saved.expires)}).`);
           } finally {
             setBusy(false);
           }
@@ -495,10 +521,12 @@ function EditRequest({
 function Submissions({
   request,
   onEdit,
+  onNew,
   onClose,
 }: {
   request: UploadRequest;
   onEdit: () => void;
+  onNew: () => void;
   onClose: () => void;
 }) {
   const { data, loading, error, reload } = useLive(
@@ -508,6 +536,8 @@ function Submissions({
     [],
   );
   const [open, setOpen] = useState<string | null>(null);
+  const now = useExpiryClock([request.expires]);
+  const expired = request.expires <= now;
   return (
     <Modal
       title={request.name}
@@ -515,13 +545,33 @@ function Submissions({
       url={requestAddress(request.id)}
       onClose={onClose}
       actions={
-        !request.closed && (
+        !request.closed && !expired ? (
           <Button size="sm" variant="ghost" icon={<Pencil size={16} />} onClick={onEdit}>
-            {request.expires <= Date.now() ? "Reopen" : "Edit"}
+            Edit
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" icon={<Plus size={16} />} onClick={onNew}>
+            New request
           </Button>
         )
       }
     >
+      <p className="field-hint">
+        {bytes(request.activeBytes)} active · {bytes(request.trashBytes)} in Trash or expired ·{" "}
+        {bytes(request.pendingBytes)} reserved of {bytes(request.maxBytes)}.
+      </p>
+      {request.trashBytes > 0 && (
+        <p className="notice neutral">
+          Retained Trash and expired submissions still use this request’s space. Review{" "}
+          <PageLink to="/files">Files</PageLink> or <PageLink to="/trash">Trash</PageLink> to delete them forever and
+          free space.
+        </p>
+      )}
+      {expired && (
+        <p className="notice neutral">
+          This request has expired and cannot reopen. Create a new request to collect more files.
+        </p>
+      )}
       {error && !data.length ? (
         <LoadFailed title="Received files couldn’t be loaded" error={error} onRetry={reload} />
       ) : loading && !data.length ? (

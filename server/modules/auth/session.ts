@@ -7,10 +7,10 @@ import { route } from "../../lib/http.ts";
 import { DUMMY_PASSWORD_HASH, hashPassword, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "./limits.ts";
 import { checkPassword } from "./passwords.ts";
-import { DEFAULT_DEVICE_NAME, finishSignIn, insertSession, me } from "./sessions.ts";
+import { finishSignIn, insertSession, me, newDevice } from "./sessions.ts";
 import { streamsOf } from "./streams.ts";
+import { LIMIT_COLUMNS, toLimits, type LimitRow } from "./member-limits.ts";
 import { insertUser } from "./users.ts";
-import { memberDefaultsOf } from "../admin/settings.ts";
 
 export const SIGN_IN_LIMIT = perAddress(10, "1 minute");
 /** One answer for expired, used, withdrawn and unknown invitations alike. */
@@ -23,7 +23,7 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
     app,
     ctx,
     api.session.password,
-    async ({ body, reply }) => {
+    async ({ body, req, reply }) => {
       type Row = { id: string; password_hash: string; disabled: number };
       const username = body.username.trim().toLowerCase();
       const user = ctx.db.get<Row>("SELECT id, password_hash, disabled FROM users WHERE username = ?", username);
@@ -35,7 +35,7 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
         // The password may have changed while scrypt ran.
         if (ctx.db.value("SELECT password_hash FROM users WHERE id = ?", user.id) !== user.password_hash)
           fail(401, "Incorrect username or password.");
-        return insertSession(ctx, user.id, body.deviceName ?? DEFAULT_DEVICE_NAME, "password");
+        return insertSession(ctx, user.id, newDevice(req, body), "password");
       });
       return finishSignIn(ctx, reply, session);
     },
@@ -64,7 +64,7 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
     app,
     ctx,
     api.session.join,
-    async ({ body, reply }) => {
+    async ({ body, req, reply }) => {
       const passwordHash = await hashPassword(body.password);
       const now = Date.now();
       const session = ctx.db.tx(() => {
@@ -76,19 +76,14 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
           now,
         );
         if (!used.changes) fail(410, INVITE_GONE);
-        const userId = insertUser(
-          ctx,
-          { username: body.username, passwordHash, admin: false },
-          memberDefaultsOf(ctx),
-          now,
-        );
-        ctx.db.run("UPDATE invites SET used_by = ? WHERE token_hash = ?", userId, invite);
-        const { inviter, note } = ctx.db.get<{ inviter: string; note: string | null }>(
-          "SELECT created_by AS inviter, note FROM invites WHERE token_hash = ?",
+        const { inviter, note, ...limits } = ctx.db.get<LimitRow & { inviter: string; note: string | null }>(
+          `SELECT created_by AS inviter, note, ${LIMIT_COLUMNS} FROM invites WHERE token_hash = ?`,
           invite,
         )!;
+        const userId = insertUser(ctx, { username: body.username, passwordHash, admin: false }, toLimits(limits), now);
+        ctx.db.run("UPDATE invites SET used_by = ? WHERE token_hash = ?", userId, invite);
         ctx.activity.record(inviter, { kind: "joined", userId, username: body.username, note });
-        return { inviter, ...insertSession(ctx, userId, body.deviceName ?? DEFAULT_DEVICE_NAME, "invitation") };
+        return { inviter, ...insertSession(ctx, userId, newDevice(req, body), "invitation") };
       });
       // The inviting administrator sees the new member, and the invitation leaves the pending list.
       ctx.events.publish(session.inviter, "account");

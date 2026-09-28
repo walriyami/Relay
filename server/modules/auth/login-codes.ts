@@ -7,22 +7,22 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { normalizeCode, sha256 } from "../../lib/secrets.ts";
 import { issuePickupCode } from "../../lib/pickup-codes.ts";
-import { finishSignIn, insertSession } from "./sessions.ts";
+import { finishSignIn, insertSession, newDevice, type NewDevice } from "./sessions.ts";
 import { addressKey, perAddress } from "./limits.ts";
 import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
 import { checkPickupCodeAttempt, recordPickupCodeFailure } from "../../lib/pickup-code-guard.ts";
-import { codeLengthOf } from "../../lib/pickup-codes.ts";
+import { codeLengthOf, ensurePickupCodeResolutionAvailable, reconcilePickupCodeMode } from "../../lib/pickup-codes.ts";
 
 const CODE_MS = DEFAULTS.loginCodeMinutes * 60_000;
 const invalid = () =>
   fail(410, "This sign-in code is invalid, expired or already used. Create a new one on your signed-in device.");
 
 type RedeemableLoginCode = { id: string; user_id: string };
-function redeemLoginCode(ctx: Context, deviceName: string, lookup: (now: number) => RedeemableLoginCode | undefined) {
+function redeemLoginCode(ctx: Context, device: NewDevice, lookup: (now: number) => RedeemableLoginCode | undefined) {
   return ctx.db.tx(() => {
     const now = Date.now();
     const row = lookup(now) ?? invalid();
-    const session = insertSession(ctx, row.user_id, deviceName, "code");
+    const session = insertSession(ctx, row.user_id, device, "code");
     const used = ctx.db.run(
       "UPDATE login_codes SET used = ?, used_device_id = ? WHERE id = ? AND used IS NULL AND revoked IS NULL",
       now,
@@ -86,6 +86,7 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
     ctx,
     api.loginCodes.create,
     ({ member }) => {
+      reconcilePickupCodeMode(ctx);
       const now = Date.now();
       const id = uuidv7(now);
       const issued = ctx.db.tx(() => {
@@ -145,29 +146,42 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
     ({ body, reply, req }) => {
       const address = addressKey(req.ip);
       const now = Date.now();
+      reconcilePickupCodeMode(ctx, now);
+      ensurePickupCodeResolutionAvailable(ctx.db);
       checkPickupCodeAttempt(ctx, address, now);
+      let failed = false;
       const reject = (): never => {
-        recordPickupCodeFailure(ctx, address, now);
+        failed = true;
         return invalid();
       };
-      const code = normalizeCode(body.code, codeLengthOf(ctx.db)) ?? reject();
-      const session = redeemLoginCode(
-        ctx,
-        body.deviceName,
-        (time) =>
-          ctx.db.get<RedeemableLoginCode>(
-            `SELECT c.id, c.user_id FROM login_codes c
+      try {
+        const code = normalizeCode(body.code, codeLengthOf(ctx.db)) ?? reject();
+        const session = redeemLoginCode(
+          ctx,
+          newDevice(req, body),
+          (time) =>
+            ctx.db.get<RedeemableLoginCode>(
+              `SELECT c.id, c.user_id FROM login_codes c
            JOIN sessions s ON s.token_hash = c.session_hash JOIN users u ON u.id = c.user_id
            JOIN pickup_codes p ON p.code_hash = c.code_hash AND p.kind = 'device'
            AND p.target_id = c.id AND p.retired IS NULL
            WHERE c.code_hash = ? AND c.expires > ? AND c.used IS NULL AND c.revoked IS NULL
              AND s.expires > ? AND u.disabled = 0`,
-            ctx.secrets.pickupCodeHash(code),
-            time,
-            time,
-          ) ?? reject(),
-      );
-      return finishSignIn(ctx, reply, session);
+              ctx.secrets.pickupCodeHash(code),
+              time,
+              time,
+            ) ?? reject(),
+        );
+        return finishSignIn(ctx, reply, session);
+      } catch (error) {
+        if (failed) {
+          const outcome = recordPickupCodeFailure(ctx, address, now);
+          if (outcome.addressTriggered || outcome.globalTriggered) reconcilePickupCodeMode(ctx, now);
+          if (outcome.addressTriggered || outcome.globalTriggered)
+            fail(429, "Too many incorrect codes. Code entry is temporarily paused.");
+        }
+        throw error;
+      }
     },
     { rateLimit: perAddress(10, "1 minute") },
   );
@@ -181,8 +195,6 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
       const row = ctx.db.get<{ expires: number }>(
         `SELECT c.expires FROM login_codes c
          JOIN sessions s ON s.token_hash = c.session_hash JOIN users u ON u.id = c.user_id
-         JOIN pickup_codes p ON p.code_hash = c.code_hash AND p.kind = 'device'
-           AND p.target_id = c.id AND p.retired IS NULL
          WHERE c.device_token_hash = ? AND c.expires > ? AND c.used IS NULL AND c.revoked IS NULL
            AND s.expires > ? AND u.disabled = 0`,
         sha256(params.token),
@@ -198,14 +210,12 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
     app,
     ctx,
     api.session.deviceLink,
-    ({ body, reply }) => {
+    ({ body, req, reply }) => {
       const tokenHash = sha256(body.token);
-      const session = redeemLoginCode(ctx, body.deviceName, (now) =>
+      const session = redeemLoginCode(ctx, newDevice(req, body), (now) =>
         ctx.db.get<RedeemableLoginCode>(
           `SELECT c.id, c.user_id FROM login_codes c
            JOIN sessions s ON s.token_hash = c.session_hash JOIN users u ON u.id = c.user_id
-           JOIN pickup_codes p ON p.code_hash = c.code_hash AND p.kind = 'device'
-             AND p.target_id = c.id AND p.retired IS NULL
            WHERE c.device_token_hash = ? AND c.expires > ? AND c.used IS NULL AND c.revoked IS NULL
              AND s.expires > ? AND u.disabled = 0`,
           tokenHash,

@@ -1,10 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { rm } from "node:fs/promises";
 import { api } from "../shared/api.ts";
 import { formatCode } from "../shared/codes.ts";
-import { getPickupCode, issuePickupCode, type PickupCodeKind } from "../server/lib/pickup-codes.ts";
+import {
+  codeLengthOf,
+  getPickupCode,
+  issuePickupCode,
+  reconcilePickupCodeMode,
+  type PickupCodeKind,
+} from "../server/lib/pickup-codes.ts";
+import { pickupProtectionOf, recordPickupCodeFailure } from "../server/lib/pickup-code-guard.ts";
 import { Secrets, normalizeCode, sha256 } from "../server/lib/secrets.ts";
-import { admin, ApiError, Client, member, openShare, send, start } from "./support/harness.ts";
+import { admin, ApiError, Client, member, openShare, send, start, stop } from "./support/harness.ts";
+
+const emptyProtection = (preferredCodeLength: 4 | 6) => ({
+  preferredCodeLength,
+  pausedUntil: null,
+  addressPausedUntil: null,
+  heightenedUntil: null,
+  lastAttackAt: null,
+  numericCodeResolutionUnavailable: false,
+});
 
 const status = async (promise: Promise<unknown>) => {
   try {
@@ -169,8 +186,13 @@ test("numeric assignments rotate across recipient types while their URLs remain 
   const instance = await start();
   try {
     const boss = await admin(instance);
-    assert.deepEqual(await new Client(instance).call(api.pickup.config), { codeLength: 6 });
-    assert.equal((await boss.call(api.admin.overview)).codeLength, 6);
+    assert.deepEqual(await new Client(instance).call(api.pickup.config), {
+      codeLength: 6,
+      protection: emptyProtection(6),
+    });
+    const initialOverview = await boss.call(api.admin.overview);
+    assert.equal(initialOverview.codeLength, 6);
+    assert.equal(initialOverview.codeProtection.effectiveCodeLength, 6);
 
     const { result } = await send(boss, [{ path: "rotate.txt", data: "content" }]);
     const link = await boss.call(api.links.create, {
@@ -204,7 +226,10 @@ test("numeric assignments rotate across recipient types while their URLs remain 
     await boss.call(api.admin.settings, { body: { codeLength: 4 } });
     instance.ctx.events.flush();
     unsubscribeOwner();
-    assert.deepEqual(await new Client(instance).call(api.pickup.config), { codeLength: 4 });
+    assert.deepEqual(await new Client(instance).call(api.pickup.config), {
+      codeLength: 4,
+      protection: emptyProtection(4),
+    });
     assert.ok(["account", "links", "requests", "devices"].every((topic) => topics.has(topic)));
 
     const newLink = (await boss.call(api.links.list)).find((candidate) => candidate.id === link.id)!;
@@ -237,7 +262,10 @@ test("numeric assignments rotate across recipient types while their URLs remain 
     );
 
     await boss.call(api.admin.settings, { body: { codeLength: 6 } });
-    assert.deepEqual(await new Client(instance).call(api.pickup.config), { codeLength: 6 });
+    assert.deepEqual(await new Client(instance).call(api.pickup.config), {
+      codeLength: 6,
+      protection: emptyProtection(6),
+    });
     const codesAtFour = newCodes;
     const codesAtSix = await Promise.all(
       codesAtFour.map(async (code) => (await boss.call(api.pickup.current, { body: { code } })).code!),
@@ -290,7 +318,10 @@ test("four-digit generation covers the full namespace and exhausted rotations ro
     }
 
     assert.equal(await status(boss.call(api.admin.settings, { body: { codeLength: 4 } })), 409);
-    assert.deepEqual(await new Client(instance).call(api.pickup.config), { codeLength: 6 });
+    assert.deepEqual(await new Client(instance).call(api.pickup.config), {
+      codeLength: 6,
+      protection: emptyProtection(6),
+    });
     assert.equal(instance.ctx.db.value("SELECT code_hash FROM links WHERE id = ?", link.id), originalHash);
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM pickup_codes WHERE retired IS NULL"), originalActive);
     assert.equal((await boss.call(api.links.list)).find((candidate) => candidate.id === link.id)?.code, link.code);
@@ -302,6 +333,83 @@ test("four-digit generation covers the full namespace and exhausted rotations ro
         error.status === 409 &&
         /No unused 4-digit codes/.test(error.message),
     );
+
+    // Automatic recovery can retain six-digit codes when permanent four-digit tombstones have
+    // consumed the namespace. The marker prevents public config reads from repeating the scan.
+    instance.ctx.db.setSetting("pickupCodeLength", "4");
+    instance.ctx.db.setSetting("pickupCodeEffectiveLength", "6");
+    assert.equal(reconcilePickupCodeMode(instance.ctx), false);
+    assert.equal(instance.ctx.db.setting("pickupCodeRecoveryBlocked"), "1");
+    assert.equal(codeLengthOf(instance.ctx.db), 6);
+    const config = await new Client(instance).call(api.pickup.config);
+    assert.equal(config.codeLength, 6);
+    assert.equal(config.protection.preferredCodeLength, 4);
+    assert.equal((await boss.call(api.admin.overview)).codeProtection.effectiveCodeLength, 6);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a failed six-digit security upgrade disables numeric resolution but preserves every bearer URL", async () => {
+  const instance = await start();
+  try {
+    const boss = await admin(instance);
+    const { result } = await send(boss, [{ path: "fallback.txt", data: "still available" }]);
+    const link = await boss.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    const request = await boss.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Still available", description: "", days: 7, maxBytes: 100 },
+    });
+    const invite = await boss.call(api.admin.invite);
+    const device = await boss.call(api.loginCodes.create);
+    await boss.call(api.admin.settings, { body: { codeLength: 4 } });
+    const before = instance.ctx.db.all(
+      "SELECT code_hash, kind, target_id, retired FROM pickup_codes WHERE retired IS NULL ORDER BY kind, target_id",
+    );
+
+    const originalPickupCodeFor = instance.ctx.secrets.pickupCodeFor.bind(instance.ctx.secrets);
+    instance.ctx.secrets.pickupCodeFor = (kind, id, nonce, length) => {
+      if (length === 6) throw Object.assign(new Error("No unused 6-digit codes remain."), { status: 409 });
+      return originalPickupCodeFor(kind, id, nonce, length);
+    };
+    const attackAt = Date.now();
+    for (let attempt = 0; attempt < 10; attempt++)
+      recordPickupCodeFailure(instance.ctx, `198.51.100.${attempt + 1}`, attackAt + attempt);
+    assert.equal(reconcilePickupCodeMode(instance.ctx, attackAt + 10), false);
+    assert.equal(instance.ctx.db.setting("pickupCodeResolutionUnavailable"), "1");
+    assert.deepEqual(
+      instance.ctx.db.all(
+        "SELECT code_hash, kind, target_id, retired FROM pickup_codes WHERE retired IS NULL ORDER BY kind, target_id",
+      ),
+      before,
+      "failed upgrades roll back the assignment registry intact",
+    );
+
+    const config = await new Client(instance).call(api.pickup.config);
+    assert.equal(config.protection.numericCodeResolutionUnavailable, true);
+    assert.equal(await status(new Client(instance).call(api.pickup.resolve, { body: { code: link.code } })), 503);
+    assert.equal(
+      await status(new Client(instance).call(api.session.code, { body: { code: device.code, deviceName: "Blocked" } })),
+      503,
+    );
+    assert.deepEqual(await boss.call(api.pickup.current, { body: { code: link.code } }), { code: null });
+
+    const visitor = new Client(instance);
+    assert.equal((await openShare(visitor, link.token)).name, "fallback.txt");
+    assert.equal((await visitor.call(api.requests.open, { params: { token: request.token } })).name, "Still available");
+    assert.ok((await visitor.call(api.session.invitation, { params: { token: invite.token } })).expires > Date.now());
+    const pending = await visitor.call(api.session.deviceLinkCheck, { params: { token: device.token } });
+    assert.equal(pending.expires, device.expires);
+    const signedIn = await visitor.call(api.session.deviceLink, {
+      body: { token: device.token, deviceName: "Bearer fallback" },
+    });
+    assert.equal(signedIn.user.username, "admin");
+
+    assert.throws(
+      () => issuePickupCode(instance.ctx.db, instance.ctx.secrets, "request", "blocked-new-request", 4),
+      (error: unknown) => error instanceof Error && "status" in error && error.status === 503,
+    );
   } finally {
     await instance.close();
   }
@@ -310,11 +418,23 @@ test("four-digit generation covers the full namespace and exhausted rotations ro
 test("pickup resolution and direct sign-in code attempts share address and global failure budgets", async () => {
   const instance = await start();
   try {
-    const client = new Client(instance);
-    for (let attempt = 0; attempt < 9; attempt++)
-      assert.equal(await status(client.call(api.pickup.resolve, { body: { code: "000000" } })), 404);
-    assert.equal(await status(client.call(api.session.code, { body: { code: "000000", deviceName: "Bad" } })), 410);
-    assert.equal(await status(client.call(api.pickup.resolve, { body: { code: "000000" } })), 429);
+    const bad = (url: string, address: string, body: object) =>
+      instance.app.inject({
+        method: "POST",
+        url,
+        headers: { host: "relay.test" },
+        remoteAddress: address,
+        payload: body,
+      });
+    for (let attempt = 0; attempt < 9; attempt++) {
+      const url = attempt % 2 ? api.session.code.path : api.pickup.resolve.path;
+      const body = attempt % 2 ? { code: "000000", deviceName: "Bad" } : { code: "000000" };
+      const response = await bad(url, `198.18.0.${attempt + 1}`, body);
+      assert.equal(response.statusCode, attempt % 2 ? 410 : 404);
+    }
+    const globalLimit = await bad(api.session.code.path, "198.18.0.10", { code: "000000", deviceName: "Bad" });
+    assert.equal(globalLimit.statusCode, 429);
+    assert.equal((await bad(api.pickup.resolve.path, "198.18.0.11", { code: "000000" })).statusCode, 429);
   } finally {
     await instance.close();
   }
@@ -331,20 +451,30 @@ test("pickup resolution and direct sign-in code attempts share address and globa
     let wrong = "000000";
     while (validCodes.has(wrong)) wrong = String(Number(wrong) + 1).padStart(6, "0");
 
-    for (let attempt = 0; attempt < 60; attempt++) {
+    for (let attempt = 0; attempt < 9; attempt++) {
       const address = `198.18.${Math.floor(attempt / 250)}.${(attempt % 250) + 1}`;
       const session = attempt % 2 === 1;
       const response = await global.app.inject({
         method: "POST",
         url: session ? api.session.code.path : api.pickup.resolve.path,
+        headers: { host: "relay.test" },
         remoteAddress: address,
         payload: session ? { code: wrong, deviceName: "Bad" } : { code: wrong },
       });
       assert.equal(response.statusCode, session ? 410 : 404);
     }
+    const globalLimit = await global.app.inject({
+      method: "POST",
+      url: api.session.code.path,
+      headers: { host: "relay.test" },
+      remoteAddress: "198.18.0.10",
+      payload: { code: wrong, deviceName: "Bad" },
+    });
+    assert.equal(globalLimit.statusCode, 429);
     const limited = await global.app.inject({
       method: "POST",
       url: api.pickup.resolve.path,
+      headers: { host: "relay.test" },
       remoteAddress: "203.0.113.200",
       payload: { code: link.code },
     });
@@ -352,6 +482,7 @@ test("pickup resolution and direct sign-in code attempts share address and globa
     const limitedSession = await global.app.inject({
       method: "POST",
       url: api.session.code.path,
+      headers: { host: "relay.test" },
       remoteAddress: "203.0.113.201",
       payload: { code: device.code, deviceName: "Fresh browser" },
     });
@@ -359,6 +490,63 @@ test("pickup resolution and direct sign-in code attempts share address and globa
     assert.equal(global.ctx.db.value("SELECT used FROM login_codes WHERE id = ?", device.id), null);
   } finally {
     await global.close();
+  }
+});
+
+test("pickup pauses escalate, survive restart, and recover after fifteen quiet minutes", async () => {
+  const instance = await start();
+  const startedAt = Date.now();
+  try {
+    recordPickupCodeFailure(instance.ctx, "192.0.2.40", startedAt);
+    const savedAtWindowStart = instance.ctx.db.setting("pickupCodeProtection");
+    recordPickupCodeFailure(instance.ctx, "192.0.2.42", startedAt + 1);
+    assert.equal(
+      instance.ctx.db.setting("pickupCodeProtection"),
+      savedAtWindowStart,
+      "ordinary failures do not write a new SQLite setting for each rejected request",
+    );
+
+    const perAddress = "192.0.2.41";
+    for (let attempt = 0; attempt < 5; attempt++)
+      recordPickupCodeFailure(instance.ctx, perAddress, startedAt + 2 + attempt);
+    const addressStatus = pickupProtectionOf(instance.ctx, perAddress, startedAt + 7);
+    assert.equal(addressStatus.addressPausedUntil, startedAt + 6 + 60_000);
+    assert.equal(addressStatus.lastAttackAt, startedAt + 6);
+    assert.equal(addressStatus.heightenedUntil, startedAt + 6 + 15 * 60_000);
+
+    for (let attempt = 0; attempt < 3; attempt++)
+      recordPickupCodeFailure(instance.ctx, `198.18.1.${attempt + 1}`, startedAt + 10 + attempt);
+    const globalStatus = pickupProtectionOf(instance.ctx, undefined, startedAt + 20);
+    assert.equal(globalStatus.pausedUntil, startedAt + 12 + 2 * 60_000);
+    assert.equal(globalStatus.heightenedUntil, startedAt + 12 + 15 * 60_000);
+  } catch (error) {
+    await instance.close();
+    throw error;
+  }
+
+  const restartAt = Date.now() + 1;
+  await stop(instance);
+  const restarted = await start({}, instance.root);
+  try {
+    const restored = pickupProtectionOf(restarted.ctx, "192.0.2.41", restartAt);
+    assert.equal(restored.addressPausedUntil, startedAt + 6 + 60_000);
+    assert.equal(restored.pausedUntil, startedAt + 12 + 2 * 60_000);
+
+    const secondWaveAt = startedAt + 12 + 2 * 60_000 + 1;
+    for (let attempt = 0; attempt < 10; attempt++)
+      recordPickupCodeFailure(restarted.ctx, `203.0.113.${attempt + 1}`, secondWaveAt + attempt);
+    const escalatedAt = secondWaveAt + 9;
+    const escalated = pickupProtectionOf(restarted.ctx, undefined, escalatedAt);
+    assert.equal(escalated.pausedUntil, escalatedAt + 4 * 60_000);
+    assert.equal(escalated.lastAttackAt, escalatedAt);
+    assert.equal(escalated.heightenedUntil, escalatedAt + 15 * 60_000);
+
+    const recovered = pickupProtectionOf(restarted.ctx, undefined, escalatedAt + 15 * 60_000 + 1);
+    assert.equal(recovered.pausedUntil, null);
+    assert.equal(recovered.heightenedUntil, null);
+  } finally {
+    await restarted.close();
+    await rm(instance.root, { recursive: true, force: true });
   }
 });
 

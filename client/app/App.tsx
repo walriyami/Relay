@@ -3,12 +3,14 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
   type ComponentType,
 } from "react";
 import {
+  ChartColumn,
   Compass,
   Download,
   FolderInput,
@@ -17,6 +19,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Pencil,
   Send,
   Settings,
   Shield,
@@ -35,24 +38,32 @@ import {
 } from "../api";
 import { navigate, useRoute, useSearch } from "../lib/router";
 import { connectLive, disconnectLive, onChange } from "../lib/live";
+import { coalesce } from "../lib/coalesce";
 import { abandonAll, isBusy, setTransferPrefs, transfers } from "../lib/transfers";
 import { clearDraft } from "../lib/draft";
 import { setLocalPrefs, useLocalPrefs } from "../lib/local-prefs";
 import { Button, ConfirmHost, Popover, Spinner, Toaster, confirmDialog, menuKeys } from "../components/ui";
-import { AuthFrame, SignIn, Join } from "../features/auth/Auth";
+import { AuthFrame, SignIn } from "../features/auth/Auth";
+import { Join } from "../features/join/Join";
 import { Setup } from "../features/setup/Setup";
 import { SendPage } from "../features/send/SendPage";
 import { FilesPage } from "../features/library/FilesPage";
 import { ActivityProvider } from "../features/activity/ActivityProvider";
 import { ActivityButton } from "../features/activity/ActivityButton";
 import { CodeButton } from "../features/codes/CodeButton";
+import { CodeProtectionBanner } from "../features/codes/CodeProtectionNotice";
 import { LinksPage } from "../features/links/LinksPage";
 import { RequestsPage } from "../features/requests/RequestsPage";
+// Usage ships with the app because Admin shares its charts, and WebKit can't retry a page chunk
+// that failed to load if it imports another chunk.
+import { UsagePage } from "../features/usage/UsagePage";
 import { GuestUpload, PickupPage, PublicSharePage } from "./PublicPages";
 import { SessionProvider, useSession, type SetMe } from "./session";
+import { DeviceEditorProvider, DeviceIcon, useEditDevice } from "./devices";
 import { ConnectionBar, ConnectionScreen } from "../components/ConnectionStatus";
 import { connection, onConnectivity } from "../lib/connection";
 import { Brand } from "./Brand";
+import { storageOf } from "../components/StorageMeter";
 import { PageBoundary, pageRetries } from "./PageBoundary";
 import type { SettingsPage as SettingsPageComponent } from "../features/settings/SettingsPage";
 
@@ -156,6 +167,7 @@ function Private() {
   const [me, setMe] = useState<Me | null>(null);
   /** Stays as it was at load until setup's last screen is left, however far setup got meanwhile. */
   const [setup, setSetup] = useState<SetupState>("done");
+  const [setupKeyRequired, setSetupKeyRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   /** The first session check failed for a reason other than being signed out. */
   const [unreachable, setUnreachable] = useState(false);
@@ -204,6 +216,7 @@ function Private() {
         if (cancelled) return;
         setUnreachable(false);
         setSetup(status.state);
+        setSetupKeyRequired(status.keyRequired);
         if (data) signedIn(data);
         else setMe(null);
       })
@@ -230,17 +243,27 @@ function Private() {
     sessionRevision.current++;
     setMe((current) => (current && typeof update === "function" ? update(current) : (update as Me)));
   }, []);
-  // Refreshing (for example storage usage) never signs the user out on a blip.
-  const refresh = useCallback(async () => {
-    const revision = ++sessionRevision.current;
-    const data = await call(api.session.get);
-    if (revision === sessionRevision.current) signedIn(data);
-  }, [signedIn]);
+  // Refreshing (for example storage usage) never signs the user out on a blip. Every member's
+  // usage moves with each file anyone uploads, so changes refresh at most once a second, while a
+  // view that asks (opening the account menu, after saving) reads afresh straight away.
+  const sessionRefresh = useMemo(
+    () =>
+      coalesce(
+        async () => {
+          const revision = ++sessionRevision.current;
+          const data = await call(api.session.get);
+          if (revision === sessionRevision.current) signedIn(data);
+        },
+        { delay: 150, interval: 1000 },
+      ),
+    [signedIn],
+  );
+  const refresh = useCallback(() => sessionRefresh.request(true), [sessionRefresh]);
   useEffect(() => {
     if (!me) return;
     connectLive();
     // Preferences and usage can change from another device.
-    const offAccount = onChange("account", () => void refresh().catch(() => {}));
+    const offAccount = onChange("account", () => void sessionRefresh.request());
     // From a 401 on any request, or from the event stream with the server's reason.
     // Only the first report counts: requests failing right after the stream's reason must not replace it.
     let expired = false;
@@ -283,11 +306,14 @@ function Private() {
       </main>
     );
   // Before anyone has an account, and for the administrator until they finish choosing what members get.
-  if (setup === "account" || (setup === "defaults" && me?.user.admin))
+  if (setup === "account" || (setup === "choices" && me?.user.admin))
     return (
       <Public>
         <Setup
           state={setup}
+          keyRequired={setupKeyRequired}
+          me={me}
+          setMe={updateMe}
           onSignedIn={signedInHere}
           onFinished={() => {
             setSetup("done");
@@ -296,13 +322,24 @@ function Private() {
         />
       </Public>
     );
+  // A new member's welcome: an invitation before the account exists, /welcome after it. One place
+  // renders both, so the walkthrough carries on through the sign-in its account step makes.
+  if ((!me && parts[0] === "join" && parts[1]) || (me && parts[0] === "welcome"))
+    return (
+      <Public>
+        <Join
+          token={me ? "" : parts[1]}
+          me={me}
+          onJoined={(joined) => {
+            navigate("/welcome", true);
+            signedInHere(joined);
+          }}
+          setMe={updateMe}
+          onFinished={() => navigate("/", true)}
+        />
+      </Public>
+    );
   if (!me) {
-    if (parts[0] === "join" && parts[1])
-      return (
-        <Public>
-          <Join token={parts[1]} onSignedIn={signedInHere} />
-        </Public>
-      );
     return (
       <Public>
         <SignIn onSignedIn={signedInHere} notice={notice} />
@@ -331,7 +368,9 @@ function Private() {
     );
   return (
     <SessionProvider me={me} setMe={updateMe} refreshMe={refresh}>
-      <Shell onSignedOut={() => setMe(null)} />
+      <DeviceEditorProvider>
+        <Shell onSignedOut={() => setMe(null)} />
+      </DeviceEditorProvider>
       <Toaster />
       <ConfirmHost />
     </SessionProvider>
@@ -384,6 +423,9 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     case "/settings":
       page = <SettingsPage onSignedOut={onSignedOut} />;
       break;
+    case "/usage":
+      page = <UsagePage />;
+      break;
     case "/admin":
       // Members get the same answer as for any unknown address, without loading the admin page.
       page = me.user.admin ? <AdminPage /> : <NotFound />;
@@ -424,12 +466,13 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
             <div className="topbar-actions">
               <CodeButton />
               <ActivityButton />
-              <AccountMenu onSignedOut={onSignedOut} active={section === "/settings" || section === "/admin"} />
+              <AccountMenu onSignedOut={onSignedOut} active={["/settings", "/usage", "/admin"].includes(section)} />
             </div>
           </div>
           <ConnectionBar />
         </header>
         <main id="main" className="main" tabIndex={-1}>
+          <CodeProtectionBanner />
           <PageBoundary key={section}>
             <Suspense
               fallback={
@@ -448,7 +491,10 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
 }
 
 function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active: boolean }) {
-  const { me } = useSession();
+  const { me, refreshMe, devices } = useSession();
+  const editDevice = useEditDevice();
+  // The device list hears about renames made elsewhere, so it's the fresher of the two.
+  const device = devices.find((d) => d.current) ?? { ...me.device, current: true };
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -458,8 +504,12 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
     setOpen(false);
   };
   useEffect(() => {
-    if (open) list.current?.querySelector<HTMLElement>("button")?.focus();
-  }, [open]);
+    if (!open) return;
+    list.current?.querySelector<HTMLElement>("button")?.focus();
+    // The storage line is only as fresh as the last refresh; opening the menu is a good moment.
+    void refreshMe().catch(() => {});
+  }, [open, refreshMe]);
+  const storage = storageOf(me);
   const go = (to: string) => {
     close();
     navigate(to);
@@ -483,9 +533,29 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
         <Popover anchor={button} onClose={() => setOpen(false)} label="Account" className="account-popover">
           <div className="account-head">
             <strong>{displayName(me.user)}</strong>
-            <span className="muted">{me.user.name ? `${me.user.username} · ${me.device.name}` : me.device.name}</span>
+            {me.user.name && <span className="muted">{me.user.username}</span>}
           </div>
           <div className="menu-list" role="menu" ref={list} onKeyDown={menuKeys(list, button, () => setOpen(false))}>
+            <button
+              role="menuitem"
+              className={`menu-item account-usage${storage.tight ? " is-tight" : ""}`}
+              onClick={() => go("/usage")}
+            >
+              <ChartColumn size={16} aria-hidden />
+              <span className="account-usage-body">
+                <span className="account-usage-line">
+                  <span>Usage</span>
+                  <span className="muted">{storage.summary}</span>
+                </span>
+                <span className="progress" aria-hidden>
+                  <span
+                    style={{
+                      width: `${storage.max > 0 ? Math.max(storage.used ? 2 : 0, Math.min(100, (storage.used / storage.max) * 100)) : 0}%`,
+                    }}
+                  />
+                </span>
+              </span>
+            </button>
             <button role="menuitem" className="menu-item" onClick={() => go("/settings")}>
               <Settings size={16} aria-hidden /> Settings
             </button>
@@ -495,6 +565,24 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
               </button>
             )}
             <div className="menu-sep" role="separator" />
+            {/* This browser, then the settings that belong to it alone. */}
+            <button
+              role="menuitem"
+              className="menu-item account-device"
+              aria-label={`Edit this device, ${device.name}`}
+              title="Edit this device"
+              onClick={() => {
+                close();
+                editDevice(device);
+              }}
+            >
+              <DeviceIcon device={device} size={16} />
+              <span className="account-device-body">
+                <span className="account-device-name">{device.name}</span>
+                <span className="muted">This device</span>
+              </span>
+              <Pencil className="account-device-edit" size={14} aria-hidden />
+            </button>
             <ThemeSwitch />
             <AutoAcceptSwitch />
             <div className="menu-sep" role="separator" />

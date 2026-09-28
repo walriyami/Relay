@@ -16,6 +16,7 @@ import { api, urls } from "../shared/api.ts";
 import { LIMITS, type Id, type Link } from "../shared/model.ts";
 import {
   Session,
+  holdEvents,
   assert,
   bufferSource,
   download,
@@ -96,26 +97,6 @@ async function checkZip(session: Session, path: string) {
   const resumed = await resumedDownload(session, path);
   const full = await download(session, path);
   assert(resumed.sha256 === full.sha256, "A Range-resumed ZIP differs from the full ZIP.");
-}
-
-/** Opens the member event stream and resolves once the server says it is ready. */
-async function holdEvents(session: Session) {
-  const res = await session.fetch(urls.events(session.tab), { signal: events.signal });
-  assert(res.status === 200, `The event stream answered ${res.status}.`);
-  const reader = res.body!.getReader();
-  let seen = "";
-  while (!seen.includes("event: ready")) {
-    const { value, done } = await reader.read();
-    assert(!done, "The event stream closed before it was ready.");
-    seen += Buffer.from(value).toString("utf8");
-  }
-  void (async () => {
-    try {
-      while (!(await reader.read()).done);
-    } catch {
-      // The stream was closed; that's the end of it.
-    }
-  })();
 }
 
 try {
@@ -231,7 +212,7 @@ try {
       body: { code: code.code, deviceName: `Relay verification receiver ${run}` },
     });
     created.loginCodes.delete(code.id);
-    await holdEvents(receiver);
+    await holdEvents(receiver, events.signal);
     let online = false;
     for (let i = 0; i < 20 && !online; i++) {
       online = !!(await owner.call(api.devices.list)).find((d) => d.id === signedIn.device.id)?.online;

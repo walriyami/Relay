@@ -13,7 +13,10 @@ export function cleanName(value: string): string {
     // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
     /[\x00-\x1f\x7f/\\]/.test(name) ||
     // Bidirectional controls can disguise a name (e.g. "…exe.txt" shown as "…txt.exe").
-    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name)
+    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name) ||
+    // Keep names valid UTF-8. Lone surrogates make encodeURIComponent throw and are not valid
+    // filesystem or ZIP path characters.
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(name)
   )
     fail(400, `Choose a name without slashes, up to ${LIMITS.nameLength} characters.`);
   return name;

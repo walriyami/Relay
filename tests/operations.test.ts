@@ -25,7 +25,7 @@ test("maintenance failure is visible, does not skip later jobs, and recovers on 
     };
     instance.ctx.activity.sweep = (now) => {
       ran = true;
-      activity(now);
+      return activity(now);
     };
     await instance.sweep();
     assert.equal(ran, true);
@@ -59,7 +59,7 @@ test("operator diagnostics remain admin-only and distinguish deduplication from 
     assert.equal(overview.storage.trashItems, 1);
     assert.equal((await user.raw({ method: "GET", url: "/api/admin" })).statusCode, 403);
     assert.equal((await new Client(instance).raw({ method: "GET", url: "/api/admin" })).statusCode, 401);
-    assert.deepEqual((await instance.app.inject("/api/health")).json(), { ok: true });
+    assert.deepEqual((await instance.app.inject("/api/health")).json(), { ok: true, status: "healthy" });
   } finally {
     await instance.close();
   }

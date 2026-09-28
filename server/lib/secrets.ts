@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { DEFAULT_CODE_LENGTH, formatCode, type CodeLength } from "../../shared/codes.ts";
+import { fail } from "./errors.ts";
 
 export { formatCode, normalizeCode } from "../../shared/codes.ts";
 
@@ -14,23 +15,49 @@ const scrypt = promisify(scryptCallback) as (
 ) => Promise<Buffer>;
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 ** 2 };
 
+// One scrypt uses about 32 MiB. Limit active derivations and bound the wait list so a distributed
+// burst at public setup/join/sign-in endpoints cannot turn into unbounded native work and memory.
+const MAX_ACTIVE_SCRYPT = 2;
+const MAX_QUEUED_SCRYPT = 32;
+let activeScrypt = 0;
+const scryptQueue: Array<() => void> = [];
+
+async function withScrypt<T>(work: () => Promise<T>): Promise<T> {
+  if (activeScrypt >= MAX_ACTIVE_SCRYPT) {
+    if (scryptQueue.length >= MAX_QUEUED_SCRYPT) fail(429, "Password service is busy. Try again shortly.");
+    await new Promise<void>((resolve) => scryptQueue.push(resolve));
+  } else {
+    activeScrypt++;
+  }
+
+  try {
+    return await work();
+  } finally {
+    const next = scryptQueue.shift();
+    if (next) next();
+    else activeScrypt--;
+  }
+}
+
 export const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 /** A fresh 256-bit bearer secret (session, invite, grant, CSRF). */
 export const randomToken = () => randomBytes(32).toString("base64url");
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("base64url");
-  const key = await scrypt(password.normalize("NFKC"), salt, 32, SCRYPT);
+  const key = await withScrypt(() => scrypt(password.normalize("NFKC"), salt, 32, SCRYPT));
   return `scrypt$${SCRYPT.N}$${salt}$${key.toString("base64url")}`;
 }
 export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
   const [scheme, n, salt, key] = encoded.split("$");
   if (scheme !== "scrypt" || !salt || !key) return false;
   const expected = Buffer.from(key, "base64url");
-  const actual = await scrypt(password.normalize("NFKC"), salt, expected.length, {
-    ...SCRYPT,
-    N: Number(n),
-  });
+  const actual = await withScrypt(() =>
+    scrypt(password.normalize("NFKC"), salt, expected.length, {
+      ...SCRYPT,
+      N: Number(n),
+    }),
+  );
   return timingSafeEqual(actual, expected);
 }
 /** Compare against this when the account does not exist, so timing does not reveal usernames. */
@@ -69,6 +96,10 @@ export class Secrets {
   /** A database-safe, purpose-separated digest for a low-entropy numeric pickup code. */
   pickupCodeHash(digits: string) {
     return `hmac-sha256:${this.mac("pickup-code", digits).toString("hex")}`;
+  }
+  /** A database-safe identifier for an address in persistent abuse controls. */
+  pickupAddressKey(address: string) {
+    return this.mac("pickup-address", address).toString("hex");
   }
   /** Stable sign-in URL secret for a pending device code; unlike the numeric code, this never rotates. */
   deviceToken(codeId: string) {

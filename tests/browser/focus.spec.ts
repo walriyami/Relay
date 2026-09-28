@@ -107,7 +107,7 @@ test("the item window's More menu returns focus to its button, and trashing land
   await expect(more).toBeFocused();
 
   await more.press("Enter");
-  await page.getByRole("menu").getByRole("menuitem", { name: "Move to Trash" }).press("Enter");
+  await page.getByRole("menu").getByRole("menuitem", { name: "Move to Trash", exact: true }).press("Enter");
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
 });

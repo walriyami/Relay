@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { CopyButton, QrCode } from "./ui";
 import { api } from "../api";
 import { useLive } from "../lib/live";
+import { useCodeConfig } from "../features/codes/config";
+import { CodeProtectionNotice } from "../features/codes/CodeProtectionNotice";
 
 /** The handoff people see after creating or opening any shareable address. */
 export function ShareAccess({
@@ -23,6 +25,7 @@ export function ShareAccess({
   detail?: ReactNode;
   actions?: ReactNode;
 }) {
+  const { protection, codeLength } = useCodeConfig();
   // The registry retains retired codes as identifiers. Only the owner can refresh their handoff.
   const current = useLive(
     code ? api.pickup.current : null,
@@ -31,12 +34,6 @@ export function ShareAccess({
     null,
   );
   const shownCode = current.error ? null : current.data ? current.data.code : code;
-  if (!current.error && current.data?.code === null)
-    return (
-      <p className="muted" role="status">
-        This handoff is no longer available. Close this dialog and refresh its source before sharing again.
-      </p>
-    );
   return (
     <div className={`share-access${compact ? " share-access-compact" : ""}`}>
       <div className="share-access-qr">
@@ -60,7 +57,7 @@ export function ShareAccess({
               <CopyButton value={shownCode} label="Copy code" variant="ghost" size="sm" iconOnly />
             </>
           ) : (
-            <span className="muted">{current.error ? "Code unavailable." : "This code no longer works."}</span>
+            <span className="muted">Code unavailable. Use the link or QR code.</span>
           )}
           {current.error && (
             <button className="link" type="button" onClick={current.reload}>
@@ -68,6 +65,9 @@ export function ShareAccess({
             </button>
           )}
         </div>
+      </div>
+      <div className="share-access-detail">
+        <CodeProtectionNotice protection={protection} effectiveCodeLength={codeLength} />
       </div>
       {detail && <div className="share-access-detail muted">{detail}</div>}
       {actions && <div className="share-access-actions">{actions}</div>}

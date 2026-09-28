@@ -1,0 +1,12 @@
+# Optional: docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
+# Create RELAY_TUNNEL_NETWORK first and attach your trusted connector to it.
+services:
+  relay-gateway:
+    networks:
+      tunnel:
+        aliases: [relay]
+
+networks:
+  tunnel:
+    external: true
+    name: ${RELAY_TUNNEL_NETWORK:-streaming_lab_private}

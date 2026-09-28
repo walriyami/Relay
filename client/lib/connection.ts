@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api } from "../../shared/api";
+import { api } from "../../shared/api.ts";
 
 /**
  * Whether this tab can talk to Relay and, when it can't, whose side the problem is on.
@@ -49,7 +49,7 @@ let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let recoveredTimer: ReturnType<typeof setTimeout> | undefined;
 let probeRun = 0;
-/** When a check last found Relay fine. */
+/** When a check or a recovery response last found Relay fine. */
 let lastFine = 0;
 /** After a check finds Relay fine, how long further failures are left to their own retries. */
 const RECHECK_MS = 5000;
@@ -164,7 +164,10 @@ export function reportFailure() {
 
 /** Relay itself answered, so whatever was wrong has passed. */
 export function reportReachable() {
-  if (current.state === "ok") return;
+  // A response already in flight can finish after the browser loses its network.
+  if (!browserOnline() || current.state === "ok") return;
+  // Old requests can still fail after recovery; give this answer the same grace as a healthy probe.
+  lastFine = Date.now();
   // A check still in flight would only repeat what this answer already says.
   probeRun++;
   clearTimeout(timer);

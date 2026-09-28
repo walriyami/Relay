@@ -213,3 +213,293 @@ test("Files to Trash does not flash cards from the previous query", async ({ bro
     await context.close();
   }
 });
+
+test("capacity-limited member tabs retry without spinning and notice revoked sessions", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: BASE, storageState: await deviceState("Laptop") });
+  const page = await context.newPage();
+  const ids: string[] = [];
+  let revoked = false;
+  await context.route("**/api/events?*", async (route) => {
+    ids.push(new URL(route.request().url()).searchParams.get("tab") || "");
+    if (revoked) return route.fulfill({ status: 401, json: { error: "Sign in to continue." } });
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: 'event: limited\ndata: {"retryMs":500}\n\n',
+    });
+  });
+  await context.route("**/api/session", async (route) => {
+    if (revoked) return route.fulfill({ status: 401, json: { error: "Sign in to continue." } });
+    return route.continue();
+  });
+  try {
+    await page.goto("/");
+    await expect(composer(page)).toBeVisible();
+    await expect.poll(() => ids.length).toBeGreaterThanOrEqual(2);
+    expect(ids.length).toBeLessThan(5);
+    expect(new Set(ids).size).toBe(1);
+    revoked = true;
+    await expect(page.getByText("Your session ended. Sign in again to continue.")).toBeVisible();
+    const stopped = ids.length;
+    await page.waitForTimeout(1200);
+    expect(ids).toHaveLength(stopped);
+  } finally {
+    await context.close();
+  }
+});
+
+test("first-tab admission races converge on the shared stored ID without changing transfer leases", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ baseURL: BASE, storageState: await deviceState("Laptop") });
+  const first = await context.newPage();
+  const second = await context.newPage();
+  const firstIds: URL[] = [];
+  const secondIds: URL[] = [];
+  for (const [page, ids] of [
+    [first, firstIds],
+    [second, secondIds],
+  ] as const)
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/events") ids.push(url);
+    });
+  try {
+    await first.goto("/");
+    await expect(composer(first)).toBeVisible();
+    await expect.poll(() => firstIds.length).toBe(1);
+    // Reproduce two first tabs both reading an empty key before the other's write was visible.
+    await second.addInitScript(() => {
+      // The replacement explicitly preserves the Storage receiver below.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const get = Storage.prototype.getItem;
+      let firstRead = true;
+      Storage.prototype.getItem = function (key) {
+        if (key === "relay.stream-browser" && firstRead) {
+          firstRead = false;
+          return null;
+        }
+        return get.call(this, key);
+      };
+    });
+    await second.goto("/");
+    await expect(composer(second)).toBeVisible();
+    await expect.poll(() => firstIds.length).toBe(2);
+    await expect.poll(() => secondIds.length).toBe(1);
+    const winner = secondIds[0].searchParams.get("browser");
+    expect(winner).toMatch(/^[a-f0-9]{32}$/);
+    expect(firstIds[0].searchParams.get("browser")).not.toBe(winner);
+    expect(firstIds[1].searchParams.get("browser")).toBe(winner);
+    expect(firstIds[1].searchParams.get("tab")).toBe(firstIds[0].searchParams.get("tab"));
+    expect(await first.evaluate(() => localStorage.getItem("relay.stream-browser"))).toBe(winner);
+  } finally {
+    await context.close();
+  }
+});
+
+for (const unavailable of [false, true]) {
+  test(`member and three guest grants leave HTTP/1 capacity for API requests and uploads${unavailable ? " without storage" : ""}`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ baseURL: BASE, storageState: await deviceState("Laptop") });
+    if (unavailable)
+      await context.addInitScript(() => {
+        // The replacement explicitly preserves the Storage receiver below.
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const get = Storage.prototype.getItem;
+        Storage.prototype.getItem = function (key) {
+          if (key === "relay.stream-browser") throw new DOMException("Storage disabled", "SecurityError");
+          return get.call(this, key);
+        };
+      });
+    const page = await context.newPage();
+    try {
+      await page.goto("/");
+      await expect(composer(page)).toBeVisible();
+      const session = await (await context.request.get(api.session.get.path)).json();
+      const tokens: string[] = [];
+      for (let index = 0; index < 3; index++) {
+        const created = await context.request.post(api.requests.create.path, {
+          headers: { "X-Relay-CSRF": session.csrf },
+          data: { id: crypto.randomUUID(), name: unique("mixed-grant"), days: 1, maxBytes: 1024 },
+        });
+        expect(created.ok()).toBe(true);
+        const { token } = await created.json();
+        tokens.push(token);
+        const grant = await context.request.post(`/api/r/${token}/start`, {
+          headers: { "X-Relay-CSRF": session.csrf },
+        });
+        expect(grant.ok()).toBe(true);
+      }
+      // These are real browser HTTP/1 sockets: the normal member stream plus two per guest grant
+      // would occupy the entire pool without a shared admission limit.
+      const results = await page.evaluate(
+        async ({ tokens, unavailable }) => {
+          const browser = unavailable ? null : localStorage.getItem("relay.stream-browser");
+          return Promise.all(
+            tokens.flatMap((token) =>
+              [0, 1].map(
+                () =>
+                  new Promise<string>((resolve, reject) => {
+                    const source = new EventSource(
+                      `/api/r/${token}/events?tab=${crypto.randomUUID()}${browser ? `&browser=${browser}` : ""}`,
+                    );
+                    source.addEventListener("ready", () => resolve("ready"));
+                    source.addEventListener("limited", () => {
+                      source.close();
+                      resolve("limited");
+                    });
+                    source.addEventListener("error", () => {
+                      source.close();
+                      reject(new Error("Guest stream failed"));
+                    });
+                  }),
+              ),
+            ),
+          );
+        },
+        { tokens, unavailable },
+      );
+      expect(results.filter((result) => result === "ready")).toHaveLength(unavailable ? 0 : 3);
+      expect(results.filter((result) => result === "limited")).toHaveLength(unavailable ? 6 : 3);
+      expect(
+        await page.evaluate(async () => (await fetch("/api/session", { signal: AbortSignal.timeout(5000) })).status),
+      ).toBe(200);
+      let patches = 0;
+      page.on("request", (request) => {
+        if (request.method() === "PATCH") patches++;
+      });
+      await fileInput(page).setInputFiles(textFile(unique("pool-progress") + ".txt"));
+      await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+      await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
+      expect(patches).toBeGreaterThan(0);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+for (const guestFirst of [false, true]) {
+  test(`polling members receive deliveries over HTTP/1 ${guestFirst ? "after guests fill every stream slot" : "when shared storage is denied"}`, async ({
+    browser,
+  }) => {
+    const sender = await deviceContext(browser, "Laptop");
+    const context = await browser.newContext({
+      baseURL: BASE,
+      storageState: await deviceState(guestFirst ? "Guest-first receiver" : "Storage-denied receiver"),
+    });
+    if (!guestFirst)
+      await context.addInitScript(() => {
+        // The replacement explicitly preserves the Storage receiver below.
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const get = Storage.prototype.getItem;
+        Storage.prototype.getItem = function (key) {
+          if (key === "relay.stream-browser") throw new DOMException("Storage disabled", "SecurityError");
+          return get.call(this, key);
+        };
+      });
+    const page = await context.newPage();
+    const probes: string[] = [];
+    let incomingRefreshes = 0;
+    page.on("response", (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === "/api/deliveries" && url.searchParams.get("direction") === "incoming" && response.ok())
+        incomingRefreshes++;
+    });
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/events") probes.push(url.search);
+    });
+    await page.addInitScript(() => {
+      const Native = EventSource;
+      const events: string[] = [];
+      (window as Window & { relayStreamEvents?: string[] }).relayStreamEvents = events;
+      window.EventSource = class extends Native {
+        constructor(url: string | URL, options?: EventSourceInit) {
+          super(url, options);
+          for (const type of ["ready", "limited"]) this.addEventListener(type, () => events.push(type));
+        }
+      };
+    });
+    try {
+      const senderSession = await (await sender.context.request.get(api.session.get.path)).json();
+      const receiverSession = await (await context.request.get(api.session.get.path)).json();
+      if (guestFirst) {
+        // A same-origin document with no Relay app opens four real HTTP/1 guest sockets first.
+        const holder = await context.newPage();
+        await holder.goto("/api/health");
+        const tokens: string[] = [];
+        for (let i = 0; i < 2; i++) {
+          const created = await sender.context.request.post(api.requests.create.path, {
+            headers: { "X-Relay-CSRF": senderSession.csrf },
+            data: { id: crypto.randomUUID(), name: unique("guest-first"), days: 1, maxBytes: 1024 },
+          });
+          expect(created.ok()).toBe(true);
+          const { token } = await created.json();
+          tokens.push(token);
+          const grant = await context.request.post(`/api/r/${token}/start`, {
+            headers: { "X-Relay-CSRF": receiverSession.csrf },
+          });
+          expect(grant.ok()).toBe(true);
+        }
+        const ready = await holder.evaluate(async (tokens) => {
+          const browser = "a1".repeat(16);
+          localStorage.setItem("relay.stream-browser", browser);
+          return Promise.all(
+            tokens.flatMap((token) =>
+              [0, 1].map(
+                () =>
+                  new Promise<string>((resolve, reject) => {
+                    const source = new EventSource(
+                      `/api/r/${token}/events?tab=${crypto.randomUUID()}&browser=${browser}`,
+                    );
+                    source.addEventListener("ready", () => resolve("ready"));
+                    source.addEventListener("limited", () => {
+                      source.close();
+                      reject(new Error("Guest unexpectedly limited"));
+                    });
+                    source.addEventListener("error", () => {
+                      source.close();
+                      reject(new Error("Guest stream failed"));
+                    });
+                  }),
+              ),
+            ),
+          );
+        }, tokens);
+        expect(ready).toEqual(["ready", "ready", "ready", "ready"]);
+      }
+      await page.goto("/");
+      await expect(composer(page)).toBeVisible();
+      const events = () =>
+        page.evaluate(() => (window as Window & { relayStreamEvents?: string[] }).relayStreamEvents!);
+      await expect.poll(events).toEqual(["limited"]);
+      expect(probes).toHaveLength(1);
+      expect(new URLSearchParams(probes[0]).has("browser")).toBe(guestFirst);
+      // Let both the mount query and the first limited event's debounced refresh finish before
+      // creating a delivery. Only the next real probe can then discover it.
+      await expect.poll(() => incomingRefreshes).toBeGreaterThanOrEqual(2);
+      const destination = destinations(sender.page).getByRole("button", {
+        name: receiverSession.device.name,
+        exact: true,
+      });
+      await expect(destination).toBeVisible();
+      const name = unique("polled-delivery") + ".txt";
+      await fileInput(sender.page).setInputFiles(textFile(name, "delivered while this device polls"));
+      const download = page.waitForEvent("download", { timeout: 32_000 });
+      await destination.click();
+      await expect(sender.page.locator(".transfer").first()).toContainText(`Sent to ${receiverSession.device.name}`);
+      // The unchanged limited->ALL topics path discovers the delivery on its next real probe.
+      expect((await download).suggestedFilename()).toBe(name);
+      await expect(page.getByRole("dialog", { name })).toContainText("Accepted on this device");
+      await expect(sender.page.locator(".transfer").first()).toContainText(
+        `Accepted on ${receiverSession.device.name}`,
+      );
+      expect(probes.length).toBeGreaterThanOrEqual(2);
+      expect((await events()).every((event) => event === "limited")).toBe(true);
+    } finally {
+      await context.close();
+      await sender.context.close();
+    }
+  });
+}

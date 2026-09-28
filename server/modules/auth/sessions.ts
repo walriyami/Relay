@@ -1,41 +1,45 @@
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../../context.ts";
 import {
   DEFAULTS,
+  LIMITS,
   type ActivityGroup,
   type ActivityPrefs,
+  type DeviceKind,
   type Me,
   type Prefs,
   type SignInMethod,
   type Usage,
   type User,
 } from "../../../shared/model.ts";
+import { deviceKind } from "../../../shared/devices.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { cookieOptions, sessionCookie } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
+import { capacityOf } from "../admin/settings.ts";
+import { LIMIT_COLUMNS, toLimits, type LimitRow } from "./member-limits.ts";
 
 export const DAY_MS = 86_400_000;
 const SESSION_MS = DEFAULTS.sessionDays * DAY_MS;
 
-export type UserRow = {
+export type UserRow = LimitRow & {
   id: string;
   username: string;
   display_name: string | null;
   admin: number;
-  quota: number;
   retention_days: number | null;
   trash_days: number;
   prefs: string;
 };
-export const USER_COLUMNS = "id, username, display_name, admin, quota, retention_days, trash_days, prefs";
+export const USER_COLUMNS = `id, username, display_name, admin, ${LIMIT_COLUMNS}, retention_days, trash_days, prefs`;
 
 export const toUser = (row: Omit<UserRow, "prefs">): User => ({
   id: row.id,
   username: row.username,
   name: row.display_name,
   admin: !!row.admin,
-  quota: row.quota,
+  limits: toLimits(row),
   retentionDays: row.retention_days,
   trashDays: row.trash_days,
 });
@@ -62,25 +66,42 @@ export function readPrefs(json: string): Prefs {
   };
 }
 
-/** Saved bytes (kept exact by triggers) plus bytes reserved by the user's unfinished uploads. */
-export function usageOf(ctx: Context, userId: string): Usage {
-  const row = ctx.db.get<Usage>(
+/** What the total storage has left for anyone: capacity less everything saved and reserved. */
+export function storageFree(ctx: Context) {
+  const taken = ctx.db.value<number>(
+    `SELECT (SELECT ifnull(SUM(bytes_used), 0) FROM users)
+          + (SELECT ifnull(SUM(size), 0) FROM nodes WHERE state = 'pending')`,
+  )!;
+  return Math.max(0, capacityOf(ctx) - taken);
+}
+
+/**
+ * Saved bytes (kept exact by triggers), bytes reserved by the user's unfinished uploads, and what
+ * they can still upload. `free` is `storageFree`, passed when reading many members at once.
+ */
+export function usageOf(ctx: Context, userId: string, free = storageFree(ctx)): Usage {
+  const row = ctx.db.get<{ used: number; reserved: number; quota: number | null }>(
     `SELECT bytes_used AS used, quota,
        (SELECT ifnull(SUM(size), 0) FROM nodes WHERE owner = users.id AND state = 'pending') AS reserved
      FROM users WHERE id = ?`,
     userId,
   );
-  return row ? { used: row.used, reserved: row.reserved, quota: row.quota } : fail(401, "Sign in to continue.");
+  if (!row) return fail(401, "Sign in to continue.");
+  const own = row.quota === null ? free : Math.max(0, row.quota - row.used - row.reserved);
+  return { used: row.used, reserved: row.reserved, available: Math.min(own, free) };
 }
 
 export function me(ctx: Context, userId: string, deviceId: string, csrf: string): Me {
   const user =
     ctx.db.get<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, userId) ?? fail(401, "Sign in to continue.");
-  const device = ctx.db.get<{ name: string }>("SELECT name FROM devices WHERE id = ?", deviceId);
+  const device = ctx.db.get<{ name: string; kind: DeviceKind }>(
+    "SELECT name, kind FROM devices WHERE id = ?",
+    deviceId,
+  );
   return {
     user: toUser(user),
     csrf,
-    device: { id: deviceId, name: device?.name ?? "" },
+    device: { id: deviceId, name: device?.name ?? "", kind: device?.kind ?? "computer" },
     prefs: readPrefs(user.prefs),
     usage: usageOf(ctx, userId),
   };
@@ -102,9 +123,30 @@ function distinctName(ctx: Context, userId: string, name: string, now: number) {
       .map((d) => d.name.toLowerCase()),
   );
   let candidate = name;
-  for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = `${name} ${n}`;
+  for (let n = 2; taken.has(candidate.toLowerCase()); n++) {
+    const suffix = ` ${n}`;
+    const maxBaseLength = LIMITS.nameLength - suffix.length;
+    let base = "";
+    for (const character of name) {
+      if (base.length + character.length > maxBaseLength) break;
+      base += character;
+    }
+    candidate = `${base}${suffix}`;
+  }
   return candidate;
 }
+
+const DEFAULT_DEVICE_NAME = "Browser";
+
+export type NewDevice = { name: string; kind: DeviceKind };
+/**
+ * The browser signing in: the name it asked for, and what it is. Its own answer is preferred, since
+ * only it can tell an iPad from the Mac its user agent claims to be.
+ */
+export const newDevice = (req: FastifyRequest, hint: { deviceName?: string; deviceKind?: DeviceKind }): NewDevice => ({
+  name: hint.deviceName ?? DEFAULT_DEVICE_NAME,
+  kind: hint.deviceKind ?? deviceKind(String(req.headers["user-agent"] ?? "")),
+});
 
 export type NewSession = { userId: string; token: string; csrf: string; deviceId: string };
 
@@ -112,18 +154,19 @@ export type NewSession = { userId: string; token: string; csrf: string; deviceId
  * Records a new browser (device) and its session. Synchronous so callers can consume an invite or
  * login code in the same transaction; `finishSignIn` sets the cookie once that has committed.
  */
-export function insertSession(ctx: Context, userId: string, deviceName: string, method: SignInMethod): NewSession {
+export function insertSession(ctx: Context, userId: string, device: NewDevice, method: SignInMethod): NewSession {
   const now = Date.now();
   const session = { userId, token: randomToken(), csrf: randomToken(), deviceId: uuidv7(now) };
   ctx.db.tx(() => {
     if (!ctx.db.get("SELECT 1 FROM users WHERE id = ? AND disabled = 0", userId))
       fail(403, "This account is disabled. Contact the administrator.");
-    const name = distinctName(ctx, userId, deviceName, now);
+    const name = distinctName(ctx, userId, device.name, now);
     ctx.db.run(
-      "INSERT INTO devices(id, user_id, name, created, seen) VALUES(?, ?, ?, ?, ?)",
+      "INSERT INTO devices(id, user_id, name, kind, created, seen) VALUES(?, ?, ?, ?, ?, ?)",
       session.deviceId,
       userId,
       name,
+      device.kind,
       now,
       now,
     );
@@ -146,5 +189,3 @@ export function finishSignIn(ctx: Context, reply: FastifyReply, session: NewSess
   ctx.events.publish(session.userId, "devices");
   return me(ctx, session.userId, session.deviceId, session.csrf);
 }
-
-export const DEFAULT_DEVICE_NAME = "Browser";

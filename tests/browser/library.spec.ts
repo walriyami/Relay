@@ -44,6 +44,33 @@ test("recent items open in a popup at their own address; Back closes it and stay
   await expect(composer(page)).toBeVisible();
 });
 
+test("opening a collection's address loads each view once, not again when the live stream opens", async ({ page }) => {
+  const name = unique("once");
+  await saveShare(page, name);
+  await page
+    .getByRole("list", { name: "Recent" })
+    .getByRole("button", { name: new RegExp(name) })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/files\/[0-9a-f-]{36}$/);
+  const address = new URL(page.url());
+  const loads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname.startsWith("/api/")) loads.push(url.pathname);
+  });
+  const stream = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/events");
+  await page.goto(address.pathname);
+  await expect(page.getByRole("dialog")).toContainText(`${name}-notes.txt`);
+  await stream;
+  // Long enough for the stream's catch-up, which waits out the views' one-second refresh spacing.
+  await page.waitForTimeout(2000);
+  const count = (path: string) => loads.filter((loaded) => loaded === path).length;
+  expect(count(`/api${address.pathname.replace("/files/", "/items/")}`)).toBe(1);
+  expect(count("/api/items")).toBe(1);
+  expect(count("/api/activity")).toBe(1);
+});
+
 test("Escape closes the top popup only, then the next one", async ({ page }) => {
   const name = unique("nested");
   await saveShare(page, name);
@@ -162,9 +189,32 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   // One step per action: choosing how long to keep them applies it and ends choosing.
   await bar.getByRole("button", { name: "Select all" }).click();
   await expect(bar).toContainText("2 selected");
-  await bar.getByRole("button", { name: "Keep 2 items for" }).click();
+  await bar.getByRole("button", { name: "Move 2 items to Trash after" }).click();
+  const retentionStarted = Date.now();
+  const retentionResponse = page.waitForResponse(
+    (response) => response.url().endsWith("/api/items/bulk") && response.request().method() === "POST",
+  );
   await page.getByRole("menu").getByRole("menuitem", { name: "7 days" }).click();
-  await expect(page.getByText("2 items will move to Trash in 7 days")).toBeVisible();
+  const saved = await retentionResponse;
+  const retentionFinished = Date.now();
+  expect(saved.ok()).toBe(true);
+  expect(await saved.json()).toEqual({ updated: 2 });
+  await expect(
+    page.getByText("Retention saved for 2 items. Each item’s saved deadline is shown in its details."),
+  ).toBeVisible();
+  // Each saved deadline respects its own hard expiry, which bulk retention cannot extend.
+  for (const item of [firstItem, secondItem]) {
+    const response = await page.request.get(`/api/items/${item.id}`);
+    expect(response.ok()).toBe(true);
+    const retained = await response.json();
+    expect(retained.hardExpires).toBe(item.hardExpires);
+    expect(retained.expires).toBeGreaterThanOrEqual(
+      Math.min(retentionStarted + 7 * 86_400_000, item.hardExpires ?? Infinity),
+    );
+    expect(retained.expires).toBeLessThanOrEqual(
+      Math.min(retentionFinished + 7 * 86_400_000, item.hardExpires ?? Infinity),
+    );
+  }
   await expect(bar).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Select", exact: true })).toBeVisible();
 
@@ -219,10 +269,10 @@ test("cards say what's inside and have a quick actions menu", async ({ page }) =
     "Share",
     "Rename…",
     "Add files…",
-    "Keep for…",
+    "Move to Trash after…",
     "Move to Trash",
   ]);
-  await menu.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await menu.getByRole("menuitem", { name: "Move to Trash", exact: true }).click();
   await expect(page.getByRole("list", { name: "Recent" }).locator(".collection-card", { hasText: name })).toHaveCount(
     0,
   );
@@ -318,7 +368,12 @@ test("an item can be renamed and added to, but what is in it can't be changed", 
   await expect(item.locator(".modal-foot").getByRole("button")).toHaveText(["More", "Share", "Download ZIP"]);
   await moreButton().click();
   const more = page.getByRole("menu");
-  await expect(more.getByRole("menuitem")).toHaveText(["Rename…", "Add files…", "Keep for…", "Move to Trash"]);
+  await expect(more.getByRole("menuitem")).toHaveText([
+    "Rename…",
+    "Add files…",
+    "Move to Trash after…",
+    "Move to Trash",
+  ]);
   // Clicking anywhere else closes the menu, and the window stays open.
   await item.locator(".modal-body").click({ position: { x: 4, y: 4 } });
   await expect(more).toHaveCount(0);
@@ -558,6 +613,8 @@ test("PDFs preview page by page inside the app", async ({ page }) => {
   const viewer = dialog.getByRole("document", { name: `${name}.pdf, 3 pages` });
   await expect(viewer).toBeVisible();
   await expect(viewer.getByRole("img", { name: "Page 1" })).toBeVisible();
+  // Canvases start with no backing storage until their queued render completes.
+  await expect(viewer.getByRole("img", { name: "Page 1" })).toHaveAttribute("data-rendered", "true");
   expect(
     await viewer
       .locator("canvas")
@@ -611,7 +668,7 @@ test("focus moves to the next card when the focused one goes to Trash", async ({
   const card = list.locator(".collection-card", { hasText: second });
   await card.getByRole("button", { name: /Actions for/ }).focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("menu").getByRole("menuitem", { name: "Move to Trash" }).press("Enter");
+  await page.getByRole("menu").getByRole("menuitem", { name: "Move to Trash", exact: true }).press("Enter");
   await expect(card).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.closest(".collection-card")?.textContent ?? ""))

@@ -1,7 +1,8 @@
 import type * as Tus from "tus-js-client";
-import type { DetailedError, Upload } from "tus-js-client";
+import type { DetailedError } from "tus-js-client";
 import { headers } from "../../shared/api";
 import { uuidv7 } from "../../shared/ids";
+import { LIMITS } from "../../shared/model";
 import {
   ApiError,
   api,
@@ -18,7 +19,8 @@ import {
 } from "../api";
 import { autoName, copyText, shareUrl } from "./format";
 import { isOnline, isProxyFailure, onConnectivity, reportFailure, whenOnline, whenSettled } from "./connection";
-import { notifyChange, watchBeats } from "./live";
+import { notifyChange } from "./live";
+import { eventStream } from "./event-stream";
 import { pathKey } from "./path-key";
 
 // Transfers live only in this tab. Nothing uploads until the user picks a destination, and closing
@@ -49,7 +51,10 @@ type FileTask = {
   error?: string;
   /** Failed for want of a connection or a working server, so coming back online retries it. */
   retryable?: boolean;
-  upload?: Upload;
+  /** An earlier attempt may have left bytes on the server, so later ones ask it where the upload stands. */
+  started?: boolean;
+  /** Stops the running attempt; its task goes back to the queue. */
+  stop?: () => void;
 };
 /**
  * `destination`: every file is saved but the destination step (link, delivery) failed. The server
@@ -113,12 +118,23 @@ export type Transfer = {
   rejected?: 413 | 507;
 };
 
-const CHUNK = 8 * 1024 ** 2;
+// Chunks are sized so one request takes about CHUNK_SECONDS at the rate requests are achieving: a
+// slow uplink still finishes each well inside the server's two-minute request timeout, and a fast
+// one sends few requests. Until a rate is known, the first chunks are small.
+const CHUNK_MIN = 256 * 1024;
+const CHUNK_START = 1024 ** 2;
+const CHUNK_MAX = LIMITS.chunkBytes;
+const CHUNK_SECONDS = 15;
 const LARGE = 64 * 1024 ** 2;
+// Uploads this tab runs at once, shared evenly by its transfers: more transfers don't mean more
+// connections, and a browser's six per server keep room for the event stream and API calls.
 const PARALLEL = 4;
 const PARALLEL_LARGE = 2;
 // Statuses that mean the request itself is wrong; retrying the same bytes cannot help.
 const FINAL_STATUSES = new Set([400, 401, 403, 404, 409, 410, 412, 413, 415, 422, 507]);
+/** A response retrying cannot fix. A 409 that reports the server's offset is resumed from there. */
+const isFinal = (status: number, offset: string | null) =>
+  FINAL_STATUSES.has(status) && !(status === 409 && offset !== null);
 const RETRY_DELAYS = [1000, 3000, 8000];
 
 export const transfers: Transfer[] = [];
@@ -128,6 +144,11 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 /** Per transfer, the last rate sample and a smoothed rate that carries over a pause or reconnect. */
 const meters = new Map<string, { at: number; bytes: number; rate: number }>();
 const running = new Map<string, Set<FileTask>>();
+/** Per transfer, when it last started a task, so transfers with equal shares take turns. */
+const turns = new Map<string, number>();
+let turn = 0;
+/** Smoothed bytes per second of one upload request, shared by every upload in the tab. */
+let requestRate = 0;
 /** Per transfer, the index of the first task that may still be queued. */
 const cursors = new Map<string, number>();
 /** The account preferences uploads follow. */
@@ -259,9 +280,11 @@ function topLevel(files: { path: string }[], folders: string[]) {
   folders.forEach((f) => add(f, true));
   return [...seen.values()];
 }
-/** The name the server gives an item nobody named ("a.png + 2 more + text"), before anything is sent. */
-export const contentName = (files: DraftFile[], folders: string[], text: string) =>
-  autoName(topLevel(uniquePaths(files), folders), text);
+/**
+ * What a selection puts at the top of an item, for the name the server gives an item nobody named
+ * ("a.png + 2 more + text"; see `autoName`), before anything is sent.
+ */
+export const contentTop = (files: DraftFile[], folders: string[]) => topLevel(uniquePaths(files), folders);
 
 /** Counts what the transfer will hold and, unless it was named, names it the way the server will. */
 function describe(t: Transfer) {
@@ -420,44 +443,61 @@ function requeue(t: Transfer, task: FileTask) {
   cursors.set(t.id, Math.min(cursors.get(t.id) ?? 0, task.index));
 }
 
-/** Starts queued tasks up to the parallel limits. Returns whether any task is still queued. */
-function pump(t: Transfer): boolean {
-  const active = running.get(t.id) || new Set<FileTask>();
-  running.set(t.id, active);
-  let large = [...active].filter((task) => task.file.size > LARGE).length;
+/** The transfer's first queued task, or, when large files may not start, its first small one. */
+function nextQueued(t: Transfer, largeAllowed: boolean) {
   // Tasks before the cursor are never queued, so a 10,000-file transfer is not rescanned per file.
   let cursor = cursors.get(t.id) ?? 0;
   while (cursor < t.tasks.length && t.tasks[cursor].status !== "queued") cursor++;
   cursors.set(t.id, cursor);
-  let waiting = false;
-  // Offline, nothing starts: the queue waits for the connection instead of failing.
-  for (let i = cursor; i < t.tasks.length && active.size < PARALLEL && isOnline(); i++) {
+  for (let i = cursor; i < t.tasks.length; i++) {
     const task = t.tasks[i];
-    if (task.status !== "queued") continue;
-    if (task.file.size > LARGE) {
-      if (large >= PARALLEL_LARGE) {
-        waiting = true;
-        continue;
+    if (task.status === "queued" && (largeAllowed || task.file.size <= LARGE)) return task;
+  }
+}
+
+/**
+ * Starts queued tasks up to the tab's limits. Each free slot goes to the uploading transfer running
+ * the fewest tasks, and between equals to the one that waited longest for its last start.
+ */
+function pump() {
+  // Offline, nothing starts: the queue waits for the connection instead of failing.
+  while (isOnline()) {
+    let active = 0;
+    let large = 0;
+    for (const tasks of running.values())
+      for (const task of tasks) {
+        active++;
+        if (task.file.size > LARGE) large++;
       }
-      large++;
+    if (active >= PARALLEL) return;
+    let pick: { t: Transfer; task: FileTask; share: number; turn: number } | undefined;
+    for (const t of transfers) {
+      if (t.status !== "uploading") continue;
+      const share = running.get(t.id)?.size ?? 0;
+      const last = turns.get(t.id) ?? 0;
+      if (pick && (share > pick.share || (share === pick.share && last >= pick.turn))) continue;
+      const task = nextQueued(t, large < PARALLEL_LARGE);
+      if (task) pick = { t, task, share, turn: last };
     }
-    active.add(task);
+    if (!pick) return;
+    const { t, task } = pick;
+    const tasks = running.get(t.id) ?? new Set<FileTask>();
+    running.set(t.id, tasks);
+    tasks.add(task);
+    turns.set(t.id, ++turn);
     task.status = "uploading";
     void runTask(t, task).finally(() => {
-      active.delete(task);
+      tasks.delete(task);
       settle(t);
     });
   }
-  if (waiting) return true;
-  for (let i = cursors.get(t.id)!; i < t.tasks.length; i++) if (t.tasks[i].status === "queued") return true;
-  return false;
 }
 
 function settle(t: Transfer) {
   changed();
+  pump();
   if (t.status !== "uploading") return;
-  if (pump(t)) return;
-  if (running.get(t.id)?.size) return;
+  if (nextQueued(t, true) || running.get(t.id)?.size) return;
   if (t.tasks.some((task) => task.status === "failed")) {
     t.status = "attention";
     t.firstError = t.tasks.find((task) => task.status === "failed")?.error;
@@ -465,6 +505,63 @@ function settle(t: Transfer) {
     return;
   }
   void finalize(t);
+}
+
+/**
+ * Records what one upload request achieved. A short request mostly measures latency, so only one
+ * that carried at least a minimum chunk, or ran for seconds, says what the connection can do.
+ */
+function measure(bytes: number, ms: number) {
+  if (ms <= 0 || (bytes < CHUNK_MIN && ms < 5000)) return;
+  const rate = (bytes * 1000) / ms;
+  requestRate = requestRate ? requestRate * 0.7 + rate * 0.3 : rate;
+}
+const chunkSize = () =>
+  requestRate
+    ? Math.min(CHUNK_MAX, Math.max(CHUNK_MIN, Math.floor((requestRate * CHUNK_SECONDS) / CHUNK_MIN) * CHUNK_MIN))
+    : CHUNK_START;
+
+/**
+ * Sends a whole file in one PATCH. Only for a file that fits in one chunk and has never been tried:
+ * its upload was just created at offset 0, so asking the server first (tus's HEAD) would only confirm
+ * that. Anything but success is "retry", and the tus client then asks where the upload stands.
+ */
+/**
+ * Sends a small file in one request. A response retrying cannot fix fails the task as the tus
+ * client's would, carrying the response the same way; anything else is resumed through tus.
+ */
+function sendWhole(task: FileTask, onProgress: (sent: number) => void, onStop: (stop: () => void) => void) {
+  return new Promise<"done" | "stopped" | "retry">((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const started = performance.now();
+    xhr.open("PATCH", urls.upload(task.uploadId!));
+    const all = {
+      "Tus-Resumable": "1.0.0",
+      "Upload-Offset": "0",
+      "Content-Type": "application/offset+octet-stream",
+      ...writeHeaders(),
+    };
+    for (const [name, value] of Object.entries(all)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => onProgress(event.loaded);
+    xhr.onload = () => {
+      const offset = xhr.getResponseHeader("Upload-Offset");
+      if (xhr.status === 204 && offset === String(task.file.size)) {
+        measure(task.file.size, performance.now() - started);
+        return resolve("done");
+      }
+      if (!isFinal(xhr.status, offset)) return resolve("retry");
+      const response = {
+        getStatus: () => xhr.status,
+        getBody: () => xhr.responseText,
+        getHeader: (name: string) => xhr.getResponseHeader(name),
+      };
+      reject(Object.assign(new Error(`Upload failed with ${xhr.status}.`), { originalResponse: response }));
+    };
+    xhr.onerror = () => resolve("retry");
+    xhr.onabort = () => resolve("stopped");
+    onStop(() => xhr.abort());
+    xhr.send(task.file);
+  });
 }
 
 function uploadMessage(error: unknown) {
@@ -478,82 +575,124 @@ function uploadMessage(error: unknown) {
   return "The connection was interrupted.";
 }
 
-// The tus client is fetched right after startup, off the first render's critical path. A failed
-// fetch (for example while offline) is retried when the next upload needs it.
+// The tus client is fetched once the page is idle, off the first render's critical path; a file sent
+// whole never needs it. A failed fetch (for example while offline) is retried when an upload does.
 let tusModule: Promise<typeof Tus> | null = null;
 const loadTus = () =>
   (tusModule ??= import("tus-js-client").catch((error) => {
     tusModule = null;
     throw error;
   }));
-if (typeof window !== "undefined") setTimeout(() => void loadTus().catch(() => {}), 0);
+if (typeof window !== "undefined")
+  (window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 0)))(() => void loadTus().catch(() => {}));
 
 async function runTask(t: Transfer, task: FileTask) {
   let aborted = false;
   // What the server has confirmed. Bytes of a request that is cut short (pause, going offline)
   // are sent again, so progress falls back to this at once rather than going down on resume.
   let accepted = task.sent;
+  const progress = (sent: number) => {
+    task.sent = sent;
+    t.stalled = false;
+    changed();
+  };
+  // A stopped task (pause, cancel, going offline) waits in the queue for its transfer to continue.
+  const requeueStopped = () => {
+    task.stop = undefined;
+    if (task.status === "uploading") requeue(t, task);
+  };
   try {
+    if (!task.started && task.file.size <= chunkSize()) {
+      task.started = true;
+      const outcome = await sendWhole(task, progress, (stop) => {
+        task.stop = () => {
+          aborted = true;
+          stop();
+        };
+      });
+      task.stop = undefined;
+      if (outcome === "done") {
+        task.sent = task.file.size;
+        task.status = "done";
+        return;
+      }
+      task.sent = accepted;
+      if (aborted) return requeueStopped();
+      changed();
+    }
+    task.started = true;
+    // A pause while the tus client is still loading must keep it from starting at all.
+    task.stop = () => {
+      aborted = true;
+    };
     const { Upload } = await loadTus();
+    if (aborted) return requeueStopped();
+    // When the request that is sending bytes began, and from which offset; zero between requests.
+    let requestStart = 0;
+    let requestFrom = 0;
     await new Promise<void>((resolve, reject) => {
       const upload = new Upload(task.file, {
         uploadUrl: location.origin + urls.upload(task.uploadId!),
         headers: writeHeaders(),
-        chunkSize: CHUNK,
+        chunkSize: chunkSize(),
         retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
         storeFingerprintForResuming: false,
+        onBeforeRequest: (req) => {
+          // tus reports the offset a PATCH starts from just before sending it.
+          requestStart = req.getMethod() === "PATCH" ? performance.now() : 0;
+          requestFrom = task.sent;
+        },
         onShouldRetry: (error) => {
           const response = error.originalResponse;
           const status = response?.getStatus() ?? 0;
           if (!status || isProxyFailure(status)) reportFailure();
+          // A chunk cut short still shows the rate it was getting, and the retry is sized to match.
+          if (requestStart) {
+            measure(task.sent - requestFrom, performance.now() - requestStart);
+            requestStart = 0;
+            upload.options.chunkSize = chunkSize();
+          }
           // While Relay can't be reached, the task goes back to the queue and continues when it can.
           if (!isOnline()) return false;
-          if (response?.getStatus() === 409 && response.getHeader("Upload-Offset") !== null) return true;
-          if (FINAL_STATUSES.has(response?.getStatus() ?? 0)) return false;
+          if (isFinal(status, response?.getHeader("Upload-Offset") ?? null)) return false;
           t.stalled = true;
           changed();
           return true;
         },
-        onProgress: (sent) => {
-          task.sent = sent;
-          t.stalled = false;
-          changed();
-        },
-        onChunkComplete: (_chunk, bytesAccepted) => {
+        onProgress: progress,
+        onChunkComplete: (chunk, bytesAccepted) => {
           accepted = bytesAccepted;
+          if (requestStart) measure(chunk, performance.now() - requestStart);
+          requestStart = 0;
+          // tus reads the size afresh for every chunk.
+          upload.options.chunkSize = chunkSize();
         },
         onError: reject,
         onSuccess: () => resolve(),
       });
-      task.upload = upload;
-      const abort = upload.abort.bind(upload);
-      upload.abort = (terminate) => {
+      task.stop = () => {
         aborted = true;
         task.sent = Math.min(task.sent, accepted);
         resolve();
-        return abort(terminate);
+        void upload.abort(false);
       };
       upload.start();
     });
-    task.upload = undefined;
-    if (aborted) {
-      if (task.status === "uploading") requeue(t, task);
-      return;
-    }
+    if (aborted) return requeueStopped();
+    task.stop = undefined;
     // The final PATCH completed the file on the server.
     task.sent = task.file.size;
     task.status = "done";
   } catch (error) {
-    task.upload = undefined;
+    task.stop = undefined;
+    task.sent = Math.min(task.sent, accepted);
     const status = (error as DetailedError).originalResponse?.getStatus();
     if (!status || isProxyFailure(status)) {
       reportFailure();
       await whenSettled();
     }
-    if (stopped(t) || t.status === "paused" || ((!status || isProxyFailure(status)) && !isOnline())) {
-      if (task.status === "uploading") requeue(t, task);
-      return;
-    }
+    if (stopped(t) || t.status === "paused" || ((!status || isProxyFailure(status)) && !isOnline()))
+      return requeueStopped();
     if (status === 401) window.dispatchEvent(new Event("relay-session-expired"));
     else if (status === 404 && !t.guest) {
       // Distinguish a missing upload from an expired member session once, without retrying bytes.
@@ -649,7 +788,7 @@ export function retryFailed(t: Transfer) {
   t.status = "uploading";
   t.firstError = undefined;
   changed(true);
-  pump(t);
+  pump();
 }
 
 export async function skipFailed(t: Transfer) {
@@ -680,7 +819,7 @@ export async function skipFailed(t: Transfer) {
 }
 
 function abortUploads(t: Transfer) {
-  for (const task of running.get(t.id) || []) void task.upload?.abort(false);
+  for (const task of running.get(t.id) || []) task.stop?.();
 }
 
 export function pause(t: Transfer) {
@@ -769,6 +908,7 @@ export function dismiss(t: Transfer) {
   meters.delete(t.id);
   running.delete(t.id);
   cursors.delete(t.id);
+  turns.delete(t.id);
   changed(true);
 }
 
@@ -813,41 +953,8 @@ export async function abandonAll() {
 // Guests have no member event stream, so their page holds this one open to keep the tab's lease.
 const guestStreams = new Map<string, () => void>();
 function guestStream(token: string) {
-  let source: EventSource;
-  let unwatch = () => {};
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let delay = 1000;
-  let closed = false;
-  const connect = () => {
-    if (closed) return;
-    const current = new EventSource(urls.guestEvents(token, tab()));
-    source = current;
-    current.addEventListener("ready", () => {
-      if (!closed && source === current) delay = 1000;
-    });
-    const retry = () => {
-      if (closed || source !== current || timer) return;
-      unwatch();
-      current.close();
-      timer = setTimeout(() => {
-        timer = undefined;
-        connect();
-      }, delay);
-      delay = Math.min(delay * 2, 30000);
-    };
-    // A stream cut without closing would otherwise stop renewing the lease without anyone noticing.
-    unwatch = watchBeats(current, retry);
-    current.addEventListener("error", () => {
-      if (current.readyState === EventSource.CLOSED) retry();
-    });
-  };
-  connect();
-  return () => {
-    closed = true;
-    clearTimeout(timer);
-    unwatch();
-    source.close();
-  };
+  const stream = eventStream(urls.guestEvents(token, tab()));
+  return () => stream.close();
 }
 function syncGuestStreams() {
   const needed = new Set(transfers.filter((t) => t.guest && t.itemId && isBusy(t)).map((t) => t.guest!));

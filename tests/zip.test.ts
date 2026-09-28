@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { api, urls } from "../shared/api.ts";
+import { MAX_ZIP_ENTRIES } from "../server/modules/downloads/index.ts";
 import { zipLayout } from "../server/modules/downloads/zip.ts";
 import { type Client, member, patchUpload, send, start } from "./support/harness.ts";
 
@@ -241,6 +242,31 @@ test("a ZIP of 2,100 entries", async () => {
     assert.equal(Object.keys(zip.hashes).length, 2100);
     for (const i of [0, 777, 2099]) assert.equal(zip.hashes[`many/dir-${i % 10}/file-${i}.txt`], sha(`content ${i}`));
     if (zip.unzip !== null) assert.equal(zip.unzip, 0, "unzip -t");
+  } finally {
+    await instance.close();
+  }
+});
+
+test("item ZIP: an accumulated tree above the archive bound is rejected before assembly", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "large-zip-owner");
+    const { result } = await send(client, [{ path: "seed.txt", data: "seed" }]);
+    const owner = instance.ctx.db.value<string>("SELECT owner FROM items WHERE id = ?", result.itemId)!;
+    instance.ctx.db.run(
+      `WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+       INSERT INTO nodes(id, item, owner, parent, name, kind, state, size, mime, blob, text, created, position)
+       SELECT lower(hex(randomblob(16))), ?, ?, NULL, printf('folder-%05d', n), 'folder', 'ready', 0, '', NULL, NULL,
+         ?, n + 1 FROM seq`,
+      MAX_ZIP_ENTRIES + 1,
+      result.itemId,
+      owner,
+      Date.now(),
+    );
+
+    const response = await fetchZip(client, urls.itemZip(result.itemId));
+    assert.equal(response.statusCode, 413);
+    assert.match(response.body, /too many entries/);
   } finally {
     await instance.close();
   }

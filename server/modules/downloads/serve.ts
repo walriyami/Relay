@@ -106,11 +106,24 @@ async function* slice(segments: Segment[], start: number, end: number) {
   }
 }
 
+/** Passes the bytes through, then reports how many actually left, however the stream ended. */
+async function* metered(chunks: AsyncIterable<Buffer>, onSent: (bytes: number) => void) {
+  let sent = 0;
+  try {
+    for await (const chunk of chunks) {
+      yield chunk;
+      sent += chunk.length;
+    }
+  } finally {
+    if (sent) onSent(sent);
+  }
+}
+
 /**
  * Sends a body with ETag, Accept-Ranges and single-range support (If-Range honoured). The caller
- * sets Content-Type and Content-Disposition first.
+ * sets Content-Type and Content-Disposition first. `onSent` learns how many bytes were delivered.
  */
-export function send(req: FastifyRequest, reply: FastifyReply, body: Body) {
+export function send(req: FastifyRequest, reply: FastifyReply, body: Body, onSent?: (bytes: number) => void) {
   const etag = `"${body.etag}"`;
   reply.header("ETag", etag).header("Accept-Ranges", "bytes").header("Cache-Control", "private, no-cache");
   const ifRange = req.headers["if-range"];
@@ -121,5 +134,6 @@ export function send(req: FastifyRequest, reply: FastifyReply, body: Body) {
   if (range) reply.code(206).header("Content-Range", `bytes ${start}-${end}/${body.length}`);
   reply.header("Content-Length", end - start + 1);
   if (req.method === "HEAD" || end < start) return reply.send();
-  return reply.send(Readable.from(slice(body.segments, start, end), { objectMode: false }));
+  const chunks = slice(body.segments, start, end);
+  return reply.send(Readable.from(onSent ? metered(chunks, onSent) : chunks, { objectMode: false }));
 }

@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { KeyRound } from "lucide-react";
-import { ApiError, api, call, type InvitationCheck, type Me, type PickupResolution } from "../../api";
+import { ApiError, api, call, type Me, type PickupResolution } from "../../api";
 import { LIMITS, USERNAME } from "../../../shared/model";
-import { dateTime } from "../../lib/format";
 import { navigate } from "../../lib/router";
-import { Button, Field, Spinner } from "../../components/ui";
+import { Button, Field } from "../../components/ui";
 import { Brand } from "../../app/Brand";
 import { CodeEntryForm, codeDigits } from "../codes/CodeEntry";
-import { browserName } from "./device-name";
+import { thisDevice } from "./device-name";
 import { passkeyDismissed, passkeysSupported, signInWithPasskey } from "./passkeys";
 
 const signInError = (e: unknown) =>
@@ -88,9 +87,7 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
     if (!password) return setError({ field: "password", message: "Enter your password." });
     setBusy("form");
     try {
-      onSignedIn(
-        await call(api.session.password, { body: { username: username.trim(), password, deviceName: browserName() } }),
-      );
+      onSignedIn(await call(api.session.password, { body: { username: username.trim(), password, ...thisDevice() } }));
     } catch (e) {
       setError({ field: "password", message: signInError(e) });
     } finally {
@@ -101,7 +98,7 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
     if (destination.kind === "device") {
       // Resolution only identifies the recipient. Redeeming here preserves the one-time sign-in
       // behavior and keeps the issuing device's owner-only status check authoritative.
-      onSignedIn(await call(api.session.code, { body: { code: codeDigits(code), deviceName: browserName() } }));
+      onSignedIn(await call(api.session.code, { body: { code: codeDigits(code), ...thisDevice() } }));
     } else {
       navigate(destination.path, true);
     }
@@ -232,115 +229,6 @@ function describeRefused(typed: string) {
   return `${list[0].toUpperCase()}${list.slice(1)} can’t be used in a username.`;
 }
 
-type Invitation =
-  | { state: "checking" }
-  | { state: "open"; invite: InvitationCheck }
-  | { state: "gone" }
-  | { state: "error"; message: string };
-
-export function Join({ token, onSignedIn }: { token: string; onSignedIn: (me: Me) => void }) {
-  const [invitation, setInvitation] = useState<Invitation>({ state: "checking" });
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setInvitation({ state: "checking" });
-    call(api.session.invitation, { params: { token } })
-      .then((invite) => live && setInvitation({ state: "open", invite }))
-      .catch((e) => {
-        if (!live) return;
-        if (e instanceof ApiError && (e.status === 410 || e.status === 404)) setInvitation({ state: "gone" });
-        else setInvitation({ state: "error", message: signInError(e) });
-      });
-    return () => {
-      live = false;
-    };
-  }, [token, attempt]);
-  const signInInstead = (
-    <div className="auth-alt">
-      <span className="muted">Already have an account?</span>{" "}
-      <button type="button" className="link" onClick={() => navigate("/", true)}>
-        Sign in
-      </button>
-    </div>
-  );
-  switch (invitation.state) {
-    case "checking":
-      return (
-        <AuthFrame title="Create your account">
-          <Spinner label="Checking your invitation" />
-        </AuthFrame>
-      );
-    case "error":
-      return (
-        <AuthFrame title="Create your account">
-          <p className="notice" role="alert">
-            {invitation.message}
-          </p>
-          <Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>
-            Try again
-          </Button>
-          {signInInstead}
-        </AuthFrame>
-      );
-    case "gone":
-      return (
-        <AuthFrame
-          title="This invitation can’t be used"
-          subtitle="It expired, was already used or was withdrawn. Ask the person who invited you for a new link."
-        >
-          {signInInstead}
-        </AuthFrame>
-      );
-    case "open":
-      return (
-        <JoinForm
-          token={token}
-          invite={invitation.invite}
-          onGone={() => setInvitation({ state: "gone" })}
-          onSignedIn={onSignedIn}
-          footer={signInInstead}
-        />
-      );
-  }
-}
-
-function JoinForm({
-  token,
-  invite,
-  onGone,
-  onSignedIn,
-  footer,
-}: {
-  token: string;
-  invite: InvitationCheck;
-  onGone: () => void;
-  onSignedIn: (me: Me) => void;
-  footer: ReactNode;
-}) {
-  return (
-    <AuthFrame
-      title="Create your account"
-      subtitle={`${invite.invitedBy} invited you to Relay. This invitation works once, until ${dateTime(invite.expires)}.`}
-    >
-      <AccountForm
-        id="join"
-        submitLabel="Create account"
-        create={async (account) => {
-          const me = await call(api.session.join, { body: { token, ...account, deviceName: browserName() } });
-          navigate("/", true);
-          onSignedIn(me);
-        }}
-        onError={(e) => {
-          if (!(e instanceof ApiError && e.status === 410)) return false;
-          onGone();
-          return true;
-        }}
-      />
-      {footer}
-    </AuthFrame>
-  );
-}
-
 /**
  * A new account's username and password, checked as far as the browser can before `create` runs.
  * A taken username is shown under the username; `onError` may take other failures instead.
@@ -350,10 +238,13 @@ export function AccountForm({
   submitLabel,
   create,
   onError,
+  before,
 }: {
   /** Prefixes the form's element ids. */
   id: string;
   submitLabel: string;
+  /** Fields above the username, spaced and submitted as part of the form. */
+  before?: ReactNode;
   create: (account: { username: string; password: string }) => Promise<void>;
   /** Handles a failure the form can't show itself; returns whether it did. */
   onError?: (error: unknown) => boolean;
@@ -404,6 +295,7 @@ export function AccountForm({
         }
       }}
     >
+      {before}
       <Field
         label="Username"
         after={
@@ -494,7 +386,7 @@ function DeviceLinkSignIn({
     setBusy(true);
     setError("");
     try {
-      onSignedIn(await call(api.session.deviceLink, { body: { token, deviceName: browserName() } }));
+      onSignedIn(await call(api.session.deviceLink, { body: { token, ...thisDevice() } }));
     } catch (e) {
       setError(signInError(e));
     } finally {

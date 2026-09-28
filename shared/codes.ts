@@ -2,6 +2,18 @@
 export type CodeLength = 4 | 6;
 export const DEFAULT_CODE_LENGTH: CodeLength = 6;
 
+/** Status for the shared pickup-code guessing guard. Times are milliseconds since the Unix epoch. */
+export type PickupProtection = {
+  preferredCodeLength: CodeLength;
+  pausedUntil: number | null;
+  /** Scoped to the requester on the public config endpoint; null in administrator status. */
+  addressPausedUntil: number | null;
+  heightenedUntil: number | null;
+  lastAttackAt: number | null;
+  /** Numeric codes are disabled if a required upgrade cannot reserve a stronger namespace. */
+  numericCodeResolutionUnavailable: boolean;
+};
+
 /** Accept whole codes only; never turn arbitrary text or a longer code into a different code. */
 export function normalizeCode(raw: string, length?: CodeLength): string | null {
   const value = raw.trim();

@@ -1,11 +1,12 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { api } from "../../shared/api.ts";
+import type { User } from "../../shared/model.ts";
 import { copyShareUrl, BASE, composer, signedIn, unique } from "./helpers";
 
 const MB = 1024 ** 2;
 
 async function inviteToken(page: Page) {
-  await page.goto("/admin");
+  await page.goto("/admin/members");
   await page.getByRole("button", { name: "Invite member" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Create invitation" }).click();
   const url = await copyShareUrl(page.getByRole("dialog"));
@@ -21,7 +22,7 @@ async function join(context: BrowserContext, token: string, username: string, de
     });
     if (response.status() !== 429 || attempt > 6) {
       expect(response.ok()).toBe(true);
-      return (await response.json()).user as { id: string };
+      return (await response.json()).user as User;
     }
     await new Promise((resolve) => setTimeout(resolve, 10_000));
   }
@@ -36,10 +37,10 @@ async function adminPatch(page: Page, path: string, data: object) {
 
 test("an invitation can say who it is for, so open invitations can be told apart", async ({ page }) => {
   await signedIn(page);
-  await page.goto("/admin");
+  await page.goto("/admin/members");
   const note = unique("Sam");
   await page.getByRole("button", { name: "Invite member" }).click();
-  await page.getByRole("dialog").getByLabel("Who is it for? (optional)").fill(note);
+  await page.getByRole("dialog").getByLabel("Who is it for?").fill(note);
   await page.getByRole("dialog").getByRole("button", { name: "Create invitation" }).click();
   await expect(page.getByRole("dialog").getByRole("img", { name: "QR code for this invitation" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Done" }).click();
@@ -50,7 +51,7 @@ test("an invitation can say who it is for, so open invitations can be told apart
   await expect(row).toHaveCount(0);
 });
 
-test("a member with a sub-GB quota can be managed and suspended, and their open tab ends at once", async ({
+test("a member with a sub-GB storage limit can be managed and suspended, and their open tab ends at once", async ({
   page,
   browser,
 }) => {
@@ -71,12 +72,16 @@ test("a member with a sub-GB quota can be managed and suspended, and their open 
     await memberPage.getByRole("button", { name: "Go to Send" }).click();
     await expect(composer(memberPage)).toBeVisible();
 
-    await adminPatch(page, `/api/admin/members/${user.id}`, { quota: 50 * MB });
-    await page.goto("/admin");
+    const limits = { storage: 50 * MB, keepDays: null, linkDays: null };
+    await adminPatch(page, `/api/admin/members/${user.id}`, { limits, expectedLimits: user.limits });
+    await page.goto("/admin/members");
     await page.getByRole("button", { name: `Manage ${username}` }).click();
     const dialog = page.getByRole("dialog", { name: `Manage ${username}` });
-    await expect(dialog.getByRole("spinbutton", { name: /^Storage quota/ })).toHaveValue("50");
-    await expect(dialog.getByRole("combobox", { name: "Storage quota unit" })).toHaveValue(String(MB));
+    await expect(
+      dialog.getByRole("radiogroup", { name: "Storage limit" }).getByRole("radio", { name: "Other" }),
+    ).toBeChecked();
+    await expect(dialog.getByRole("spinbutton", { name: /^Other storage limit/ })).toHaveValue("50");
+    await expect(dialog.getByRole("combobox", { name: "Other storage limit unit" })).toHaveValue(String(MB));
     await expect(dialog.getByRole("button", { name: "Save changes" })).toBeDisabled();
 
     const updates: object[] = [];
@@ -94,21 +99,25 @@ test("a member with a sub-GB quota can be managed and suspended, and their open 
     await expect(memberPage.getByText("Your account was suspended by the administrator.")).toBeVisible();
     await expect(memberPage.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-    // Only the changed field was sent, so the 50 MB quota was never rewritten.
+    // Only the changed field was sent, so the 50 MB limit was never rewritten.
     expect(updates).toEqual([{ disabled: true }]);
     const row = page.getByRole("listitem").filter({ hasText: username });
     await expect(row.getByText("Suspended")).toBeVisible();
     await expect(row).toContainText("of 50 MB");
 
-    // Turn access back on and change the quota in another unit.
+    // Turn access back on and change the limit in another unit.
     await page.getByRole("button", { name: `Manage ${username}` }).click();
     await dialog.getByRole("switch", { name: /Suspend access/ }).uncheck();
-    await dialog.getByRole("spinbutton", { name: /^Storage quota/ }).fill("1.5");
-    await dialog.getByRole("combobox", { name: "Storage quota unit" }).selectOption({ label: "GB" });
+    await dialog.getByRole("spinbutton", { name: /^Other storage limit/ }).fill("1.5");
+    await dialog.getByRole("combobox", { name: "Other storage limit unit" }).selectOption({ label: "GB" });
     await dialog.getByRole("button", { name: "Save changes" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(row).toContainText("of 1.5 GB");
-    expect(updates.at(-1)).toEqual({ quota: 1.5 * 1024 ** 3, disabled: false });
+    expect(updates.at(-1)).toEqual({
+      limits: { ...limits, storage: 1.5 * 1024 ** 3 },
+      expectedLimits: limits,
+      disabled: false,
+    });
   } finally {
     await memberContext.close();
   }
@@ -121,7 +130,7 @@ test("setting a member's password asks first and names what it signs out", async
   const memberContext = await browser.newContext({ baseURL: BASE });
   try {
     await join(memberContext, token, username, "Dora phone");
-    await page.goto("/admin");
+    await page.goto("/admin/members");
     await page.getByRole("button", { name: `Manage ${username}` }).click();
     const dialog = page.getByRole("dialog", { name: `Manage ${username}` });
     await dialog.getByLabel("Set a new password").fill("Another-browser-password");
@@ -140,9 +149,11 @@ test("setting a member's password asks first and names what it signs out", async
 test("open invitations are listed and can be withdrawn", async ({ page, browser }) => {
   await signedIn(page);
   const token = await inviteToken(page);
+  await page.goto("/admin/members");
   const invitations = page.getByRole("region", { name: "Invitations" });
+  // Counted once the list has loaded, not while it is still on its way.
+  await expect(invitations.getByRole("button", { name: "Withdraw" }).first()).toBeVisible();
   const before = await invitations.getByRole("button", { name: "Withdraw" }).count();
-  expect(before).toBeGreaterThan(0);
   // The newest invitation is listed first.
   await invitations.getByRole("button", { name: "Withdraw" }).first().click();
   await page
@@ -161,14 +172,97 @@ test("open invitations are listed and can be withdrawn", async ({ page, browser 
   }
 });
 
-test("the admin page reports uploads without exposing recovery controls", async ({ page }) => {
+test("the overview shows what is stored and moving, without exposing recovery controls", async ({ page }) => {
   await signedIn(page);
   await page.goto("/admin");
-  await expect(page.getByText(/^(No uploads right now|\d+ uploads? in progress)$/)).toBeVisible();
+  const tabs = page.getByRole("navigation", { name: "Admin" });
+  await expect(tabs.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("listitem").filter({ hasText: "Saved" }).first()).toBeVisible();
+  const storage = page.getByRole("region", { name: "Storage", exact: true });
+  await expect(storage.getByText(/^(None|\d+ uploads?)$/)).toBeVisible();
+  await expect(page.getByRole("group", { name: /^Data moved each day, by everyone/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "By member" })).toContainText("admin");
+  await expect(page.getByRole("region", { name: "Service health" })).toBeVisible();
+
+  // Periods switch in place; the other tabs keep their own addresses.
+  await page.getByRole("radio", { name: "12 months" }).click();
+  await expect(page.getByRole("group", { name: /^Data moved each month, by everyone/ })).toBeVisible();
+  await tabs.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL(/\/admin\/settings$/);
+  await expect(page.getByRole("region", { name: "Total storage" })).toBeVisible();
   await expect(page.getByText(/backup/i)).toHaveCount(0);
 });
 
-test("the administrator renames a member and changes their Trash, sending only what changed", async ({
+test("the administrator can continue bounded integrity checks and retry a failed batch", async ({ page }) => {
+  await signedIn(page);
+  await page.goto("/admin");
+  const cursor = "a".repeat(64);
+  const bodies: unknown[] = [];
+  let lastResult: object | null = null;
+  await page.route("**/api/admin", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.integrity.lastResult = lastResult;
+    await route.fulfill({ response, json: data });
+  });
+  await page.route("**/api/admin/integrity", async (route) => {
+    bodies.push(route.request().postDataJSON());
+    if (bodies.length === 2)
+      return route.fulfill({ status: 503, json: { error: "Storage is temporarily unavailable." } });
+    lastResult = {
+      checked: 2,
+      bytes: 1000,
+      missing: 0,
+      corrupt: 0,
+      errors: 0,
+      cancelled: false,
+      complete: bodies.length === 3,
+      nextAfter: bodies.length === 3 ? null : cursor,
+      started: Date.now(),
+      finished: Date.now(),
+    };
+    await route.fulfill({ status: 202, json: { running: true } });
+  });
+  await page.getByRole("button", { name: "Check stored files", exact: true }).click();
+  await expect(page.getByText(/Last batch:.*More files remain/)).toBeVisible();
+  await page.getByRole("button", { name: "Continue file check" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Storage is temporarily unavailable." })).toBeVisible();
+  await page.getByRole("button", { name: "Continue file check" }).click();
+  await expect(page.getByText(/Last batch:.*Check finished/)).toBeVisible();
+  expect(bodies).toEqual([{}, { after: cursor }, { after: cursor }]);
+  await expect(page.getByRole("button", { name: "Check stored files", exact: true })).toBeEnabled();
+});
+
+test("an accepted integrity scan failure stays visible until a successful retry", async ({ page }) => {
+  await signedIn(page);
+  let attempts = 0;
+  await page.route("**/api/admin", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.integrity.lastError = attempts === 1;
+    data.integrity.running = false;
+    await route.fulfill({ response, json: data });
+  });
+  await page.route("**/api/admin/integrity", async (route) => {
+    attempts++;
+    await route.fulfill({ status: 202, json: { running: true } });
+  });
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Check stored files", exact: true }).click();
+  const failure = page.getByRole("alert").filter({ hasText: "The file check could not finish." });
+  await expect(failure).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Service health" }).getByText("Needs attention", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Check stored files", exact: true }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: "Service health" }).getByText("No active alerts", { exact: true }),
+  ).toBeVisible();
+  expect(attempts).toBe(2);
+});
+
+test("the administrator renames a member and limits their links, sending only what changed", async ({
   page,
   browser,
 }) => {
@@ -178,7 +272,7 @@ test("the administrator renames a member and changes their Trash, sending only w
   const memberContext = await browser.newContext({ baseURL: BASE });
   try {
     const user = await join(memberContext, token, username, "Erin laptop");
-    await page.goto("/admin");
+    await page.goto("/admin/members");
     await page.getByRole("button", { name: `Manage ${username}` }).click();
     const dialog = page.getByRole("dialog", { name: `Manage ${username}` });
     const updates: object[] = [];
@@ -196,38 +290,72 @@ test("the administrator renames a member and changes their Trash, sending only w
     const renamed = `${username}-q`;
     await dialog.getByLabel("Name", { exact: true }).fill("Erin Quinn");
     await dialog.getByLabel("Username").fill(renamed.toUpperCase());
-    await dialog.getByRole("radiogroup", { name: "Empty Trash after" }).getByRole("radio", { name: "7 days" }).click();
+    await dialog
+      .getByRole("radiogroup", { name: "Links work at most" })
+      .getByRole("radio", { name: "30 days" })
+      .click();
     await dialog.getByRole("button", { name: "Save changes" }).click();
+    // Tightening says what it does to what they already have before it happens.
+    const confirm = page.getByRole("dialog", { name: /^Tighten .*limits\?$/ });
+    await expect(confirm).toContainText(
+      "shared links and upload-request URLs that would work longer now expire within 30 days",
+    );
+    await confirm.getByRole("button", { name: "Tighten limits" }).click();
     await expect(dialog).toHaveCount(0);
-    expect(updates.at(-1)).toEqual({ name: "Erin Quinn", username: renamed, trashDays: 7 });
+    const limits = { storage: null, keepDays: null, linkDays: 30 };
+    expect(updates.at(-1)).toEqual({ name: "Erin Quinn", username: renamed, limits, expectedLimits: user.limits });
 
     const row = page.getByRole("listitem").filter({ hasText: renamed });
     await expect(row).toContainText("Erin Quinn");
+    await expect(row).toContainText("links up to 30 days");
     const me = await (await memberContext.request.get(api.session.get.path)).json();
-    expect(me.user).toMatchObject({ name: "Erin Quinn", username: renamed, trashDays: 7 });
+    expect(me.user).toMatchObject({ name: "Erin Quinn", username: renamed, limits });
+    expect(me.prefs.linkDays).toBeLessThanOrEqual(30);
   } finally {
     await memberContext.close();
   }
 });
 
-test("defaults for new members save only what changed", async ({ page }) => {
+test("an invitation's limits are folded away until added, and can change until it is used", async ({ page }) => {
   await signedIn(page);
-  await page.goto("/admin");
-  const section = page.getByRole("region", { name: "New members" });
-  const save = section.getByRole("button", { name: "Save for new members" });
-  await expect(save).toBeDisabled();
-  const writes: object[] = [];
+  await page.goto("/admin/members");
+  const writes: { method: string; body: object }[] = [];
   page.on("request", (req) => {
-    if (req.method() === "PATCH" && req.url().endsWith("/api/admin/settings")) writes.push(req.postDataJSON());
+    if (req.url().includes("/api/admin/invites") && req.method() !== "GET")
+      writes.push({ method: req.method(), body: req.postDataJSON() });
   });
-  const trash = section.getByRole("radiogroup", { name: "Empty Trash after" });
-  const current = trash.getByRole("radio", { checked: true });
-  const before = await current.textContent();
-  const next = before === "90 days" ? "30 days" : "90 days";
-  await trash.getByRole("radio", { name: next }).click();
-  await save.click();
-  await expect(page.getByText("Saved. New members start with these.")).toBeVisible();
-  expect(writes).toEqual([{ defaults: { trashDays: Number.parseInt(next) } }]);
-  await expect(save).toBeDisabled();
-  await expect(trash.getByRole("radio", { name: next })).toBeChecked();
+  const note = unique("Limited");
+  await page.getByRole("button", { name: "Invite member" }).click();
+  const dialog = page.getByRole("dialog", { name: "Invite a member" });
+  await expect(dialog).toContainText("No limits.");
+  await dialog.getByLabel("Who is it for?").fill(note);
+  await dialog.getByRole("button", { name: "Add limits" }).click();
+  await dialog.getByRole("radiogroup", { name: "Storage limit" }).getByRole("radio", { name: "10 GB" }).click();
+  await dialog.getByRole("radiogroup", { name: "Links work at most" }).getByRole("radio", { name: "7 days" }).click();
+  await dialog.getByRole("button", { name: "Create invitation" }).click();
+  const ready = page.getByRole("dialog", { name: "Invitation ready" });
+  await expect(ready).toContainText("10 GB storage · links up to 7 days");
+  await ready.getByRole("button", { name: "Done" }).click();
+  const limits = { storage: 10 * 1024 ** 3, keepDays: null, linkDays: 7 };
+  expect(writes).toEqual([{ method: "POST", body: { note, limits } }]);
+
+  const row = page.getByRole("list", { name: "Open invitations" }).getByRole("listitem").filter({ hasText: note });
+  await expect(row).toContainText("10 GB storage · links up to 7 days");
+  await row.getByRole("button", { name: `Edit invitation for ${note}` }).click();
+  const edit = page.getByRole("dialog", { name: "Edit invitation" });
+  await expect(
+    edit.getByRole("radiogroup", { name: "Storage limit" }).getByRole("radio", { name: "10 GB" }),
+  ).toBeChecked();
+  await edit.getByRole("button", { name: "Remove limits" }).click();
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(row).toContainText("No limits");
+  expect(writes.at(-1)).toEqual({
+    method: "PATCH",
+    body: { note, limits: { storage: null, keepDays: null, linkDays: null }, expectedLimits: limits },
+  });
+
+  await row.getByRole("button", { name: "Withdraw" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Withdraw", exact: true }).click();
+  await expect(row).toHaveCount(0);
 });

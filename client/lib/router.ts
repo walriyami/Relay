@@ -11,7 +11,7 @@ const emit = () => {
   listeners.forEach((fn) => fn());
 };
 
-type Layer = { id: number; close: () => void; url?: string };
+type Layer = { id: number; close: () => void; canClose: () => boolean; url?: string };
 const layers: Layer[] = [];
 let serial = 0;
 // Every open modal shares ONE history entry on top of the page entry. Back
@@ -48,8 +48,11 @@ if (typeof window !== "undefined") {
     if (entryActive && !isModalState()) {
       // Back left the shared modal entry: close the top modal.
       entryActive = false;
-      const top = layers.pop();
-      top?.close();
+      const top = layers.at(-1);
+      if (top?.canClose()) {
+        layers.pop();
+        top.close();
+      }
       if (layers.length) {
         // The popups still open keep the address of the one that has one (an item under a preview).
         history.pushState({ relayModal: 1 }, "", layers.find((l) => l.url)?.url ?? location.href);
@@ -153,6 +156,7 @@ function scrollToTarget(to: string) {
 }
 
 export function navigate(to: string, replace = false) {
+  if (layers.some((layer) => !layer.canClose())) return;
   if (layers.length || entryActive) {
     // Close open modals and reuse their history entry for the new page, so
     // Back from the new page returns to the page the modal was opened on.
@@ -197,15 +201,17 @@ export function useSearch() {
 
 // Registers an open modal layer. Returns a function that closes it. `url` is the modal's own
 // address, shown while it is the bottom modal.
-export function useModalLayer(onClose: () => void, url?: string) {
+export function useModalLayer(onClose: () => void, url?: string, dismissible = true) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const dismissibleRef = useRef(dismissible);
+  dismissibleRef.current = dismissible;
   const idRef = useRef(0);
   // Registered before the browser paints, so an Escape pressed as soon as the modal shows closes it.
   useLayoutEffect(() => {
     const id = ++serial;
     idRef.current = id;
-    layers.push({ id, close: () => closeRef.current(), url });
+    layers.push({ id, close: () => closeRef.current(), canClose: () => dismissibleRef.current, url });
     ensureEntry(url);
     return () => {
       const index = layers.findIndex((layer) => layer.id === id);
@@ -224,7 +230,7 @@ export function useModalLayer(onClose: () => void, url?: string) {
 // bookkeeping synchronously means quick repeated Escape presses always target
 // the modal that is still visible.
 function closeFrom(index: number) {
-  if (index < 0) return;
+  if (index < 0 || layers.slice(index).some((layer) => !layer.canClose())) return;
   const closing = layers.splice(index);
   for (let i = closing.length - 1; i >= 0; i--) closing[i].close();
   if (!layers.length) scheduleDrop();

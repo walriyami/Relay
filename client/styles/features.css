@@ -392,9 +392,8 @@
   gap: var(--s3);
   min-height: var(--control-sm);
 }
-/* A text link at the end of a section head lines its text up with the content's right edge. */
+/* Keep the whole action inside the section so its hover and focus states respect the gutter. */
 .section-head .section-link {
-  margin-right: calc(-1 * var(--s3));
   color: var(--muted);
 }
 .section-head .section-link:hover:not(:disabled) {
@@ -1033,7 +1032,7 @@
     "box panel"
     "below panel";
   column-gap: var(--s4);
-  row-gap: var(--s6);
+  row-gap: var(--s5);
   align-items: start;
 }
 .send-layout > .composer {
@@ -1102,39 +1101,50 @@
 .destination-wrap {
   position: relative;
 }
-/* A row's option (link expiry) sits on its own line under the row's text, inside the row. */
-.destination-wrap.has-extra .destination {
-  align-items: flex-start;
-  padding-bottom: 38px;
+/* A row's own control (link settings) takes the arrow's place at its end, centred where the other
+   rows' 16px arrows are (inside a 1px border and the row's padding). It can't sit inside the row's
+   button, so it lies over it, and the row's text keeps clear of it. */
+.destination-wrap.has-accessory .destination {
+  padding-right: calc(var(--s2) + 8px + var(--control-sm) / 2 + var(--s2));
 }
-.destination-extra {
+.destination-accessory {
   position: absolute;
-  bottom: 6px;
-  left: calc(10px + 36px + var(--s3) - 8px);
+  top: 50%;
+  /* Larger touch targets would otherwise reach past the row's border. */
+  right: max(1px, calc(1px + var(--s2) + 8px - var(--control-sm) / 2));
+  transform: translateY(-50%);
 }
-.destination-extra .btn {
-  gap: 2px;
-  min-height: 28px;
-  padding-inline: 8px;
+.destination-accessory .btn {
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
 }
-.destination-extra .btn:hover {
+.destination-accessory .btn:hover,
+.destination-accessory .btn[aria-expanded="true"] {
   color: var(--ink);
 }
-/* Touch-sized options would cover the row; there they sit on their own line beneath it instead. */
-@media (pointer: coarse) {
-  .destination-wrap.has-extra .destination {
-    align-items: center;
-    padding-bottom: var(--s2);
+/* A device's own control (edit) is secondary to sending to it. With a pointer it takes the arrow's
+   place while the row is hovered or focused, so resting destinations stay calm; touch screens,
+   which can't hover, show it instead of the arrow. */
+.destination-wrap.reveals-accessory .destination-go,
+.destination-wrap.reveals-accessory .destination-accessory {
+  transition: opacity 0.12s;
+}
+@media (hover: hover) {
+  .destination-wrap.reveals-accessory .destination-accessory {
+    opacity: 0;
   }
-  .destination-extra {
-    position: static;
-    padding-left: calc(10px + 36px + var(--s3) - 8px);
+  .destination-wrap.reveals-accessory:is(:hover, :focus-within) .destination-accessory {
+    opacity: 1;
   }
-  .destination-extra .btn {
-    min-height: var(--control-sm);
+  .destination-wrap.reveals-accessory:is(:hover, :focus-within) .destination-go {
+    opacity: 0;
+  }
+}
+@media (hover: none) {
+  .destination-wrap.reveals-accessory .destination {
+    padding-right: calc(var(--s2) + 8px + var(--control-sm) / 2 + var(--s2));
+  }
+  .destination-wrap.reveals-accessory .destination-go {
+    display: none;
   }
 }
 .menu-icon-gap {
@@ -1251,6 +1261,63 @@
 }
 .destination.is-quiet .destination-text strong {
   font-weight: 600;
+}
+/* How the other devices list this one, at the foot of the panel: context, not a destination. */
+.this-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin-top: var(--s3);
+  padding: var(--s3) 2px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.this-device-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  margin-left: -6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--r1);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+.this-device-name > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.this-device-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.this-device-name:hover {
+  background: var(--well);
+}
+.this-device-name:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+/* The pencil says the name can be changed where a pointer is about to change it; touch shows it. */
+@media (hover: hover) {
+  .this-device-name .this-device-edit {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .this-device-name:is(:hover, :focus-visible) .this-device-edit {
+    opacity: 1;
+  }
 }
 /* A transfer you started lives in the drop box until you press Done. It takes the drop box's
    whole height, so pressing Send never makes the page jump. */
@@ -1563,16 +1630,17 @@
     box-shadow: var(--shadow);
     pointer-events: auto;
   }
-  /* On a phone the destinations only take room once there is something to send. */
-  .send-panel.is-idle .destination-wrap,
-  .send-panel.is-idle .send-panel-heading,
-  .send-panel.is-idle .send-panel-empty {
+  /* Keep the current transfer in focus on phones; empty drafts still show all destinations. */
+  .send-panel.is-showing-transfers .destination-wrap,
+  .send-panel.is-showing-transfers .send-panel-heading,
+  .send-panel.is-showing-transfers .send-panel-empty,
+  .send-panel.is-showing-transfers .this-device {
     display: none;
   }
-  .send-panel.is-idle .send-panel-summary {
+  .send-panel.is-showing-transfers .send-panel-summary {
     margin-bottom: 0;
   }
-  .send-panel.is-idle .destination-wrap:has(.is-quiet) {
+  .send-panel.is-showing-transfers .destination-wrap:has(.is-quiet) {
     display: block;
   }
   .send-below {
@@ -1896,6 +1964,34 @@ button.activity-open:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.account-device {
+  min-height: 48px;
+}
+.account-device > svg:first-child {
+  flex-shrink: 0;
+}
+.account-device-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.account-device-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-device-body .muted {
+  font-size: 0.8rem;
+}
+.account-device-edit {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.account-device:hover .account-device-edit,
+.account-device:focus-visible .account-device-edit {
+  color: var(--ink);
+}
 
 /* Preview. The viewer takes the whole window height, so a file is shown as large as it fits. */
 .preview-modal {
@@ -2085,14 +2181,16 @@ audio.preview-media {
 .preview-nav.is-end {
   visibility: hidden;
 }
-/* Links and requests on narrow screens: Share stays whole, and the status line wraps to a second
-   line rather than cutting off when it expires or closes. */
+/* Links, requests, members and invitations on narrow screens: Share stays whole, and the status
+   line wraps to a second line rather than cutting off when it expires, closes or was last active. */
 @media (max-width: 560px) {
   .link-row-item .link-copy {
     flex-shrink: 0;
   }
   .link-row-item .list-text .muted,
-  .request-row .list-text .muted {
+  .request-row .list-text .muted,
+  .member-row .list-text > .muted,
+  .invite-row .list-text > .muted {
     white-space: normal;
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -2277,11 +2375,20 @@ audio.preview-media {
   flex: 1;
   min-width: 0;
 }
+/* A long name shortens; the pill beside it stays whole. */
 .device-text strong {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-weight: 600;
+  white-space: nowrap;
+}
+.device-name {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.device-text strong .pill {
+  flex-shrink: 0;
 }
 .device-text .muted {
   display: flex;
@@ -2292,6 +2399,19 @@ audio.preview-media {
 .device-text .online-dot {
   width: 7px;
   height: 7px;
+}
+.device-here {
+  display: none;
+}
+/* On a phone the name needs the room: this browser is said on the line below, and the pencil says enough. */
+@media (max-width: 560px) {
+  .device-text strong .pill,
+  .device-edit > span {
+    display: none;
+  }
+  .device-here {
+    display: inline;
+  }
 }
 .login-code {
   display: flex;
@@ -2312,27 +2432,663 @@ audio.preview-media {
 .login-code .share-access-detail p + p {
   margin-top: var(--s2);
 }
+/* Usage and Admin: figures, charts and what storage holds. */
+.usage,
+.admin {
+  gap: var(--s4);
+}
+.usage > .page-head,
+.admin > .page-head {
+  margin-bottom: var(--s2);
+}
+.usage > .page-head + *,
+.admin > .page-head + * {
+  margin-top: 0;
+}
+.page-tabs {
+  display: flex;
+  gap: var(--s5);
+  margin-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.page-tab {
+  padding: var(--s2) 0 10px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.page-tab:hover {
+  color: var(--ink);
+}
+.page-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+.page-tab:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: var(--focus);
+}
+.admin-range {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--s3);
+}
+.stats > [role="listitem"] {
+  display: grid;
 }
 .stat {
   display: flex;
   flex-direction: column;
   gap: var(--s1);
+  min-width: 0;
   padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
 }
-.stat strong {
+.stat-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.stat-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.stat-detail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px var(--s2);
+  font-size: 0.84rem;
+}
+/* Figures inside a card: a plain list, divided by rules. */
+.stats.is-compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+.stats.is-compact .stat {
+  padding: var(--s3) 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+.stats.is-compact .stat + .stat {
+  border-top: 1px solid var(--line);
+}
+.stats.is-compact .stat:first-child {
+  padding-top: 0;
+}
+.stats.is-compact .stat-value {
   font-size: 1.3rem;
+}
+.delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px 7px 1px 5px;
+  border-radius: var(--pill);
+  background: var(--well);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delta.is-new {
+  padding: 1px 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+  padding: var(--s5);
+}
+.usage-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s1) var(--s3);
+  flex-wrap: wrap;
+}
+.usage-card-head h2 {
+  font-size: 1.05rem;
+}
+.usage-card-head .muted {
+  font-size: 0.9rem;
+}
+.usage-headline {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.usage-headline strong {
+  font-size: 1.25rem;
   font-weight: 700;
 }
-.stat strong.small {
-  font-size: 1rem;
+.usage-card .field-hint {
+  margin: 0;
 }
-.stat > div {
-  margin-top: auto;
-  padding-top: var(--s1);
+.usage-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s4);
+}
+.usage-storage-foot {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s5);
+  align-items: start;
+}
+.usage-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--s2);
+  margin: 0;
+}
+.usage-counts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s3);
+  border-radius: var(--r1);
+  background: var(--well);
+}
+.usage-counts dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.usage-counts dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.usage-counts dd .muted {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.usage-largest h3 {
+  margin: 0 0 var(--s1);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.usage-largest ol {
+  list-style: none;
+  margin: 0 calc(var(--s2) * -1);
+  padding: 0;
+}
+.usage-largest-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--s3);
+  padding: 6px var(--s2);
+  border-radius: var(--r1);
+  color: var(--ink);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.usage-largest-link:hover {
+  background: var(--well);
+}
+.usage-largest-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.usage-largest-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-largest-size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.usage-largest-bar,
+.member-table-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: var(--pill);
+  background: var(--well);
+  overflow: hidden;
+}
+.usage-largest-bar > span,
+.member-table-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: var(--chart-2);
+}
+.usage-largest-link:hover .usage-largest-bar {
+  background: var(--surface);
+}
+
+/* Charts */
+.chart {
+  margin: 0;
+  min-width: 0;
+}
+.chart-box {
+  position: relative;
+  border-radius: var(--r1);
+  touch-action: pan-y;
+}
+.chart-box:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.chart-box svg {
+  display: block;
+  overflow: visible;
+}
+.chart-grid {
+  stroke: var(--line);
+  stroke-dasharray: 2 4;
+}
+.chart-baseline {
+  stroke: var(--line-strong);
+}
+.chart-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-hover {
+  fill: var(--well);
+}
+.chart-dim {
+  opacity: 0.4;
+  transition: opacity 0.12s ease;
+}
+.chart-empty {
+  position: absolute;
+  inset: 0 0 26px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.chart-readout {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 170px;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: 0.82rem;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.chart-readout strong {
+  margin-bottom: 2px;
+  font-weight: 700;
+}
+.chart-readout-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s2);
+}
+.chart-readout-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.chart-readout-total {
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  font-weight: 600;
+}
+.chart-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+/* Trash and uploads in progress are drawn striped: kept, but not in Files. */
+.storage-bar-track > .is-pattern,
+.chart-swatch.is-pattern {
+  background: repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 5px) !important;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s5);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.88rem;
+}
+.chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.chart-legend strong {
+  font-variant-numeric: tabular-nums;
+}
+.storage-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.storage-bar-track {
+  display: flex;
+  gap: 2px;
+  height: 14px;
+  border-radius: var(--pill);
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.storage-bar-track > span {
+  height: 100%;
+  flex-shrink: 0;
+}
+.storage-bar-key {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--s2) var(--s4);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.88rem;
+}
+.storage-bar-key li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--s2);
+  min-width: 0;
+}
+.storage-bar-key .chart-swatch {
+  align-self: center;
+}
+.storage-bar-key strong {
+  font-variant-numeric: tabular-nums;
+}
+.storage-bar-key .muted {
+  font-size: 0.82rem;
+}
+/* Admin: who uses what. */
+.member-table {
+  display: flex;
+  flex-direction: column;
+}
+.member-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 0.7fr) minmax(0, 0.7fr);
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s2) 0;
+  font-variant-numeric: tabular-nums;
+}
+.member-table-row + .member-table-row {
+  border-top: 1px solid var(--line);
+}
+.member-table-row > :nth-child(n + 3) {
+  text-align: right;
+}
+.member-table-head {
+  padding-top: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.member-table-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+.member-table-name > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-table-name strong {
+  font-weight: 600;
+}
+.member-table-name .muted,
+.member-table-value .muted {
+  font-size: 0.84rem;
+}
+.member-table-stored {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.avatar.is-small {
+  width: 26px;
+  height: 26px;
+  font-size: 0.78rem;
+}
+/* Storage in words and as a bar: Settings, and the account menu. */
+.storage-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.storage-meter .progress {
+  height: 8px;
+}
+.storage-meter-text {
+  font-variant-numeric: tabular-nums;
+}
+.storage-meter.is-compact {
+  gap: 6px;
+  font-size: 0.86rem;
+}
+.storage-meter.is-tight .progress > div,
+.account-usage.is-tight .progress > span {
+  background: var(--danger);
+}
+.account-usage {
+  align-items: flex-start;
+  min-height: 56px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.account-usage > svg {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.account-usage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+.account-usage-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.account-usage-line .muted {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.account-usage .progress {
+  height: 4px;
+}
+.account-usage .progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+/* Admin: what a member is allowed. */
+.member-limits {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.row-actions {
+  display: flex;
+  gap: var(--s2);
+  flex-shrink: 0;
+}
+.limits-closed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3) var(--s3) var(--s3) var(--s4);
+  border-radius: var(--r2);
+  background: var(--well);
+  font-size: 0.92rem;
+}
+.limits-closed .btn {
+  flex-shrink: 0;
+}
+.limits-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  animation: setup-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.limits-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+.limits-panel-head .muted {
+  font-size: 0.86rem;
+}
+.limits-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+.limit-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.limit-field-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.limit-field-title svg {
+  color: var(--muted);
+}
+.limit-field .field-hint {
+  margin: 0;
+}
+@media (max-width: 860px) {
+  .usage-pair,
+  .usage-storage-foot {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .usage-card {
+    padding: var(--s4);
+  }
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s2);
+  }
+  .stat {
+    padding: var(--s3);
+  }
+  .stat-value {
+    font-size: 1.3rem;
+  }
+  .stats.is-compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .member-table-head {
+    display: none;
+  }
+  .member-table-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s2) var(--s4);
+    padding: var(--s3) 0;
+  }
+  .member-table-row + .member-table-row {
+    border-top: 1px solid var(--line);
+  }
+  .member-table-name,
+  .member-table-stored {
+    grid-column: 1 / -1;
+  }
+  .member-table-row > :nth-child(n + 3) {
+    text-align: left;
+    font-size: 0.88rem;
+  }
+  .member-table-row > [data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--muted);
+  }
+  .invite-row {
+    flex-wrap: wrap;
+  }
+  .invite-row .row-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .limits-closed {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 .list-text.static {
   cursor: default;
@@ -2364,6 +3120,14 @@ audio.preview-media {
 }
 .health-head .pill {
   margin: 0;
+}
+.health-head h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.health-head h2 svg {
+  color: var(--muted);
 }
 .health-details > summary {
   display: flex;
@@ -2790,6 +3554,10 @@ audio.preview-media {
   flex-direction: column;
   gap: var(--s2);
 }
+/* Every option is titled alike, whether it's a switch, a choice or a field. */
+.link-option-title {
+  font-weight: 600;
+}
 .link-option-detail {
   margin: 0;
   font-size: 0.86rem;
@@ -2797,11 +3565,21 @@ audio.preview-media {
 .link-option-detail .field-hint {
   margin: 4px 0 0;
 }
+/* "Add a note" and the buttons that end the options share the last line. */
+.link-options-end {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+.link-options-actions {
+  display: flex;
+  gap: var(--s2);
+  margin-left: auto;
+}
 .link-option-add {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  align-self: flex-start;
   min-height: var(--control-sm);
   text-decoration: none;
 }
@@ -2823,23 +3601,12 @@ audio.preview-media {
   transform: translateY(-50%);
   color: var(--muted);
 }
-.link-options-trigger {
-  gap: 2px;
-}
-.link-options-trigger span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.link-summary-part {
   white-space: nowrap;
-  max-width: 220px;
 }
 .link-options-popover {
   width: min(380px, calc(100vw - 16px));
   padding: var(--s4);
-}
-.link-options-popover form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
 }
 
 /* Who opened a link: a line that opens into the list of devices. */
@@ -3015,7 +3782,8 @@ audio.preview-media {
   width: min(480px, 100%);
   text-align: center;
 }
-.setup-step-members {
+.setup-step-members,
+.setup-step-yours {
   width: min(560px, 100%);
 }
 .setup-step h1 {
@@ -3233,7 +4001,7 @@ audio.preview-media {
   color: var(--accent);
 }
 
-/* What everyone gets */
+/* Picking up after a closed tab */
 .setup-welcome-back {
   display: inline-flex;
   align-items: center;
@@ -3245,6 +4013,8 @@ audio.preview-media {
   font-size: 0.88rem;
   font-weight: 600;
 }
+
+/* What everyone gets */
 .setup-questions {
   display: flex;
   flex-direction: column;
@@ -3273,9 +4043,27 @@ audio.preview-media {
   width: 100%;
 }
 .setup-questions .segmented button {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 0 4px;
+  /* Shared evenly, but a longer label ("Forever") takes the room it needs. */
+  flex: 1 1 auto;
+  padding: 0 6px;
+}
+/* On a phone the controls take the card's full width, under their icon and title. */
+@media (max-width: 480px) {
+  .setup-question {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: var(--s2) var(--s3);
+  }
+  .setup-question-body {
+    display: contents;
+  }
+  .setup-question-body > :not(.setup-question-title) {
+    grid-column: 1 / -1;
+  }
+  .setup-question-title {
+    margin-bottom: 0;
+  }
 }
 .setup-reveal {
   animation: setup-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
@@ -3339,6 +4127,16 @@ audio.preview-media {
 }
 .setup-invite .share-access-detail {
   text-align: center;
+}
+/* A new member's other devices: the sign-in code, in the same card as an invitation. */
+.setup-device .login-code {
+  width: 100%;
+}
+.setup-device-how {
+  max-width: 40ch;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 /* Scenes: small drawings that move, in the page's own colours. */
@@ -3629,12 +4427,210 @@ audio.preview-media {
     transform: rotate(var(--a)) translateY(-54px) scale(0.4);
   }
 }
-/* Without motion the relay scene shows its arrival, rather than an empty phone. */
+/* A phone arrives, scans the laptop's code, and is signed in. */
+.scene-qr rect {
+  fill: color-mix(in srgb, var(--ink) 72%, transparent);
+}
+.scene-qr .scene-qr-finder {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ink) 72%, transparent);
+  stroke-width: 2;
+}
+.scene-arrive {
+  animation: scene-arrive 0.7s 0.15s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes scene-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+}
+.scene-finder {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: scene-finder 4s infinite;
+}
+.scene-scan {
+  fill: var(--accent);
+  opacity: 0;
+  animation: scene-scan 4s infinite;
+}
+.scene-joined {
+  fill: var(--success-soft);
+  stroke: var(--success);
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: scene-joined 4s infinite;
+}
+.scene-joined-check {
+  fill: none;
+  stroke: var(--success);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 24;
+  animation: scene-joined-check 4s infinite;
+}
+.scene-devices .scene-ping {
+  stroke: var(--success);
+  animation: scene-ping 4s 2.3s infinite;
+}
+@keyframes scene-finder {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  58%,
+  94% {
+    opacity: 0;
+  }
+}
+@keyframes scene-scan {
+  0%,
+  8% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  14% {
+    opacity: 1;
+    transform: translateY(0);
+    animation-timing-function: ease-in-out;
+  }
+  32% {
+    transform: translateY(24px);
+    animation-timing-function: ease-in-out;
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  56%,
+  100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+}
+@keyframes scene-joined {
+  0%,
+  54% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  62%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+@keyframes scene-joined-check {
+  0%,
+  60% {
+    stroke-dashoffset: 24;
+    opacity: 1;
+  }
+  70%,
+  92% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+/* Without motion the scenes show how they end: the file arrived, the phone signed in. */
 @media (prefers-reduced-motion: reduce) {
   .scene-landed,
-  .scene-landed-check {
+  .scene-landed-check,
+  .scene-joined,
+  .scene-joined-check {
     animation: none;
     opacity: 1;
     stroke-dashoffset: 0;
   }
+  .scene-arrive {
+    animation: none;
+  }
+  .scene-file-x,
+  .scene-finder,
+  .scene-scan {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+.device-icon-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.device-icon-picker legend {
+  padding: 0;
+  margin-bottom: var(--s2);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.device-icon-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 4.5rem), 1fr));
+  gap: var(--s2);
+}
+.device-icon-option {
+  position: relative;
+  cursor: pointer;
+}
+.device-icon-option input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.device-icon-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4) var(--s1) var(--s3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r1);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.device-icon-option:hover .device-icon-choice {
+  background: var(--well);
+}
+.device-icon-option input:checked + .device-icon-choice {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.device-icon-option input:focus-visible + .device-icon-choice {
+  box-shadow: var(--focus);
+}
+.device-icon-option input:disabled + .device-icon-choice {
+  opacity: 0.6;
+  cursor: wait;
+}
+.device-icon-option input:disabled {
+  cursor: wait;
+}
+.device-icon-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  color: var(--accent);
 }

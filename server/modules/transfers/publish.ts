@@ -9,4 +9,5 @@ export function publishItemChange(ctx: Context, owner: string, itemId: string) {
   const topics: Topic[] = ["items"];
   if (ctx.db.value("SELECT request_id FROM items WHERE id = ?", itemId)) topics.push("requests");
   ctx.events.publish(owner, ...topics);
+  ctx.events.broadcast("account");
 }

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { DAY_MS } from "../server/lib/time.ts";
 import { streamsOf } from "../server/modules/auth/streams.ts";
 import { api, urls } from "../shared/api.ts";
 import { ApiError, Client, member, patchUpload, send, start } from "./support/harness.ts";
@@ -24,10 +25,14 @@ async function setup() {
   const base = await instance.app.listen({ port: 0, host: "127.0.0.1" });
   await new Promise<void>((resolve, reject) => {
     const cookie = [...phone.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
-    const req = request(base + urls.events(phone.tab), { agent: false, headers: { cookie } }, (res) => {
-      res.once("data", () => resolve());
-      res.resume();
-    });
+    const req = request(
+      base + urls.events(phone.tab) + `&browser=${phone.tab}`,
+      { agent: false, headers: { cookie, host: "relay.test" } },
+      (res) => {
+        res.once("data", () => resolve());
+        res.resume();
+      },
+    );
     req.on("error", reject);
     req.end();
   });
@@ -280,6 +285,54 @@ test("a device going offline during upload never loses the saved file or claims 
     const res = await laptop.raw({ method: "GET", url: urls.nodeContent(saved.nodes[0].id) });
     assert.equal(res.body, "saved");
     await laptop.call(api.transfers.complete, { params: { id: transfer.id }, body: { destination: { kind: "save" } } });
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a pending delivery disappears exactly at content expiry, returns on restore, and is removed on purge", async (t) => {
+  const { instance, laptop, phone, phoneDevice } = await setup();
+  try {
+    let now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    const { result } = await send(laptop, [{ path: "recover.txt", data: "recover me" }]);
+    const item = result.itemId;
+    await laptop.call(api.items.update, { params: { id: item }, body: { retentionDays: 1 } });
+    const end = now + DAY_MS;
+    const id = crypto.randomUUID();
+    await laptop.call(api.deliveries.create, { body: { id, item, device: phoneDevice } });
+    now = end - 1;
+    assert.deepEqual(
+      (await phone.call(api.deliveries.list)).map((d) => d.id),
+      [id],
+    );
+    now = end;
+    assert.deepEqual(await phone.call(api.deliveries.list), []);
+    const [sent] = await laptop.call(api.deliveries.list, { query: { direction: "sent" } });
+    assert.equal(sent.available, false);
+    assert.equal(await status(phone.call(api.deliveries.update, { params: { id }, body: { state: "accepted" } })), 410);
+    await instance.ctx.library.sweep(now);
+    assert.deepEqual(await phone.call(api.deliveries.list), []);
+    await laptop.call(api.items.restore, { params: { id: item } });
+    const [restored] = await phone.call(api.deliveries.list);
+    assert.equal(restored.id, id);
+    assert.equal(restored.available, true);
+    assert.equal(restored.state, "available");
+    assert.equal((await phone.call(api.items.get, { params: { id: item } })).nodes.length, 1);
+    await phone.call(api.deliveries.update, { params: { id }, body: { state: "accepted" } });
+    await laptop.call(api.items.trash, { params: { id: item } });
+    assert.deepEqual(
+      await phone.call(api.deliveries.update, { params: { id }, body: { state: "accepted" } }),
+      {
+        state: "accepted",
+        changed: false,
+      },
+      "an acknowledged delivery retry remains idempotent after its content is gone",
+    );
+    await laptop.call(api.items.remove, { params: { id: item } });
+    assert.deepEqual(await phone.call(api.deliveries.list), []);
+    assert.deepEqual(await laptop.call(api.deliveries.list, { query: { direction: "sent" } }), []);
+    assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM deliveries WHERE id = ?", id), 0);
   } finally {
     await instance.close();
   }

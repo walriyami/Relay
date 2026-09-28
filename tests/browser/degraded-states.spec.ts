@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { signedIn, writeText } from "./helpers";
+import { signedIn } from "./helpers";
 
 test("device outages and activity outages remain visible and can be retried", async ({ page }) => {
   // Keep recovery under the Retry controls rather than an initial SSE refresh.
@@ -12,7 +12,6 @@ test("device outages and activity outages remain visible and can be retried", as
     });
   }
   await signedIn(page);
-  await writeText(page, "Device availability check");
   await expect(page.getByText("Device availability is unknown. Retry to refresh.")).toBeVisible();
   await page.getByRole("button", { name: /^Activity/ }).click();
   const panel = page.getByRole("dialog", { name: "Activity", exact: true });
@@ -69,7 +68,7 @@ test("admin health reports cleanup and storage without exposing operator control
   await page.getByRole("button", { name: /^Account/ }).click();
   await page.getByRole("menuitem", { name: "Admin", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Service health" })).toBeVisible();
-  await expect(page.getByText("Checks passing", { exact: true })).toBeVisible();
+  await expect(page.getByText("No active alerts", { exact: true })).toBeVisible();
   // A healthy service keeps its detail folded away until asked for.
   await expect(page.getByText(/maintenance jobs are running on schedule/)).toBeVisible();
   await expect(page.getByText("Library retention", { exact: true })).toBeHidden();
@@ -79,7 +78,7 @@ test("admin health reports cleanup and storage without exposing operator control
   await expect(page.getByRole("button", { name: /backup|restore snapshot/i })).toHaveCount(0);
 });
 
-test("an unavailable handoff stops offering its QR and copy actions", async ({ page }) => {
+test("an unavailable numeric code preserves the independent URL and QR handoff", async ({ page }) => {
   await page.route("**/api/pickup/current", (route) => route.fulfill({ json: { code: null } }));
   await signedIn(page);
   await page.getByRole("link", { name: "Requests", exact: true }).click();
@@ -87,7 +86,7 @@ test("an unavailable handoff stops offering its QR and copy actions", async ({ p
   await page.getByLabel("What are you asking for?").fill("Unavailable handoff fixture");
   await page.getByRole("button", { name: "Create request" }).click();
   const dialog = page.getByRole("dialog", { name: "Unavailable handoff fixture" });
-  await expect(dialog.getByRole("status").filter({ hasText: "This handoff is no longer available" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Copy link" })).toHaveCount(0);
-  await expect(dialog.getByRole("img", { name: /QR code/ })).toHaveCount(0);
+  await expect(dialog.getByText("Code unavailable. Use the link or QR code.")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Copy link" })).toBeVisible();
+  await expect(dialog.getByRole("img", { name: /QR code/ })).toBeVisible();
 });

@@ -8,11 +8,9 @@ import {
   Inbox,
   Layers,
   Link2,
-  Monitor,
   Pencil,
   Plus,
   RotateCcw,
-  Smartphone,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -22,6 +20,7 @@ import { isOnline } from "../lib/connection";
 import { ownerSource } from "../lib/source";
 import { snapshot, subscribe, transferFor, type Transfer } from "../lib/transfers";
 import { useOnlineDevices, useSession } from "../app/session";
+import { DeviceIcon } from "../app/devices";
 import {
   addFilesTo,
   copyItemText,
@@ -46,8 +45,8 @@ import { Thumbnail } from "./Thumbnail";
 import { Menu, type MenuItem } from "./ui";
 
 /** "Gone in 12 days": Trash keeps items for the owner's chosen number of days. */
-function trashLeft(trashed: number, trashDays: number) {
-  const days = Math.ceil((trashed + trashDays * 86400000 - Date.now()) / 86400000);
+function trashLeft(purgeAt: number) {
+  const days = Math.ceil((purgeAt - Date.now()) / 86400000);
   const text = days <= 0 ? "Gone today" : days === 1 ? "Gone in 1 day" : `Gone in ${days} days`;
   return { text, soon: days < 3 };
 }
@@ -127,7 +126,6 @@ export function CollectionCard({
   // arrived, so its name and counts don't grow file by file. Files added to an item already there
   // only move the progress; its name and counts stay what they are until the files arrive.
   const found = useLocalTransfer(listed);
-  const { me } = useSession();
   const local = found && !trash ? found : undefined;
   const item: ItemSummary =
     local && !local.adding
@@ -149,7 +147,7 @@ export function CollectionCard({
       ? "A guest is uploading"
       : "Uploading from another tab or device"
     : itemMeta(item);
-  const left = trash && item.trashed ? trashLeft(item.trashed, me.user.trashDays) : null;
+  const left = trash && item.purgeAt !== null ? trashLeft(item.purgeAt) : null;
   // Still uploading: say so, so nobody shares half of it by mistake.
   const detail = progress
     ? progress.text
@@ -259,7 +257,9 @@ function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; 
       ? [{ label: "Open", icon: <ExternalLink size={16} />, onSelect: onOpen }]
       : trash
         ? [
-            { label: "Restore", icon: <RotateCcw size={16} />, onSelect: run(() => restoreItem(item)) },
+            ...(Math.min(item.hardExpires ?? Infinity, item.purgeAt ?? Infinity) > Date.now()
+              ? [{ label: "Restore", icon: <RotateCcw size={16} />, onSelect: run(() => restoreItem(item)) }]
+              : []),
             {
               label: "Delete forever",
               icon: <Trash2 size={16} />,
@@ -297,12 +297,12 @@ function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; 
             },
             ...devices.map((d) => ({
               label: `Send to ${d.name}`,
-              icon: /phone|iphone|android|ipad/i.test(d.name) ? <Smartphone size={16} /> : <Monitor size={16} />,
+              icon: <DeviceIcon device={d} size={16} />,
               onSelect: run(() => sendItem(item.id, d)),
             })),
             { label: "Rename…", icon: <Pencil size={16} />, separator: true, onSelect: run(() => renameItem(item)) },
             { label: "Add files…", icon: <Plus size={16} />, onSelect: run(() => addFilesTo(item)) },
-            { label: "Keep for…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
+            { label: "Move to Trash after…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
             {
               label: "Move to Trash",
               icon: <Trash2 size={16} />,

@@ -17,7 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, CloudOff, Copy, Loader2, MoreHorizontal, X } from "lucide-react";
 import { useConnection } from "../lib/connection";
-import { useModalLayer } from "../lib/router";
+import { navigate, useModalLayer } from "../lib/router";
 import { lastFocused, returnFocus } from "../lib/focus";
 import { copyText } from "../lib/format";
 import { LIMITS } from "../../shared/model";
@@ -92,12 +92,19 @@ let handoff: { opener: HTMLElement | null; at: number } = { opener: null, at: 0 
 let popupDismissedAt = -Infinity;
 /** Open modals, innermost last; the page behind stops scrolling while any is open. */
 const modalStack: HTMLElement[] = [];
+const modalListeners = new Set<() => void>();
+function subscribeModal(fn: () => void) {
+  modalListeners.add(fn);
+  return () => modalListeners.delete(fn);
+}
+const activeModal = () => modalStack.at(-1) ?? null;
 /** What `shieldPage` made inert, so it can undo exactly that. */
 const shielded = new Set<Element>();
 /**
  * Makes everything behind the innermost modal inert, so no engine's Tab order (Safari skips
  * buttons by default and walks straight out) and no screen reader can reach it. Menus and
- * popovers opened from the modal come after it in the page and stay usable, as do toasts.
+ * popovers opened from the modal come after it in the page and stay usable. Notifications render
+ * inside the active dialog, where their controls and announcements stay accessible.
  */
 function shieldPage() {
   for (const el of shielded) el.removeAttribute("inert");
@@ -105,7 +112,7 @@ function shieldPage() {
   const top = modalStack.at(-1);
   if (!top) return;
   for (const el of document.body.children) {
-    if (el === top || el.classList.contains("toaster") || el.hasAttribute("inert")) continue;
+    if (el === top || el.hasAttribute("inert")) continue;
     if (el.compareDocumentPosition(top) & Node.DOCUMENT_POSITION_FOLLOWING) {
       el.setAttribute("inert", "");
       shielded.add(el);
@@ -123,19 +130,22 @@ export function Modal({
   actions,
   className = "",
   url,
+  dismissible = true,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
   onClose: () => void;
   /** The address shown while this modal is open, so reloading or sharing it reopens it. */
   url?: string;
+  /** Keep a pending operation's dialog and its history layer open until it settles. */
+  dismissible?: boolean;
   size?: "sm" | "md" | "lg" | "xl";
   children: ReactNode;
   footer?: ReactNode;
   actions?: ReactNode;
   className?: string;
 }) {
-  const requestClose = useModalLayer(onClose, url);
+  const requestClose = useModalLayer(onClose, url, dismissible);
   const panel = useRef<HTMLDivElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -170,11 +180,13 @@ export function Modal({
     const layer = backdrop.current;
     if (layer) modalStack.push(layer);
     shieldPage();
+    modalListeners.forEach((fn) => fn());
     first?.focus({ preventScroll: true });
     document.body.classList.add("modal-open");
     return () => {
       if (layer) modalStack.splice(modalStack.lastIndexOf(layer), 1);
       shieldPage();
+      modalListeners.forEach((fn) => fn());
       if (!modalStack.length) document.body.classList.remove("modal-open");
       handoff = { opener: previous, at: Date.now() };
       returnFocus(previous);
@@ -244,9 +256,10 @@ export function Modal({
             </div>
             <div className="modal-head-actions">
               {actions}
-              <IconButton label="Close" icon={<X size={18} />} onClick={requestClose} />
+              <IconButton label="Close" icon={<X size={18} />} onClick={requestClose} disabled={!dismissible} />
             </div>
           </div>
+          <Toaster modal={backdrop} />
           <div className="modal-body">{children}</div>
           {footer && <footer className="modal-foot">{footer}</footer>}
         </div>
@@ -284,16 +297,23 @@ export function Popover({
       const width = panel.current?.offsetWidth || 320;
       const height = panel.current?.offsetHeight || 0;
       let top = rect.bottom + 8;
-      if (flip && top + height > window.innerHeight - 8 && rect.top - 8 - height >= 8) top = rect.top - 8 - height;
+      if (flip) {
+        if (top + height > window.innerHeight - 8 && rect.top - 8 - height >= 8) top = rect.top - 8 - height;
+        // A tall menu may fit on neither side of its trigger; keep its scroll area on screen.
+        top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+      }
       if (align === "end") {
         const right = Math.max(8, window.innerWidth - rect.right);
         setPos({ top, right: Math.min(right, window.innerWidth - width - 8) });
       } else setPos({ top, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) });
     };
     place();
+    const observer = new ResizeObserver(place);
+    if (panel.current) observer.observe(panel.current);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
@@ -502,22 +522,25 @@ let toasts: ToastItem[] = [];
 const toastListeners = new Set<() => void>();
 /** Auto-dismiss clocks. They stop while the pointer or focus is on the toasts (WCAG 2.2.1). */
 const toastClocks = new Map<number, { left: number; since: number; timer?: ReturnType<typeof setTimeout> }>();
-let toastsHeld = false;
+const toastHolds = new Set<object>();
 function setToasts(next: ToastItem[]) {
   toasts = next;
   toastListeners.forEach((fn) => fn());
 }
 function runClock(id: number) {
   const clock = toastClocks.get(id);
-  if (!clock || toastsHeld) return;
+  if (!clock || toastHolds.size) return;
   clock.since = Date.now();
   clock.timer = setTimeout(() => dismissToast(id), clock.left);
 }
-function holdToasts(held: boolean) {
-  if (held === toastsHeld) return;
-  toastsHeld = held;
+function holdToasts(owner: object, held: boolean) {
+  const wasHeld = toastHolds.size > 0;
+  if (held) toastHolds.add(owner);
+  else toastHolds.delete(owner);
+  const isHeld = toastHolds.size > 0;
+  if (wasHeld === isHeld) return;
   for (const [id, clock] of toastClocks) {
-    if (held) {
+    if (isHeld) {
       clearTimeout(clock.timer);
       clock.left = Math.max(1000, clock.left - (Date.now() - clock.since));
     } else runClock(id);
@@ -552,7 +575,32 @@ export function dismissToastKey(key: string) {
   gone.forEach((t) => forgetClock(t.id));
   setToasts(toasts.filter((t) => !matches(t)));
 }
-export function Toaster() {
+export function Toaster({ modal }: { modal?: RefObject<HTMLDivElement | null> } = {}) {
+  const active = useSyncExternalStore(subscribeModal, activeModal);
+  // Keep one rendered list, in the innermost dialog's React tree so its focus trap handles Tab.
+  if (modal) return active === modal.current ? <ToastRegion inline /> : null;
+  return active ? null : createPortal(<ToastRegion />, document.body);
+}
+function ToastRegion({ inline = false }: { inline?: boolean }) {
+  const region = useRef<HTMLDivElement>(null);
+  // Each reason belongs to this rendered region; an old region's cleanup cannot release
+  // focus or pointer holds acquired by its replacement during dialog/remount transitions.
+  const holds = useRef({ pointer: {}, focus: {} });
+  useLayoutEffect(() => {
+    const { pointer, focus } = holds.current;
+    holdToasts(pointer, !!region.current?.matches(":hover"));
+    holdToasts(focus, !!region.current?.contains(document.activeElement));
+    // A removed notice under the pointer can swallow pointerleave (Firefox): release on arrival elsewhere.
+    const arrived = (event: PointerEvent) => {
+      if (!region.current?.contains(event.target as Node)) holdToasts(pointer, false);
+    };
+    document.addEventListener("pointerover", arrived);
+    return () => {
+      document.removeEventListener("pointerover", arrived);
+      holdToasts(pointer, false);
+      holdToasts(focus, false);
+    };
+  }, []);
   const items = useSyncExternalStore(
     (fn) => {
       toastListeners.add(fn);
@@ -560,15 +608,31 @@ export function Toaster() {
     },
     () => toasts,
   );
-  return createPortal(
+  useLayoutEffect(() => {
+    // Removing the focused or hovered notice (its own Dismiss, or a replacement) may fire no blur or
+    // pointerleave event, so release holds that nothing inside this region still owns.
+    if (!region.current?.contains(document.activeElement)) holdToasts(holds.current.focus, false);
+    if (!region.current?.matches(":hover")) holdToasts(holds.current.pointer, false);
+  }, [items]);
+  const newestId = items.at(-1)?.id;
+  useLayoutEffect(() => {
+    const node = region.current;
+    const newest = node?.lastElementChild;
+    if (!inline || !node || !newest) return;
+    // An appended error, or one carried into a nested dialog, must not expire out of view.
+    // Align its start without moving keyboard focus; normal Tab order can reach older notices.
+    node.scrollTop += newest.getBoundingClientRect().top - node.getBoundingClientRect().top;
+  }, [inline, newestId]);
+  return (
     <div
-      className="toaster"
+      ref={region}
+      className={`toaster${inline ? " toaster-modal" : ""}`}
       aria-live="polite"
-      onPointerEnter={() => holdToasts(true)}
-      onPointerLeave={() => holdToasts(false)}
-      onFocus={() => holdToasts(true)}
+      onPointerEnter={() => holdToasts(holds.current.pointer, true)}
+      onPointerLeave={() => holdToasts(holds.current.pointer, false)}
+      onFocus={() => holdToasts(holds.current.focus, true)}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) holdToasts(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) holdToasts(holds.current.focus, false);
       }}
     >
       {items.map((item) => (
@@ -596,8 +660,7 @@ export function Toaster() {
           <IconButton size="sm" label="Dismiss" icon={<X size={16} />} onClick={() => dismissToast(item.id)} />
         </div>
       ))}
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -614,6 +677,8 @@ type ConfirmRequest = {
     value: string;
     hint?: string;
     optional?: boolean;
+    /** Selects the whole value at first, rather than a file name without its extension. */
+    selectAll?: boolean;
     /** Runs on submit; a rejection is shown on the field and the dialog stays open for another try. */
     apply?: (value: string) => Promise<unknown>;
   };
@@ -640,13 +705,14 @@ export function promptDialog({
   value,
   hint,
   optional,
+  selectAll,
   apply,
   ...options
 }: Omit<ConfirmRequest, "resolve" | "input"> & NonNullable<ConfirmRequest["input"]>) {
   return new Promise<string | null>((resolve) =>
     enqueueConfirm({
       ...options,
-      input: { label, value, hint, optional, apply },
+      input: { label, value, hint, optional, selectAll, apply },
       resolve: (v) => resolve(typeof v === "string" ? v : null),
     }),
   );
@@ -725,7 +791,7 @@ function ConfirmBody({ request }: { request: ConfirmRequest }) {
               setError("");
             }}
             onFocus={(event) => {
-              const dot = event.target.value.lastIndexOf(".");
+              const dot = request.input?.selectAll ? -1 : event.target.value.lastIndexOf(".");
               event.target.setSelectionRange(0, dot > 0 ? dot : event.target.value.length);
             }}
           />
@@ -810,6 +876,32 @@ export function Segmented<T extends string | number>({
         </button>
       ))}
     </div>
+  );
+}
+
+/** A link to another page of the app. It opens in place, or in a new tab when the click asks for one. */
+export function PageLink({
+  to,
+  className = "link",
+  children,
+  ...rest
+}: { to: string; className?: string; children: ReactNode } & Omit<
+  React.AnchorHTMLAttributes<HTMLAnchorElement>,
+  "href" | "onClick"
+>) {
+  return (
+    <a
+      {...rest}
+      className={className}
+      href={to}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        navigate(to);
+      }}
+    >
+      {children}
+    </a>
   );
 }
 

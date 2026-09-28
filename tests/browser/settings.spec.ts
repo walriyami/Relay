@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { BASE, composer, destinations, signedIn, writeText } from "./helpers";
+import { BASE, composer, destinations, deviceState, signedIn, unique, writeText } from "./helpers";
 
 test("settings save and apply to new shares", async ({ page }) => {
   await signedIn(page);
@@ -14,13 +14,55 @@ test("settings save and apply to new shares", async ({ page }) => {
   await expect(expiry.getByRole("radio", { name: "30 days" })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("link", { name: "Send", exact: true }).click();
   await writeText(page, "something to send");
-  await expect(destinations(page).getByRole("button", { name: /^Link options/ })).toHaveAccessibleName(
-    "Link options: 30 days",
+  await expect(destinations(page).getByRole("button", { name: "Create link" })).toHaveAccessibleDescription(
+    "Expires in 30 days",
   );
   // Put the default back for other tests.
   await page.goto("/settings");
   await expiry.getByRole("radio", { name: "7 days" }).click();
   await expect(expiry.getByRole("radio", { name: "7 days" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("this device is renamed from the account menu, and keeps a name of its own", async ({ page }) => {
+  const name = unique("Desk");
+  const other = unique("Kitchen");
+  await deviceState(other);
+  await signedIn(page, name);
+
+  await page.getByRole("button", { name: /^Account/ }).click();
+  const item = page.getByRole("menuitem", { name: `Edit this device, ${name}` });
+  // Phone, tablet or computer, whichever this browser is.
+  const icon = await item.locator("svg").first().getAttribute("class");
+  await item.click();
+  const dialog = page.getByRole("dialog", { name: "Edit this device" });
+  const field = dialog.getByRole("textbox", { name: "Device name" });
+  await expect(field).toHaveValue(name);
+  await expect(field).toBeFocused();
+
+  // Another signed-in device's name is refused, whatever its case, and the dialog stays to fix it.
+  await field.fill(other.toUpperCase());
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Another signed-in device already has that name.");
+
+  // A name that sounds like a phone (or a computer) doesn't change what the device is.
+  const renamed = icon?.includes("smartphone") ? `${name} laptop` : `${name} iPhone`;
+  await field.fill(renamed);
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("This device updated", { exact: true })).toBeVisible();
+  // Focus goes back to the menu's button, and the menu shows the new name.
+  await expect(page.getByRole("button", { name: /^Account/ })).toBeFocused();
+  await page.getByRole("button", { name: /^Account/ }).click();
+  await expect(page.getByRole("menuitem", { name: `Edit this device, ${renamed}` })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Settings offers the same, in plain sight on this device's row.
+  await page.goto("/settings");
+  const row = page.getByRole("region", { name: "Devices" }).getByRole("listitem").filter({ hasText: "This browser" });
+  await expect(row).toContainText(renamed);
+  await expect(row.locator(".device-icon svg")).toHaveClass(icon!);
+  await row.getByRole("button", { name: "Edit this device" }).click();
+  await expect(page.getByRole("dialog", { name: "Edit this device" }).getByRole("textbox")).toHaveValue(renamed);
 });
 
 test("passkeys can be managed where the browser supports them", async ({ page }) => {

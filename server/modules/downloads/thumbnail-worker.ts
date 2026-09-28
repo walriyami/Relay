@@ -1,6 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { parentPort, workerData } from "node:worker_threads";
-import decodeHeic from "heic-decode";
 import sharp from "sharp";
 
 type WorkerInput = {
@@ -23,29 +22,34 @@ async function render() {
     throw error;
   }
 
+  // Reading and writing are separate from decoding so filesystem failures cannot be mistaken
+  // for a deterministic invalid-image result from the decoder.
+  const buffer = await readFile(data.source);
   sharp.cache(false);
   sharp.concurrency(1);
   if (data.format === "image") {
-    const image = sharp(data.source, {
+    const image = sharp(buffer, {
       limitInputPixels: data.maxPixels,
       failOn: "none",
       animated: false,
     });
     const metadata = await image.metadata();
     if (!["png", "jpeg", "webp", "gif", "heif"].includes(metadata.format ?? ""))
-      throw new Error("This image format cannot be previewed.");
-    await image
+      throw Object.assign(new Error("This image format cannot be previewed."), { code: "INVALID_IMAGE" });
+    const output = await image
       .rotate()
       .resize({ width: data.width, height: data.width, fit: "inside", withoutEnlargement: true })
       .webp({ quality: data.width === 640 ? 72 : 84 })
-      .toFile(data.target);
+      .toBuffer();
+    await writeFile(data.target, output);
     return;
   }
 
   // Read only after the source-size check and inspect dimensions before libheif allocates pixels.
-  const buffer = await readFile(data.source);
+  // Loaded here, not up front: each thumbnail gets a fresh worker, and most images are not HEIF.
+  const { default: decodeHeic } = await import("heic-decode");
   const images = await decodeHeic.all({ buffer });
-  if (!images.length) throw new Error("HEIF image not found");
+  if (!images.length) throw Object.assign(new Error("HEIF image not found"), { code: "INVALID_IMAGE" });
   const primary = images[0];
   try {
     // libheif exposes metadata before display() allocates the RGBA pixel buffer.
@@ -61,10 +65,11 @@ async function render() {
       throw error;
     }
     const pixels = Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength);
-    await sharp(pixels, { raw: { width: image.width, height: image.height, channels: 4 } })
+    const output = await sharp(pixels, { raw: { width: image.width, height: image.height, channels: 4 } })
       .resize({ width: data.width, height: data.width, fit: "inside", withoutEnlargement: true })
       .webp({ quality: data.width === 640 ? 72 : 84 })
-      .toFile(data.target);
+      .toBuffer();
+    await writeFile(data.target, output);
   } finally {
     images.dispose?.();
   }
@@ -76,7 +81,13 @@ if (parentPort) {
     (error: unknown) =>
       parentPort!.postMessage({
         ok: false,
-        code: (error as { code?: string }).code ?? "RENDER_FAILED",
+        code:
+          (error as { code?: string }).code ??
+          (/unsupported image format|exceeds pixel limit|corrupt header|invalid (?:image|jpeg|png|header)|not a HEIC image|premature end/i.test(
+            String((error as Error).message),
+          )
+            ? "INVALID_IMAGE"
+            : "RENDER_FAILED"),
         message: error instanceof Error ? error.message : String(error),
       }),
   );

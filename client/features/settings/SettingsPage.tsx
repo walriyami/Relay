@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Laptop, Plus, Smartphone, Tablet } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { ApiError, api, call, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
 import { LIMITS, USERNAME, displayName } from "../../../shared/model";
 import { useSession } from "../../app/session";
+import { DeviceIcon, useEditDevice } from "../../app/devices";
 import { confirmSignOut, signOut } from "../../app/App";
-import { ago, bytes } from "../../lib/format";
+import { ago } from "../../lib/format";
 import { notifyChange } from "../../lib/live";
-import { fromSegment, keepOptions, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
-import { navigate, scrollMotion } from "../../lib/router";
+import { fromSegment, keepOptions, limitHint, linkLifeOptions, toSegment, trashOptions } from "../../lib/options";
+import { scrollMotion } from "../../lib/router";
 import { setTransferPrefs } from "../../lib/transfers";
 import { setLocalPrefs, useLocalPrefs } from "../../lib/local-prefs";
+import { StorageMeter } from "../../components/StorageMeter";
 import { AddDevice } from "./AddDevice";
 import { PasskeysSection } from "./Passkeys";
 import { Section } from "./Section";
@@ -19,20 +21,12 @@ import {
   Field,
   Menu,
   Modal,
-  ProgressBar,
+  PageLink,
   Segmented,
   Toggle,
   confirmDialog,
-  promptDialog,
   toast,
 } from "../../components/ui";
-
-const deviceIcon = (d: Device) => {
-  const name = (d.name + (d.current ? " " + navigator.userAgent : "")).toLowerCase();
-  if (/ipad|tablet/.test(name)) return <Tablet size={18} aria-hidden />;
-  if (/phone|iphone|android|mobile/.test(name)) return <Smartphone size={18} aria-hidden />;
-  return <Laptop size={18} aria-hidden />;
-};
 
 type AccountChange = {
   prefs?: Partial<Omit<Prefs, "activity">> & { activity?: Partial<ActivityPrefs> };
@@ -193,8 +187,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
   }
   const notifySupported = typeof Notification !== "undefined";
   const notifyBlocked = notifySupported && Notification.permission === "denied";
-  const quota = me.user.quota;
-  const used = me.usage.used + me.usage.reserved;
+  const limits = me.user.limits;
   return (
     <div className="page settings">
       <div className="page-head">
@@ -205,24 +198,31 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         <div className="setting-row">
           <span className="setting-label">
             <strong>Links expire after</strong>
-            <span className="field-hint">Each link can still be set on its own when you create it.</span>
+            <span className="field-hint">
+              Each link can still be set on its own when you create it.
+              {limits.linkDays !== null && ` ${limitHint(limits.linkDays)}`}
+            </span>
           </span>
           <Segmented
             label="Links expire after"
             value={toSegment(me.prefs.linkDays)}
-            options={linkLifeOptions(me.prefs.linkDays)}
+            options={linkLifeOptions(me.prefs.linkDays, limits.linkDays)}
             onChange={(v) => void save({ prefs: { linkDays: fromSegment(v) } })}
           />
         </div>
         <div className="setting-row">
           <span className="setting-label">
-            <strong>Keep uploads in Files</strong>
-            <span className="field-hint">After this, uploads move to Trash automatically.</span>
+            <strong>Move uploads to Trash after</strong>
+            <span className="field-hint">
+              Change an unexpired item’s date in Files within its hard deadline. The clock starts with the first saved
+              content.
+              {limits.keepDays !== null && ` Maximum total file age is ${limits.keepDays} days, including Trash.`}
+            </span>
           </span>
           <Segmented
-            label="Keep uploads in Files"
-            value={me.user.retentionDays || 0}
-            options={keepOptions(me.user.retentionDays)}
+            label="Move uploads to Trash after"
+            value={toSegment(me.user.retentionDays)}
+            options={keepOptions(me.user.retentionDays, limits.keepDays)}
             onChange={(v) => void save({ retentionDays: v || null })}
           />
         </div>
@@ -330,30 +330,18 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
       </Section>
       <Section id="s-storage" title="Storage">
         <div className="stack-sm">
-          <ProgressBar value={used} max={quota} label="Storage used" minVisible />
-          <span>
-            <strong>{bytes(used)}</strong> <span className="muted">of {bytes(quota)} used</span>
-          </span>
+          <StorageMeter me={me} />
           <p className="field-hint">
-            Items in Trash still count until deleted.{" "}
-            <a
-              className="link"
-              href="/trash"
-              onClick={(event) => {
-                if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-                event.preventDefault();
-                navigate("/trash");
-              }}
-            >
-              Open Trash
-            </a>
+            Items in Trash still count until deleted. <PageLink to="/usage">See your usage</PageLink> ·{" "}
+            <PageLink to="/trash">Open Trash</PageLink>
           </p>
         </div>
         <div className="setting-row">
           <span className="setting-label">
             <strong>Empty Trash after</strong>
             <span className="field-hint">
-              Until then, anything deleted can be restored. Applies to what’s in Trash now, too.
+              Applies when an item next enters Trash. Existing deletion dates stay fixed. A file’s hard deadline can
+              delete it sooner and cannot be extended by restoring it.
             </span>
           </span>
           <Segmented
@@ -607,27 +595,11 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
 }
 
 function DevicesSection() {
-  const { me, setMe, devices, devicesLoading, devicesError, reloadDevices } = useSession();
+  const { devices, devicesLoading, devicesError, reloadDevices } = useSession();
+  const editDevice = useEditDevice();
   const [adding, setAdding] = useState(false);
   const signedIn = devices.filter((d) => d.signedIn);
   const others = signedIn.filter((d) => !d.current);
-  async function rename(d: Device) {
-    await promptDialog({
-      title: "Rename device",
-      label: "Device name",
-      value: d.name,
-      confirm: "Save",
-      // Names tell devices apart when sending and signing out, so two signed-in devices can't share one.
-      apply: async (name) => {
-        if (name === d.name) return;
-        if (signedIn.some((o) => o.id !== d.id && o.name.toLowerCase() === name.toLowerCase()))
-          throw new Error("Another signed-in device already has that name.");
-        await call(api.devices.rename, { params: { id: d.id }, body: { name } });
-        if (d.current) setMe({ ...me, device: { ...me.device, name } });
-        reloadDevices();
-      },
-    });
-  }
   const seenText = (d: Device) => (d.online ? "is online now" : `was last seen ${ago(d.seen)}`);
   async function remove(d: Device) {
     const ok = await confirmDialog({
@@ -658,13 +630,16 @@ function DevicesSection() {
       <ul className="device-list">
         {signedIn.map((d) => (
           <li key={d.id} className="device-row">
-            <span className="device-icon">{deviceIcon(d)}</span>
+            <span className="device-icon">
+              <DeviceIcon device={d} />
+            </span>
             <span className="device-text">
               <strong>
-                {d.name}
+                <span className="device-name">{d.name}</span>
                 {d.current && <span className="pill">This browser</span>}
               </strong>
               <span className="muted">
+                {d.current && <span className="device-here">This browser ·</span>}
                 {d.current || d.online ? (
                   <>
                     <span className="online-dot" aria-hidden /> Online
@@ -674,13 +649,31 @@ function DevicesSection() {
                 )}
               </span>
             </span>
-            <Menu
-              label={`Actions for ${d.name}`}
-              items={[
-                { label: "Rename", onSelect: () => void rename(d) },
-                ...(d.current ? [] : [{ label: "Sign out", danger: true, onSelect: () => void remove(d) }]),
-              ]}
-            />
+            {d.current ? (
+              // This device’s name and icon can be edited directly.
+              <Button
+                size="sm"
+                variant="ghost"
+                className="device-edit"
+                icon={<Pencil size={14} />}
+                aria-label="Edit this device"
+                onClick={() => editDevice(d)}
+              >
+                Edit
+              </Button>
+            ) : (
+              <Menu
+                label={`Actions for ${d.name}`}
+                items={[
+                  {
+                    label: "Edit name and icon",
+                    icon: <Pencil size={16} aria-hidden />,
+                    onSelect: () => editDevice(d),
+                  },
+                  { label: "Sign out", danger: true, onSelect: () => void remove(d) },
+                ]}
+              />
+            )}
           </li>
         ))}
       </ul>

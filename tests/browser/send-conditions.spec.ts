@@ -1,5 +1,6 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import { api } from "../../shared/api.ts";
+import type { User } from "../../shared/model.ts";
 import { BASE, composer, destinations, fileInput, signedIn, unique } from "./helpers";
 
 const MB = 1024 ** 2;
@@ -16,8 +17,8 @@ async function adminPatch(page: Page, path: string, data: object) {
   expect(response.ok()).toBe(true);
 }
 
-/** A new member with its own small quota, so changing it never affects other tests' account. */
-async function member(admin: Page, browser: Browser, quota: number) {
+/** A new member with its own small storage limit, so changing it never affects other tests' account. */
+async function member(admin: Page, browser: Browser, storage: number) {
   const session = await (await admin.request.get(api.session.get.path)).json();
   const invite = await admin.request.post(api.admin.invite.path, { headers: { "X-Relay-CSRF": session.csrf } });
   expect(invite.ok()).toBe(true);
@@ -26,19 +27,24 @@ async function member(admin: Page, browser: Browser, quota: number) {
   const joined = await context.request.post(api.session.join.path, {
     data: {
       token,
-      username: unique("quota").toLowerCase(),
+      username: unique("limited").toLowerCase(),
       password: "Browser-test-password-only",
-      deviceName: "Quota laptop",
+      deviceName: "Limited laptop",
     },
   });
   expect(joined.ok()).toBe(true);
-  const { user } = await joined.json();
-  const setQuota = (bytes: number) => adminPatch(admin, `/api/admin/members/${user.id}`, { quota: bytes });
-  await setQuota(quota);
+  const { user } = (await joined.json()) as { user: User };
+  let currentLimits = user.limits;
+  const setStorage = async (bytes: number) => {
+    const limits = { ...currentLimits, storage: bytes };
+    await adminPatch(admin, `/api/admin/members/${user.id}`, { limits, expectedLimits: currentLimits });
+    currentLimits = limits;
+  };
+  await setStorage(storage);
   const page = await context.newPage();
   await page.goto("/");
   await expect(composer(page)).toBeVisible();
-  return { context, page, setQuota };
+  return { context, page, setStorage };
 }
 
 test("going offline mid-upload waits, then carries on by itself when the connection returns", async ({ page }) => {
@@ -57,6 +63,7 @@ test("going offline mid-upload waits, then carries on by itself when the connect
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   const card = composer(page).locator(".transfer");
   await expect(card.getByRole("button", { name: "Pause" })).toBeEnabled();
+  await expect.poll(() => patches).toBe(1);
 
   await page.context().setOffline(true);
   await expect(card).toContainText("Paused · waiting for your connection…");
@@ -67,11 +74,11 @@ test("going offline mid-upload waits, then carries on by itself when the connect
   release();
 
   await page.context().setOffline(false);
+  await expect(page.getByRole("status").filter({ hasText: "You’re back online" })).toBeVisible();
   // No Retry: it resumes on its own.
   await expect(card).toContainText("Saved to Files", { timeout: 20_000 });
   await expect(card.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByText("You’re offline")).toHaveCount(0);
-  await expect(page.getByRole("status").filter({ hasText: "You’re back online" })).toBeVisible();
   const { items } = await (await page.request.get(`/api/items?q=${name}`)).json();
   expect(items[0]).toMatchObject({ files: 1, bytes: 3 * MB, uploading: false });
   await page.unrouteAll({ behavior: "ignoreErrors" });
@@ -123,7 +130,7 @@ test("after a reload the drop box says what stopped and offers to choose it agai
   await expect(composer(page).getByText(/stopped when/)).toHaveCount(0);
 });
 
-test("destinations are off when the selection doesn't fit the quota", async ({ page, browser }) => {
+test("destinations are off when the selection doesn't fit the storage limit", async ({ page, browser }) => {
   await signedIn(page);
   const { context, page: memberPage } = await member(page, browser, 10 * MB);
   try {
@@ -141,11 +148,11 @@ test("destinations are off when the selection doesn't fit the quota", async ({ p
 
 test("a transfer the server refuses for space says so, with no Retry", async ({ page, browser }) => {
   await signedIn(page);
-  const { context, page: memberPage, setQuota } = await member(page, browser, 10 * MB);
+  const { context, page: memberPage, setStorage } = await member(page, browser, 10 * MB);
   try {
-    // The quota shrinks between the check here and the server's.
+    // The limit shrinks between the check here and the server's.
     await memberPage.route("**/api/transfers", async (route) => {
-      if (route.request().method() === "POST") await setQuota(1 * MB);
+      if (route.request().method() === "POST") await setStorage(1 * MB);
       await route.continue();
     });
     await fileInput(memberPage).setInputFiles([binary(`${unique("refused")}.bin`, 5 * MB)]);

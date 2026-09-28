@@ -81,8 +81,11 @@ test("a guest can retry a request after an initial network failure", async ({ pa
   }
 });
 
-test("an existing guest page recovers when a request reopens and keeps its selections", async ({ page, browser }) => {
-  const name = unique("guest-reopen");
+test("an existing guest page keeps its draft after a failed refresh and reloads current details", async ({
+  page,
+  browser,
+}) => {
+  const name = unique("guest-recovery");
   const { request, csrf } = await createRequest(page, name);
   const context = await browser.newContext({ baseURL: BASE });
   try {
@@ -91,20 +94,29 @@ test("an existing guest page recovers when a request reopens and keeps its selec
     const filename = `${name}.txt`;
     await guest.getByTestId("guest-file-input").setInputFiles(textFile(filename));
     await guest.getByLabel("Your name (optional)").fill("Guest sender");
-    // The public endpoint reports an expired request to this already-open guest page.
+    // A temporary service failure must not discard this already-open guest page's draft.
     await guest.route(`**/api/r/${request.token}`, (route) =>
-      route.fulfill({ status: 410, json: { error: "This request has expired." } }),
+      route.fulfill({ status: 503, json: { error: "The request could not be reached." } }),
+    );
+    const failedRefresh = guest.waitForResponse(
+      (response) => response.url().endsWith(`/api/r/${request.token}`) && response.status() === 503,
     );
     await guest.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect(guest.getByRole("heading", { name: "Request unavailable" })).toBeVisible();
+    await (await failedRefresh).finished();
+    // A failed background refresh keeps the last loaded details and the editable draft visible.
+    await expect(guest.getByRole("heading", { name, exact: true })).toBeVisible();
+    await expect(guest.getByRole("heading", { name: "Request unavailable" })).toHaveCount(0);
+    await expect(guest.getByText(filename, { exact: true })).toBeVisible();
+    await expect(guest.getByLabel("Your name (optional)")).toHaveValue("Guest sender");
+    await expect(guest.getByRole("button", { name: /^Upload/ })).toBeEnabled();
     const response = await page.request.patch(`/api/requests/${request.id}`, {
       headers: { "X-Relay-CSRF": csrf },
-      data: { name: `${name} reopened`, description: "", days: 30, maxBytes: 1024 ** 3 },
+      data: { name: `${name} updated`, description: "", days: 30, maxBytes: 1024 ** 3 },
     });
     expect(response.ok()).toBe(true);
     await guest.unroute(`**/api/r/${request.token}`);
     await guest.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect(guest.getByRole("heading", { name: `${name} reopened` })).toBeVisible();
+    await expect(guest.getByRole("heading", { name: `${name} updated` })).toBeVisible();
     await expect(guest.getByText(filename, { exact: true })).toBeVisible();
     await expect(guest.getByLabel("Your name (optional)")).toHaveValue("Guest sender");
     await expect(guest.getByRole("button", { name: /^Upload/ })).toBeEnabled();
@@ -160,8 +172,8 @@ test("queued settings preserve latest choices and ignore an older session respon
     await expect(expiry(page).getByRole("radio", { name: "30 days" })).toHaveAttribute("aria-checked", "true");
     await page.getByRole("link", { name: "Send", exact: true }).click();
     await writeText(page, "Use the latest saved setting");
-    await expect(destinations(page).getByRole("button", { name: /^Link options/ })).toHaveAccessibleName(
-      "Link options: 30 days",
+    await expect(destinations(page).getByRole("button", { name: "Create link" })).toHaveAccessibleDescription(
+      "Expires in 30 days",
     );
   } finally {
     releaseWrite.open();
@@ -183,7 +195,7 @@ test("a failed setting is recovered before later queued choices save", async ({ 
     await expiry(page).getByRole("radio", { name: "1 day", exact: true }).click();
     await firstWrite.promise;
     await page
-      .getByRole("radiogroup", { name: "Keep uploads in Files" })
+      .getByRole("radiogroup", { name: "Move uploads to Trash after" })
       .getByRole("radio", { name: "30 days" })
       .click();
     await page.getByRole("switch", { name: "Sign-ins and security" }).click();
@@ -199,9 +211,22 @@ test("a failed setting is recovered before later queued choices save", async ({ 
     await expect(expiry(page).getByRole("radio", { name: "7 days" })).toHaveAttribute("aria-checked", "true");
     await expect(page.getByRole("switch", { name: "Sign-ins and security" })).not.toBeChecked();
     await page.getByRole("link", { name: "Send", exact: true }).click();
+    // Fix the absolute deadline so the composer proves the failed one-day choice was rolled back.
+    const now = Date.now();
+    await page.clock.setFixedTime(now);
     await writeText(page, "Use the last saved setting after failure");
-    await expect(destinations(page).getByRole("button", { name: /^Link options/ })).toHaveAccessibleName(
-      "Link options: 7 days",
+    const deadline = await page.evaluate(
+      (timestamp) =>
+        new Date(timestamp).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      now + 7 * 86_400_000,
+    );
+    await expect(destinations(page).getByRole("button", { name: "Create link" })).toHaveAccessibleDescription(
+      `Expires by ${deadline}`,
     );
   } finally {
     releaseWrite.open();

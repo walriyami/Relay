@@ -1,6 +1,7 @@
 // The services the modules share. app.ts builds one Context and hands it to every module's
 // register function; modules talk to each other only through these interfaces.
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
+import type { Stats } from "node:fs";
 import type { Operations } from "./lib/operations.ts";
 import type { Config } from "./config.ts";
 import type { Database } from "./db/database.ts";
@@ -16,8 +17,6 @@ export type Member = {
   userId: string;
   username: string;
   admin: boolean;
-  quota: number;
-  retentionDays: number | null;
   sessionHash: string;
   deviceId: string;
   csrf: string;
@@ -38,26 +37,57 @@ export type Principal = Member | Grant;
 export type Auth = { member: Member | null; grants: Grant[] };
 /** The stable key stored on tabs and transfers: 'user:<id>' or 'grant:<token hash>'. */
 export const principalKey = (p: Principal) => (p.kind === "member" ? `user:${p.userId}` : `grant:${p.tokenHash}`);
+/** How stale a tab lease (or device sighting) may get before activity writes it again; well inside the lease. */
+export const leaseRenewalMs = (ctx: Context) => Math.min(60_000, ctx.config.tabLeaseMs / 3);
+
+export type ScrubOptions = {
+  after?: string;
+  limit?: number;
+  /** Stop between objects after this many bytes; one larger object is allowed. */
+  maxBytes?: number;
+  /** Stop between objects after this duration; one larger object is allowed to finish. */
+  maxDurationMs?: number;
+  signal?: AbortSignal;
+};
+export type ScrubResult = M.ScrubResult;
+export type BlobStatus = M.BlobStatus;
 
 /** Content-addressed payload storage under <root>/blobs. */
 export interface BlobStore {
   /** Absolute path of a stored blob. */
   path(sha256: string): string;
+  /** Cheap status/size verification. Rejects known damage without hashing each download. */
+  verify(sha256: string, size?: number): Promise<void>;
+  /** Explicit, single-flight sequential integrity scan, resumable after nextAfter. */
+  scrub(options?: ScrubOptions): Promise<ScrubResult>;
+  status(): BlobStatus;
+  /** Indexed check suitable for public readiness requests. */
+  degraded(): boolean;
+  /** Cancels a running scrub and waits before the database can close. */
+  close(): Promise<void>;
   /**
    * Hard-links a fully written, fsynced upload file into its blob path and makes the link durable,
-   * off the event loop. Records nothing: follow with `adopt` (or `unstage` if the upload is dropped).
+   * off the event loop. Begins outside a transaction and journals cleanup without claiming adoption.
+   * Follow with `adopt` (or `unstage` if the upload is dropped).
    */
-  stage(file: string, sha256: string): Promise<void>;
+  stage(file: string, sha256: string, expected?: Stats): Promise<void>;
   /** Removes a staged link that was never adopted, unless the blob is recorded. Synchronous. */
-  unstage(sha256: string): void;
+  unstage(sha256: string, file?: string): void;
   /**
-   * Records a blob inside the caller's synchronous block. Normally the file was staged; if it is
-   * missing (never staged, or collected since), it is linked from `file` and synced here instead.
+   * Records a blob inside the caller's synchronous block. Adoption inside a transaction requires a
+   * completed stage. An unstaged file can be adopted outside a transaction; its cleanup is journaled
+   * before filesystem writes. A staged file replaced since staging is relinked and synced here.
    * The caller removes its own upload file after its transaction commits.
    */
   adopt(file: string, sha256: string, size: number, crc32: number): void;
+  /** Creates and adopts the empty blob, with no caller-owned temporary. Call outside a transaction. */
+  adoptEmpty(): void;
+  /** Journals a rendition/decoder-marker temporary and leases its source until publication settles. */
+  stageThumbnail(sha256: string): { file: string; finish(): void; discard(): void };
   /** Deletes the given blobs if no node references them any more. Synchronous. */
   collect(candidates: Iterable<string>): void;
+  /** Retries a bounded batch of durable unreferenced blob cleanup. */
+  sweep(): void;
   /** Startup reconciliation: removes files with no row and reports rows with no file. */
   reconcile(): Promise<{ removedFiles: number; missing: string[] }>;
 }
@@ -68,7 +98,11 @@ export type ItemRow = {
   name: string | null;
   created: number;
   expires: number | null;
+  first_saved_at: number | null;
+  retention_days: number | null;
+  max_age_days: number | null;
   trashed: number | null;
+  purge_at: number | null;
   request_id: string | null;
 };
 
@@ -86,7 +120,7 @@ export interface Library {
   trash(owner: string, itemId: string): void;
   /** Removes an item permanently and collects its blobs. Synchronous. */
   purge(itemId: string): void;
-  sweep(now: number): void;
+  sweep(now: number): Promise<void>;
 }
 
 export type TransferInput = z.infer<typeof transferInput>;
@@ -99,28 +133,30 @@ export type CreateTransferOptions = {
   requestId?: string;
   /** Name for a newly created item; otherwise input.name (null derives it from the contents). */
   itemName?: string;
+  /** Sanitized guest label stored atomically when creating a submission item. */
+  sender?: string | null;
   /** What a guest request can still accept: bytes, and entries (every created file, folder and text). */
   limit?: { bytes: number; entries: number };
 };
 
 /** Transfers, their tus uploads, and the tabs that own them. */
 export interface Transfers {
-  /** Synchronous and idempotent by input.id. */
+  /** Synchronous and idempotent by input.id. Owns its transaction; call outside any existing one. */
   create(input: TransferInput, options: CreateTransferOptions): M.TransferCreated;
   /**
    * Extends a tab's lease, creating the tab for this principal if new. Returns false for a closed
    * tab or one owned by another principal.
    */
   renewTab(tab: string, principal: Principal): boolean;
-  /** Cancels every open transfer of an item (it is being trashed or purged). Synchronous. */
-  cancelForItem(itemId: string): void;
-  /** Cancels every open transfer of an upload request (it was closed). */
+  /** Cancels an item's open transfers, optionally only one principal's. Synchronous. */
+  cancelForItem(itemId: string, principal?: string): void;
+  /** Cancels an upload request's open guest transfers (it was closed). */
   cancelForRequest(requestId: string): void;
   /** Bytes still to be received by unfinished uploads (for disk admission). */
   outstandingBytes(): number;
   activeUploads(): number;
   receivedBytesSince(time: number): number;
-  sweep(now: number): void;
+  sweep(now: number): Promise<void>;
   /** Recover after restart: rebuild hash state and finish uploads whose bytes all arrived. */
   recover(): Promise<void>;
 }
@@ -145,6 +181,8 @@ export type ShareAccess = {
   note: string;
   expires: number | null;
   visit: string | null;
+  /** The link's owner, signed in: never counted as a visitor, and not sharing with anyone. */
+  byOwner: boolean;
   locked: boolean;
 };
 
@@ -179,6 +217,19 @@ export interface Activity {
    * so it can join the caller's transaction.
    */
   record(owner: string, event: M.ActivityEvent, by?: string | null): void;
+  sweep(now: number): Promise<void>;
+}
+
+/** Counts usage per member and requests per hour, written in batches. See `usage` in the schema. */
+export interface UsageMeter {
+  add(userId: string, counts: Partial<M.UsageCounts>): void;
+  request(failed: boolean): void;
+  /** Writes what was counted so far; reports call it first. Synchronous. */
+  flush(): void;
+  /** Stops background retries and writes the final batch, propagating any storage failure. */
+  close(): void;
+  status(): { pending: number; failed: boolean; discarded: number };
+  /** Samples stored bytes and forgets history older than it keeps. */
   sweep(now: number): void;
 }
 
@@ -194,5 +245,6 @@ export type Context = {
   links: Links;
   deliveries: Deliveries;
   activity: Activity;
+  usage: UsageMeter;
   log: FastifyBaseLogger;
 };

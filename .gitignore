@@ -5,6 +5,13 @@ dist/
 # Local data and secrets
 .data/
 .env
+.env.*
+!.env.example
+secret.key
+setup.key
+*.sqlite
+*.sqlite-*
+work/
 
 # Test output
 playwright-report/

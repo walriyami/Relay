@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api } from "../shared/api.ts";
-import { DEFAULTS } from "../shared/model.ts";
+import { DEFAULTS, NO_LIMITS } from "../shared/model.ts";
 import { admin, ApiError, Client, member, patchUpload, send, start } from "./support/harness.ts";
 import { sha256 } from "../server/lib/secrets.ts";
 
@@ -40,7 +40,8 @@ test("the overview reports members, storage, limits and activity", async () => {
       ],
     );
     const zoeRow = overview.members[1];
-    assert.deepEqual(zoeRow.usage, { used: 300, reserved: 5000, quota: DEFAULTS.quotaBytes });
+    assert.deepEqual(zoeRow.usage, { used: 300, reserved: 5000, available: DEFAULTS.capacityBytes - 5300 });
+    assert.deepEqual(zoeRow.limits, NO_LIMITS);
     assert.equal(overview.storage.used, 300);
     assert.equal(overview.storage.reserved, 5000);
     assert.equal(overview.storage.capacity, DEFAULTS.capacityBytes);
@@ -49,7 +50,7 @@ test("the overview reports members, storage, limits and activity", async () => {
     assert.equal(overview.activity.activeUploads, 1);
     assert.equal(overview.activity.receivedBytesLastHour >= 0, true);
 
-    await boss.call(api.admin.settings, { body: { capacity: 10_000 } });
+    await boss.call(api.admin.settings, { body: { capacity: 10_000, expectedCapacity: DEFAULTS.capacityBytes } });
     const changed = await boss.call(api.admin.overview);
     assert.equal(changed.limits.capacity, 10_000);
     assert.equal(changed.storage.capacity, 10_000);
@@ -72,13 +73,15 @@ test("members cannot use administration", async () => {
       () => plain.call(api.admin.invite),
       () => plain.call(api.admin.invites),
       () => plain.call(api.admin.revokeInvite, { params: { id: "0".repeat(64) } }),
-      () => plain.call(api.admin.updateMember, { params: { id: user.id }, body: { quota: 1 } }),
+      () => plain.call(api.admin.updateMember, { params: { id: user.id }, body: { limits: NO_LIMITS } }),
+      () => plain.call(api.admin.updateInvite, { params: { id: "0".repeat(64) }, body: { limits: NO_LIMITS } }),
+      () => plain.call(api.admin.usage, { query: { range: "30d", tz: 0 } }),
       () => plain.call(api.admin.resetPassword, { params: { id: user.id }, body: { password: "Some-new-password" } }),
       () => plain.call(api.admin.settings, { body: { capacity: 1 } }),
     ];
     for (const call of calls) assert.equal(await status(call()), 403);
     assert.equal(await status(new Client(instance).call(api.admin.overview)), 401);
-    assert.equal((await plain.call(api.session.get)).user.quota, DEFAULTS.quotaBytes);
+    assert.deepEqual((await plain.call(api.session.get)).user.limits, NO_LIMITS);
   } finally {
     await instance.close();
   }
@@ -137,7 +140,7 @@ test("pending invitations can be listed and withdrawn", async () => {
     await new Client(instance).call(api.session.invitation, { params: { token: second.token } });
 
     // A used invitation cannot be withdrawn: the account it made stays.
-    const usedId = instance.ctx.db.value<string>("SELECT token_hash FROM invites WHERE used IS NOT NULL")!;
+    const usedId = instance.ctx.db.value<string>("SELECT id FROM invites WHERE used IS NOT NULL")!;
     assert.equal(await status(boss.call(api.admin.revokeInvite, { params: { id: usedId } })), 404);
     assert.equal(await status(new Client(instance).call(api.admin.invites)), 401);
   } finally {
@@ -164,7 +167,7 @@ test("the overview counts the devices each member has signed in", async () => {
   }
 });
 
-test("member management: quota, retention, disabling and password reset", async () => {
+test("member management: limits, disabling and password reset", async () => {
   const instance = await start();
   try {
     const boss = await admin(instance);
@@ -182,16 +185,25 @@ test("member management: quota, retention, disabling and password reset", async 
       Date.now(),
     );
 
-    await boss.call(api.admin.updateMember, { params: { id: user.id }, body: { quota: 1234, retentionDays: 14 } });
+    const limits = { storage: 1234, keepDays: 14, linkDays: null };
+    await boss.call(api.admin.updateMember, { params: { id: user.id }, body: { limits, expectedLimits: NO_LIMITS } });
     const me = await bea.call(api.session.get);
-    assert.equal(me.user.quota, 1234);
-    assert.equal(me.user.retentionDays, 14);
+    assert.deepEqual(me.user.limits, limits);
+    assert.equal(me.user.retentionDays, 14, "a member keeping uploads forever is brought within the limit");
+    assert.equal(me.usage.available, 1234);
     assert.equal(
       await status(boss.call(api.admin.updateMember, { params: { id: bossId }, body: { disabled: true } })),
       409,
     );
     assert.equal(
-      await status(boss.call(api.admin.updateMember, { params: { id: crypto.randomUUID() }, body: { quota: 1 } })),
+      await status(boss.call(api.admin.updateMember, { params: { id: bossId }, body: { limits } })),
+      409,
+      "the administrator has no limits",
+    );
+    assert.equal(
+      await status(
+        boss.call(api.admin.updateMember, { params: { id: crypto.randomUUID() }, body: { limits: NO_LIMITS } }),
+      ),
       404,
     );
 
@@ -215,7 +227,7 @@ test("there is no file size limit: one file may fill the whole capacity", async 
   const instance = await start();
   try {
     const boss = await admin(instance);
-    await boss.call(api.admin.settings, { body: { capacity: 1000 } });
+    await boss.call(api.admin.settings, { body: { capacity: 1000, expectedCapacity: DEFAULTS.capacityBytes } });
     const create = (size: number) =>
       boss.call(api.transfers.create, {
         body: {
@@ -229,7 +241,7 @@ test("there is no file size limit: one file may fill the whole capacity", async 
     const whole = await create(1000);
     assert.equal((await patchUpload(boss, whole.uploads[0].id, 0, Buffer.alloc(1000))).statusCode, 204);
     assert.equal(await status(create(1)), 507, "over the service capacity");
-    await boss.call(api.admin.settings, { body: { capacity: 1500 } });
+    await boss.call(api.admin.settings, { body: { capacity: 1500, expectedCapacity: 1000 } });
     await create(500);
   } finally {
     await instance.close();

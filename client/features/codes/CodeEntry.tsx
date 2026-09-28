@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "r
 import { ApiError, api, call, type PickupResolution } from "../../api";
 import { formatCode, normalizeCode, type CodeLength } from "../../../shared/codes";
 import { useCodeConfig } from "./config";
+import { CodeProtectionNotice } from "./CodeProtectionNotice";
 
 /** Remove only Relay's visible separator. Invalid letters remain invalid at request boundaries. */
 export const codeDigits = (code: string) => code.replaceAll("-", "");
@@ -76,7 +77,7 @@ export function CodeEntryForm({
   fieldLabel?: string;
   description?: string;
 }) {
-  const { codeLength, loading: configLoading, error: configError, refetch } = useCodeConfig();
+  const { codeLength, protection, loading: configLoading, error: configError, refetch } = useCodeConfig();
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [retryConfig, setRetryConfig] = useState(false);
@@ -170,6 +171,7 @@ export function CodeEntryForm({
         // A failure that may pass (offline, busy, a limit) is retried with Enter or this action;
         // an answer about the code itself would only come back the same.
         const status = e instanceof ApiError ? e.status : 0;
+        if (status === 429 || status === 503) void refetch().catch(() => {});
         const final = e instanceof FinalAnswer || (status >= 400 && status < 500 && status !== 408 && status !== 429);
         if (previousLength.current !== null && !final) setRetryConfig(true);
       }
@@ -283,9 +285,13 @@ export function CodeEntryForm({
         className="code-entry-field-native"
         type="text"
         name="relay-code"
-        autoComplete="one-time-code"
+        // A pickup code is neither a credential nor an SMS code, so no browser or password manager
+        // should offer to fill or save it. "one-time-code" would invite exactly that.
+        autoComplete="off"
         data-1p-ignore="true"
         data-lpignore="true"
+        data-bwignore="true"
+        data-form-type="other"
         autoCapitalize="off"
         spellCheck={false}
         placeholder={codeLength === 6 ? "XXX-XXX" : "XXXX"}
@@ -430,6 +436,7 @@ export function CodeEntryForm({
         void submitCode(codeValue.current);
       }}
     >
+      <CodeProtectionNotice protection={protection} effectiveCodeLength={codeLength} />
       <label className="field">
         <span className="field-label">{fieldLabel || "Pickup code"}</span>
         {input}

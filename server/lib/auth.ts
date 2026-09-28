@@ -3,34 +3,44 @@ import type { Auth as AuthKind } from "../../shared/api.ts";
 import type { Auth, Context, Grant, Member } from "../context.ts";
 import { fail } from "./errors.ts";
 import { sha256 } from "./secrets.ts";
+import { isIP } from "node:net";
 
 /**
- * Relay answers on whatever address it is opened at, so nobody has to tell it its own address.
- * RELAY_ORIGIN pins one instead. Otherwise the scheme is the one the connection (or a trusted
- * proxy's X-Forwarded-Proto) reports, and the host is the one the browser addressed.
+ * A pinned origin determines cookie security behind a proxy. Without one, only localhost and
+ * literal IP hosts are accepted; the connection (or a trusted proxy) supplies the scheme.
  */
 const secure = (ctx: Context, req: FastifyRequest) =>
   ctx.config.origin ? ctx.config.origin.startsWith("https:") : req.protocol === "https";
 
 /**
- * The origin this request was made to. On unsafe requests that is the browser's Origin header,
- * which `checkCsrf` has already matched to this server.
+ * The expected origin, independent of the untrusted Origin request header.
  */
 export function requestOrigin(ctx: Context, req: FastifyRequest) {
   if (ctx.config.origin) return ctx.config.origin;
-  const origin = req.headers.origin;
-  return origin && sameHost(origin, req) ? origin : `${req.protocol}://${req.host}`;
+  return new URL(`${req.protocol}://${req.host}`).origin;
 }
 
 /**
- * An Origin naming the host this request was sent to. Only the host is compared: a proxy that
- * doesn't report https still serves the right site, and another site always has another host.
+ * Reject attacker-controlled DNS names before serving any content. Comparing Origin to Host
+ * alone does not stop DNS rebinding: an attacker can point their own hostname at a local Relay.
+ * The public health probe has no credentials or user data and also serves container-local probes.
  */
-function sameHost(origin: string, req: FastifyRequest) {
+export function checkHost(ctx: Context, req: FastifyRequest) {
+  if ((req.method === "GET" || req.method === "HEAD") && req.url.split("?")[0] === "/api/health") return;
+  let url: URL;
   try {
-    return new URL(origin).host === req.host.toLowerCase();
+    url = new URL(`http://${req.host}`);
   } catch {
-    return false;
+    return fail(403, "Invalid Relay host.");
+  }
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) fail(403, "Invalid Relay host.");
+  if (ctx.config.origin) {
+    // Compare canonical authorities, including a non-default port.
+    const expected = new URL(ctx.config.origin);
+    const actual = new URL(`${expected.protocol}//${req.host}`);
+    if (actual.host !== expected.host) fail(403, "This address is not the configured Relay origin.");
+  } else if (url.hostname !== "localhost" && !isIP(url.hostname.replace(/^\[|\]$/g, ""))) {
+    fail(403, "Set RELAY_ORIGIN to use Relay through a hostname. Local setup is available at localhost.");
   }
 }
 
@@ -52,15 +62,13 @@ type MemberRow = {
   csrf: string;
   username: string;
   admin: number;
-  quota: number;
-  retention_days: number | null;
 };
 
 /** Looks up a session token. Used by requests and by long-lived streams that re-check it. */
 export function memberFromToken(ctx: Context, token: string | undefined): Member | null {
   if (!token) return null;
   const row = ctx.db.get<MemberRow>(
-    `SELECT s.token_hash, s.user_id, s.device_id, s.csrf, u.username, u.admin, u.quota, u.retention_days
+    `SELECT s.token_hash, s.user_id, s.device_id, s.csrf, u.username, u.admin
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires > ? AND u.disabled = 0`,
     sha256(token),
@@ -72,8 +80,6 @@ export function memberFromToken(ctx: Context, token: string | undefined): Member
         userId: row.user_id,
         username: row.username,
         admin: !!row.admin,
-        quota: row.quota,
-        retentionDays: row.retention_days,
         sessionHash: row.token_hash,
         deviceId: row.device_id,
         csrf: row.csrf,
@@ -152,7 +158,7 @@ export function principalFor(ctx: Context, req: FastifyRequest, key: string): Me
 
 /**
  * Cross-site request protection for unsafe methods: the Origin must be ours (RELAY_ORIGIN when
- * set, else this request's own host; see `requestOrigin`), Fetch Metadata must
+ * set, else this request's validated host and scheme; see `requestOrigin`), Fetch Metadata must
  * not say cross-site, and, unless the route opts out, X-Relay-CSRF must match the token of the
  * credential the route acts on: the session's for member and admin routes, the session's or a
  * guest grant's for routes open to both.
@@ -160,8 +166,7 @@ export function principalFor(ctx: Context, req: FastifyRequest, key: string): Me
 export function checkCsrf(ctx: Context, req: FastifyRequest, route: { csrf?: boolean; auth?: AuthKind }) {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
   const origin = req.headers.origin;
-  if (origin && (ctx.config.origin ? origin !== ctx.config.origin : !sameHost(origin, req)))
-    fail(403, "Cross-origin requests are not allowed.");
+  if (origin && origin !== requestOrigin(ctx, req)) fail(403, "Cross-origin requests are not allowed.");
   if (req.headers["sec-fetch-site"] === "cross-site") fail(403, "Cross-site requests are not allowed.");
   if (route.csrf === false) return;
   const auth = authOf(ctx, req);

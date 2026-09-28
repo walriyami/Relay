@@ -34,7 +34,8 @@ npx playwright install --with-deps
 
 ## Tests
 
-- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, quotas, ZIP64 layout, links, requests and pickup codes.
+- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
+- **Resources** (`npm run test:resources`). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling in Chromium, Firefox and WebKit.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe.
 
 Tests never touch real data. Every instance uses a new temporary directory and generated files.
@@ -43,19 +44,20 @@ Tests never touch real data. Every instance uses a new temporary directory and g
 
 These scripts exercise Relay at a scale that's too slow for every commit. Each one uses disposable storage and generated content.
 
-| Command                                                  | What it checks                                                                                                                                           |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run verify:scale`                                   | Uploads a 2 GiB file with a server restart halfway through, then checks the download's SHA-256. Uploads 10,000 files and checks every ZIP path and hash. |
-| `npm run verify:browser-scale`                           | Sends 10,000 files through a real browser.                                                                                                               |
-| `npm run verify:container`                               | Builds the Docker image and checks the single-writer lock, recovery after `SIGKILL` and a full disk, on throwaway containers and volumes.                |
-| `npm run verify:deployment -- --run-live --origin <url>` | Smoke-tests a running instance end to end. It needs `RELAY_VERIFY_USERNAME` and `RELAY_VERIFY_PASSWORD`, and never runs without `--run-live`.            |
+| Command                                                  | What it checks                                                                                                                                                                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run verify:scale`                                   | Uploads a 2 GiB file with a server restart halfway through, then checks the download's SHA-256. Uploads 10,000 files and checks every ZIP path and hash.                                                         |
+| `npm run verify:browser-scale`                           | Sends 10,000 files through a real browser.                                                                                                                                                                       |
+| `npm run verify:container`                               | Builds the Docker image and checks the single-writer lock, recovery after `SIGKILL` and a full disk, on throwaway containers and volumes.                                                                        |
+| `npm run verify:compose`                                 | Runs the portable Compose stack with the prebuilt `relay-verify` image, checking compressed wire bytes, cache headers and the end-to-end deployment verifier. Build with `docker build -t relay-verify .` first. |
+| `npm run verify:deployment -- --run-live --origin <url>` | Smoke-tests a running instance end to end. It needs `RELAY_VERIFY_USERNAME` and `RELAY_VERIFY_PASSWORD`, and never runs without `--run-live`.                                                                    |
 
 Each script's header comment lists its options, for example `--size 80MiB --files 300` for a quick run.
 
 ## Conventions
 
 - **One API contract.** Add or change endpoints in `shared/api.ts` first. The server routes and client calls pick up its types.
-- **Database changes** go in `server/db/schema.sql`. Once a release has shipped, a schema change also bumps `SCHEMA_VERSION` in `server/db/database.ts` and adds an upgrade step there.
+- **Database changes** go in `server/db/schema.sql`. Incompatible prerelease schemas fail startup. Preserve any wanted data and use a new empty data directory after a schema change.
 - **Formatting and linting.** Prettier formats with a 120-character line width, and ESLint checks types, promises and React Hooks. Run `npm run check` before you open a pull request. It runs everything CI runs except the browser tests.
 - **Lint exceptions** are rare, and each one says why on the same line: `// eslint-disable-next-line <rule> -- <reason>`.
 - **Authorization** is required on every content and archive route, and every new route needs a test that proves outsiders are refused.

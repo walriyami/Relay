@@ -24,7 +24,9 @@
     "verify:scale": "node scripts/verify-scale.ts",
     "verify:browser-scale": "node scripts/verify-browser-scale.ts",
     "verify:container": "node scripts/verify-container.ts",
-    "verify:deployment": "node scripts/verify-deployment.ts"
+    "verify:compose": "node scripts/verify-compose.ts",
+    "verify:deployment": "node scripts/verify-deployment.ts",
+    "test:resources": "playwright test --config tests/resources/playwright.config.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

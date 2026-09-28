@@ -9,7 +9,7 @@ import {
   type Link,
   type Prefs,
 } from "../../api";
-import { copyText, downloadUrl, plural } from "../../lib/format";
+import { copyText, dateTime, downloadUrl, plural } from "../../lib/format";
 import { downloadZip, ownerSource } from "../../lib/source";
 import { notifyChange } from "../../lib/live";
 import { startTransfer, subscribe as onTransfers } from "../../lib/transfers";
@@ -164,6 +164,23 @@ function pickFiles() {
 export async function addFilesTo(c: Pick<ItemSummary, "id" | "name">) {
   const files = await pickFiles();
   if (!files.length) return;
+  const current = await loadItem(c.id);
+  if (current.linked || current.hardExpires !== null) {
+    const accepted = await confirmDialog({
+      title: `Add files to “${current.name}”?`,
+      body: [
+        `These files will be added to “${current.name}”.`,
+        current.linked && "Anyone with a working link can see each file as soon as it is saved.",
+        current.hardExpires !== null
+          ? `All content in this item is deleted forever by ${dateTime(current.hardExpires)}, including time in Trash. Adding files does not extend this deadline.`
+          : "This item has no maximum age deadline.",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      confirm: "Add files",
+    });
+    if (!accepted) return;
+  }
   const t = startTransfer({
     files: files.map((file) => ({ file, path: file.name })),
     folders: [],
@@ -212,7 +229,7 @@ export async function restoreItem(c: Pick<ItemSummary, "id" | "name">) {
   await call(api.items.restore, { params: { id: c.id } });
   dismissToastKey(undoKey(c.id));
   notifyChange("items");
-  toast(`Restored “${c.name}”`, { tone: "success" });
+  toast(`Restored “${c.name}”. Its hard deadline is unchanged.`, { tone: "success" });
 }
 
 export async function deleteItemForever(c: Pick<ItemSummary, "id" | "name">) {

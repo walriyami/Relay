@@ -9,6 +9,7 @@ import { route } from "../../lib/http.ts";
 import { sha256 } from "../../lib/secrets.ts";
 import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
 import { bytesLabel } from "../transfers/create.ts";
+import { allowedLinkDays } from "../auth/member-limits.ts";
 import { registerGuests, remaining, used } from "./guests.ts";
 
 const DAY_MS = 86_400_000;
@@ -48,6 +49,9 @@ function toRequest(ctx: Context, row: RequestRow): UploadRequest {
     receivedFiles: row.received_files,
     receivedBytes: row.received_bytes,
     usedBytes: left.held,
+    activeBytes: left.activeBytes,
+    trashBytes: left.trashBytes,
+    pendingBytes: left.pendingBytes,
     full: left.bytes === 0 || left.entries === 0,
     lastReceived: row.last_received,
   };
@@ -65,16 +69,14 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
   );
 
   route(app, ctx, api.requests.create, ({ member, body }) => {
+    // Save the original choices, not their clamped or later edited values, for retry identity.
+    const fingerprint = sha256(JSON.stringify([body.name, body.description, body.days, body.maxBytes]));
     const created = ctx.db.tx(() => {
-      const existing = ctx.db.get<RequestRow & { owner: string }>("SELECT * FROM requests WHERE id = ?", body.id);
-      if (
-        existing &&
-        (existing.owner !== member.userId ||
-          existing.name !== body.name ||
-          existing.description !== body.description ||
-          existing.expires - existing.created !== body.days * DAY_MS ||
-          existing.max_bytes !== body.maxBytes)
-      )
+      const existing = ctx.db.get<{ owner: string; creation_fingerprint: string }>(
+        "SELECT owner, creation_fingerprint FROM requests WHERE id = ?",
+        body.id,
+      );
+      if (existing && (existing.owner !== member.userId || existing.creation_fingerprint !== fingerprint))
         fail(409, "That request id is already in use.");
       if (!existing) {
         // Request tokens and pickup codes are derived from the id, and registry history is kept
@@ -84,17 +86,18 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
         const now = Date.now();
         const pickup = issuePickupCode(ctx.db, ctx.secrets, "request", body.id);
         ctx.db.run(
-          `INSERT INTO requests(id, owner, token_hash, name, description, created, expires, max_bytes, code_hash)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO requests(id, owner, token_hash, name, description, created, expires, max_bytes, code_hash, creation_fingerprint)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           body.id,
           member.userId,
           sha256(ctx.secrets.requestToken(body.id)),
           body.name,
           body.description,
           now,
-          now + body.days * DAY_MS,
+          now + allowedLinkDays(ctx, member.userId, body.days)! * DAY_MS,
           body.maxBytes,
           pickup.codeHash,
+          fingerprint,
         );
       }
       return ownedRequest(ctx, member.userId, body.id);
@@ -108,8 +111,9 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
       const request = ownedRequest(ctx, member.userId, params.id);
       if (request.closed !== null) fail(410, "This request was closed. Create a new request instead.");
       const now = Date.now();
-      const expires = body.days === null ? request.expires : now + body.days * DAY_MS;
-      if (expires <= now) fail(409, "This request has expired. Choose how long it stays open to reopen it.");
+      if (request.expires <= now) fail(410, "This request has expired. Create a new request instead.");
+      const expires =
+        body.days === null ? request.expires : now + allowedLinkDays(ctx, member.userId, body.days)! * DAY_MS;
       const held = used(ctx, request.id).bytes;
       if (body.maxBytes < held)
         fail(409, `This request already holds ${bytesLabel(held)}. Choose a size limit of at least that.`);
@@ -123,7 +127,7 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
       );
       // Guests already uploading keep going for exactly as long as the request now stays open.
       ctx.db.run("UPDATE guest_grants SET expires = ? WHERE request_id = ?", expires, request.id);
-      // A request that expired through a code rotation has no live code; reopening gives it one.
+      // An open request can recover a missing assignment without changing its public URL.
       if (!getPickupCode(ctx.db, ctx.secrets, "request", request.id)) {
         const issued = issuePickupCode(ctx.db, ctx.secrets, "request", request.id);
         ctx.db.run("UPDATE requests SET code_hash = ? WHERE id = ?", issued.codeHash, request.id);

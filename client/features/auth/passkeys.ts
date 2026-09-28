@@ -3,7 +3,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
 import { api, call } from "../../api";
-import { browserName } from "./device-name";
+import { browserName, thisDevice } from "./device-name";
 
 // The WebAuthn helper loads only when someone starts a passkey ceremony.
 const webauthn = () => import("@simplewebauthn/browser");
@@ -29,7 +29,7 @@ export async function signInWithPasskey() {
     // The browser's own wording ("Resident credentials … are not supported") means nothing to people.
     throw new Error("This browser couldn’t use a passkey. Sign in with your password instead.", { cause: error });
   }
-  return call(api.session.passkey, { body: { challenge, response: { ...response }, deviceName: browserName() } });
+  return call(api.session.passkey, { body: { challenge, response: { ...response }, ...thisDevice() } });
 }
 
 export async function addPasskey(password: string, name = browserName()) {

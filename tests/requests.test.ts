@@ -328,7 +328,7 @@ test("an expired request accepts nothing", async () => {
   }
 });
 
-test("a disabled request owner invalidates an existing guest session", async () => {
+test("suspending a request owner gates existing guest sessions until re-enabled", async () => {
   const { instance, owner, request } = await setup();
   try {
     const visitor = await guest(instance, request.token);
@@ -339,6 +339,9 @@ test("a disabled request owner invalidates an existing guest session", async () 
     assert.equal((await patchUpload(visitor, pending.uploads[0].id, 0, Buffer.alloc(2))).statusCode, 401);
     assert.equal(await status(visitor.call(api.requests.start, { params: { token: request.token } })), 410);
     assert.equal(await status(startTransfer(visitor, request.token, files(1))), 410);
+    await boss.call(api.admin.updateMember, { params: { id: user.id }, body: { disabled: false } });
+    assert.equal(await status(visitor.call(api.requests.start, { params: { token: request.token } })), 200);
+    await upload(visitor, pending, [2]);
   } finally {
     await instance.close();
   }
@@ -411,6 +414,23 @@ for (const removed of ["trashed", "expired"] as const) {
     }
   });
 }
+
+test("retrying an expired submission keeps its lazy expiry and reservation release", async () => {
+  const { instance, owner, request } = await setup();
+  try {
+    const visitor = await guest(instance, request.token);
+    const pending = await startTransfer(visitor, request.token, files(2, 3));
+    assert.equal((await patchUpload(visitor, pending.uploads[0].id, 0, Buffer.alloc(2))).statusCode, 204);
+    instance.ctx.db.run("UPDATE items SET expires = ? WHERE id = ?", Date.now() - 1, pending.itemId);
+    assert.equal(await status(startTransfer(visitor, request.token, files(2, 3), { id: pending.id })), 410);
+    assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", pending.id), "cancelled");
+    assert.ok(instance.ctx.db.value("SELECT trashed FROM items WHERE id = ?", pending.itemId));
+    const [held] = await owner.call(api.requests.list);
+    assert.deepEqual([held.usedBytes, held.activeBytes, held.trashBytes, held.pendingBytes], [2, 0, 2, 0]);
+  } finally {
+    await instance.close();
+  }
+});
 
 test("submissions are named after the guest, or after what they sent", async () => {
   const { instance, owner, request } = await setup({ maxBytes: 1000 });
@@ -649,7 +669,7 @@ test("a request's size limit can't go below what it holds, unfinished uploads in
   }
 });
 
-test("only the owner edits an open or expired request; closed requests are final", async () => {
+test("only the owner edits an open request; closed requests are final", async () => {
   const { instance, owner, request } = await setup();
   try {
     const stranger = await member(instance, "yuri");
@@ -675,47 +695,124 @@ test("only the owner edits an open or expired request; closed requests are final
   }
 });
 
-test("an expired request reopens with the same link and code, or a new code after a rotation", async () => {
+test("request expiry is final at the deadline, including after a pickup-code rotation", async (t) => {
   const { instance, owner, request } = await setup();
   try {
-    const expire = () =>
-      instance.ctx.db.run("UPDATE requests SET expires = ? WHERE id = ?", Date.now() - 1, request.id);
-    expire();
     const visitor = new Client(instance);
+    t.mock.timers.enable({ apis: ["Date"], now: request.expires - 1 });
+    assert.equal(await status(visitor.call(api.requests.open, { params: { token: request.token } })), 200);
+    t.mock.timers.setTime(request.expires);
     assert.equal(await status(visitor.call(api.requests.open, { params: { token: request.token } })), 410);
-    const stillExpired = await owner
-      .call(api.requests.update, { params: { id: request.id }, body: { ...edits(request), name: "Renamed" } })
-      .catch((e: ApiError) => e);
-    assert.equal((stillExpired as ApiError).status, 409, "renaming alone can't leave it expired and changed");
-    assert.match((stillExpired as ApiError).message, /Choose how long it stays open to reopen it\.$/);
-
-    const reopened = await owner.call(api.requests.update, {
-      params: { id: request.id },
-      body: { ...edits(request), days: 7 },
-    });
-    assert.deepEqual([reopened.token, reopened.code], [request.token, request.code]);
-    assert.deepEqual(await visitor.call(api.pickup.resolve, { body: { code: request.code } }), {
-      kind: "request",
-      path: `/r/${request.token}`,
-    });
-    const grant = await guest(instance, request.token);
-    await upload(grant, await startTransfer(grant, request.token, files(5)), [5]);
-
-    // A code rotation while it is expired retires its code; reopening issues a new one.
-    expire();
+    for (const days of [null, 7]) {
+      assert.equal(
+        await status(
+          owner.call(api.requests.update, {
+            params: { id: request.id },
+            body: { ...edits(request), name: "Renamed", days },
+          }),
+        ),
+        410,
+      );
+    }
+    assert.equal((await owner.call(api.requests.list))[0].name, request.name);
     await (await admin(instance)).call(api.admin.settings, { body: { codeLength: 4 } });
     assert.equal((await owner.call(api.requests.list))[0].code, "", "an expired request shows no code");
-    const again = await owner.call(api.requests.update, {
-      params: { id: request.id },
-      body: { ...edits(request), days: 1 },
-    });
-    assert.match(again.code, /^\d{4}$/);
-    assert.equal(again.token, request.token);
+    assert.equal(
+      await status(
+        owner.call(api.requests.update, {
+          params: { id: request.id },
+          body: { ...edits(request), days: 1 },
+        }),
+      ),
+      410,
+    );
     assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: request.code } })), 404);
-    assert.deepEqual(await visitor.call(api.pickup.resolve, { body: { code: again.code } }), {
-      kind: "request",
-      path: `/r/${request.token}`,
+    const fresh = await owner.call(api.requests.create, {
+      body: {
+        id: crypto.randomUUID(),
+        name: request.name,
+        description: request.description,
+        days: 1,
+        maxBytes: request.maxBytes,
+      },
     });
+    assert.notEqual(fresh.token, request.token);
+    assert.equal(await status(visitor.call(api.requests.open, { params: { token: fresh.token } })), 200);
+  } finally {
+    t.mock.timers.reset();
+    await instance.close();
+  }
+});
+
+test("request link caps bound creation and renewal; original retries survive clamps and edits", async (t) => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "xena");
+    const boss = await admin(instance);
+    const { user } = await owner.call(api.session.get);
+    await boss.call(api.admin.updateMember, {
+      params: { id: user.id },
+      body: { limits: { storage: null, keepDays: null, linkDays: 2 }, expectedLimits: user.limits },
+    });
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ["Date"], now });
+    const body = { id: crypto.randomUUID(), name: "Scans", description: "Original", days: 30, maxBytes: 100 };
+    const request = await owner.call(api.requests.create, { body });
+    assert.equal(request.expires, now + 2 * 86_400_000);
+    assert.deepEqual(
+      await owner.call(api.requests.create, {
+        body: { maxBytes: 100, days: 30, description: "Original", name: "Scans", id: body.id },
+      }),
+      request,
+    );
+    const visitor = await guest(instance, request.token);
+    t.mock.timers.setTime(now + 1000);
+    const edited = await owner.call(api.requests.update, {
+      params: { id: request.id },
+      body: { ...edits(request), name: "Updated", days: 20 },
+    });
+    assert.equal(edited.expires, now + 1000 + 2 * 86_400_000);
+    assert.equal(
+      instance.ctx.db.value("SELECT expires FROM guest_grants WHERE request_id = ?", request.id),
+      edited.expires,
+    );
+    assert.deepEqual(
+      await owner.call(api.requests.create, { body }),
+      edited,
+      "retry returns current state without restoring original choices",
+    );
+    assert.equal(await status(owner.call(api.requests.create, { body: { ...body, days: 20 } })), 409);
+    assert.equal(await status(visitor.call(api.requests.open, { params: { token: request.token } })), 200);
+    await owner.call(api.requests.close, { params: { id: request.id } });
+    assert.equal(
+      (await owner.call(api.requests.create, { body })).closed,
+      true,
+      "a retry never reopens a closed request",
+    );
+  } finally {
+    t.mock.timers.reset();
+    await instance.close();
+  }
+});
+
+test("request held bytes explain saved content, Trash, and pending reservations", async () => {
+  const { instance, owner, request } = await setup({ maxBytes: 12 });
+  try {
+    const visitor = await guest(instance, request.token);
+    await upload(visitor, await startTransfer(visitor, request.token, files(2)), [2]);
+    const trashed = await upload(visitor, await startTransfer(visitor, request.token, files(3)), [3]);
+    const expired = await upload(visitor, await startTransfer(visitor, request.token, files(3)), [3]);
+    await startTransfer(visitor, request.token, files(4));
+    await owner.call(api.items.trash, { params: { id: trashed.itemId } });
+    instance.ctx.db.run("UPDATE items SET expires = ? WHERE id = ?", Date.now() - 1, expired.itemId);
+    const [held] = await owner.call(api.requests.list);
+    assert.deepEqual([held.usedBytes, held.activeBytes, held.trashBytes, held.pendingBytes], [12, 2, 6, 4]);
+    assert.equal(held.full, true);
+    assert.equal(held.activeBytes + held.trashBytes + held.pendingBytes, held.usedBytes);
+    await owner.call(api.items.remove, { params: { id: trashed.itemId } });
+    const [freed] = await owner.call(api.requests.list);
+    assert.deepEqual([freed.usedBytes, freed.activeBytes, freed.trashBytes, freed.pendingBytes], [9, 2, 3, 4]);
+    assert.equal(freed.full, false);
   } finally {
     await instance.close();
   }

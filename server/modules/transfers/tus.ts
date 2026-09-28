@@ -1,6 +1,7 @@
 // tus 1.0 core (OPTIONS, HEAD, PATCH) on /uploads/:id. Uploads are created by transfers.create,
 // so no tus extensions are offered. Only the transfer's own principal can see an upload.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { ensureTransferAvailability, settleTransferAvailability } from "./availability.ts";
 import { headers } from "../../../shared/api.ts";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
@@ -23,9 +24,10 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
    * abandoned with its tab may be gone entirely, so the caller's own tab header is consulted too.
    */
   const access = (req: FastifyRequest) => {
+    const upload = uploadRow(ctx, (req.params as { id: string }).id);
+    if (upload) settleTransferAvailability(ctx, upload);
     const auth = authOf(ctx, req);
     if (!auth.member && !auth.grants.length) fail(401, "Sign in to continue.");
-    const upload = uploadRow(ctx, (req.params as { id: string }).id);
     const principal = upload ? principalFor(ctx, req, upload.principal) : null;
     if (!upload || !principal) {
       const tab = req.headers[headers.tab.toLowerCase()];
@@ -36,6 +38,7 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
       if (row && principalFor(ctx, req, row.principal)) fail(409, TAB_CLOSED);
       return notFound("That upload");
     }
+    ensureTransferAvailability(ctx, upload);
     if (!ctx.transfers.renewTab(upload.tab, principal)) fail(409, TAB_CLOSED);
     if (upload.state !== "open" && upload.state !== "complete") fail(410, "This transfer was cancelled.");
     if (upload.completed === null && upload.node === null) fail(410, "This file was removed from its transfer.");

@@ -4,10 +4,14 @@ import { fail } from "./errors.ts";
 import type { Secrets } from "./secrets.ts";
 import { normalizeCode } from "./secrets.ts";
 import { DEFAULT_CODE_LENGTH, type CodeLength } from "../../shared/codes.ts";
+import { pickupCodeHeightened } from "./pickup-code-guard.ts";
 
 export type PickupCodeKind = "share" | "request" | "invitation" | "device";
 type RegisteredCode = { code_hash: string; nonce: number };
 const SETTING = "pickupCodeLength";
+const EFFECTIVE_SETTING = "pickupCodeEffectiveLength";
+const RECOVERY_BLOCKED_SETTING = "pickupCodeRecoveryBlocked";
+const RESOLUTION_UNAVAILABLE_SETTING = "pickupCodeResolutionUnavailable";
 
 /** The code at `nonce` in the target's sequence, checked against the digest it was stored under. */
 function codeAt(secrets: Secrets, kind: PickupCodeKind, targetId: string, row: RegisteredCode, length: CodeLength) {
@@ -17,11 +21,18 @@ function codeAt(secrets: Secrets, kind: PickupCodeKind, targetId: string, row: R
   return code;
 }
 
-export function codeLengthOf(db: Database): CodeLength {
+export function preferredCodeLengthOf(db: Database): CodeLength {
   const value = db.setting(SETTING);
   if (value === undefined) return DEFAULT_CODE_LENGTH;
   if (value === "4" || value === "6") return Number(value) as CodeLength;
   throw new Error(`Invalid stored pickup code length: ${value}.`);
+}
+
+export function codeLengthOf(db: Database): CodeLength {
+  const value = db.setting(EFFECTIVE_SETTING) ?? db.setting(SETTING);
+  if (value === undefined) return DEFAULT_CODE_LENGTH;
+  if (value === "4" || value === "6") return Number(value) as CodeLength;
+  throw new Error(`Invalid stored effective pickup code length: ${value}.`);
 }
 
 /** Reserves a code in the permanent namespace, retrying collisions from every code length. */
@@ -32,6 +43,7 @@ export function issuePickupCode(
   targetId: string,
   length: CodeLength = codeLengthOf(db),
 ) {
+  ensurePickupCodeResolutionAvailable(db);
   return db.tx(() => {
     const prior = db.get<RegisteredCode>(
       "SELECT code_hash, nonce FROM pickup_codes WHERE kind = ? AND target_id = ? AND retired IS NULL",
@@ -62,6 +74,11 @@ export function issuePickupCode(
   });
 }
 
+export function ensurePickupCodeResolutionAvailable(db: Database) {
+  if (db.setting(RESOLUTION_UNAVAILABLE_SETTING) === "1")
+    fail(503, "Numeric pickup codes are temporarily unavailable. Use the original link or try again later.");
+}
+
 /** Returns the current active code, or null when this target has no current assignment. */
 export function getPickupCode(
   db: Database,
@@ -79,8 +96,8 @@ export function getPickupCode(
 }
 
 /** Rotates every live assignment and its source hash in one transaction, preserving all URLs. */
-export function rotatePickupCodes(ctx: Context, length: CodeLength) {
-  if (codeLengthOf(ctx.db) === length) return false;
+export function rotatePickupCodes(ctx: Context, length: CodeLength, preferredLength: CodeLength = length) {
+  if (codeLengthOf(ctx.db) === length && preferredCodeLengthOf(ctx.db) === preferredLength) return false;
   const now = Date.now();
   const owners = new Set<string>();
 
@@ -173,15 +190,72 @@ export function rotatePickupCodes(ctx: Context, length: CodeLength) {
       }
     }
 
-    ctx.db.setSetting(SETTING, String(length));
+    ctx.db.setSetting(SETTING, String(preferredLength));
+    ctx.db.setSetting(EFFECTIVE_SETTING, String(length));
+    ctx.db.setSetting(RECOVERY_BLOCKED_SETTING, "0");
+    ctx.db.setSetting(RESOLUTION_UNAVAILABLE_SETTING, "0");
   });
 
   for (const owner of owners) ctx.events.publish(owner, "account", "links", "items", "requests", "devices");
+  ctx.events.broadcast("codes");
   return true;
+}
+
+/** Changes the administrator's preference while keeping an active security override in force. */
+export function setPickupCodePreference(ctx: Context, length: CodeLength, now = Date.now()) {
+  const previousPreference = preferredCodeLengthOf(ctx.db);
+  if (length !== previousPreference) {
+    ctx.db.setSetting(RECOVERY_BLOCKED_SETTING, "0");
+    ctx.db.setSetting(RESOLUTION_UNAVAILABLE_SETTING, "0");
+    // Code entry shows the preference, even while a security override keeps the length.
+    ctx.events.broadcast("codes");
+  }
+  const effective = length === 4 && pickupCodeHeightened(ctx, now) ? 6 : length;
+  if (effective === codeLengthOf(ctx.db)) {
+    if (preferredCodeLengthOf(ctx.db) !== length) ctx.db.tx(() => ctx.db.setSetting(SETTING, String(length)));
+    return false;
+  }
+  try {
+    return rotatePickupCodes(ctx, effective, length);
+  } catch (error) {
+    if (codeLengthOf(ctx.db) === 4 && effective === 6 && (error as { status?: number }).status === 409) {
+      ctx.db.setSetting(RESOLUTION_UNAVAILABLE_SETTING, "1");
+      ctx.events.broadcast("codes");
+    }
+    throw error;
+  }
+}
+
+/** Applies the temporary six-digit mode, or restores the preference after sustained quiet. */
+export function reconcilePickupCodeMode(ctx: Context, now = Date.now()) {
+  const preferred = preferredCodeLengthOf(ctx.db);
+  const desired = preferred === 4 && pickupCodeHeightened(ctx, now) ? 6 : preferred;
+  const current = codeLengthOf(ctx.db);
+  if (current === desired) return false;
+  if (current === 4 && desired === 6 && ctx.db.setting(RESOLUTION_UNAVAILABLE_SETTING) === "1") return false;
+  if (current === 6 && desired === 4 && ctx.db.setting(RECOVERY_BLOCKED_SETTING) === "1") return false;
+  try {
+    return rotatePickupCodes(ctx, desired, preferred);
+  } catch (error) {
+    // Numeric codes use permanent tombstones. If the four-digit namespace is exhausted, the
+    // existing six-digit assignments remain active and links/QR URLs stay untouched.
+    if ((error as { status?: number }).status === 409 && current === 6 && desired === 4) {
+      ctx.db.setSetting(RECOVERY_BLOCKED_SETTING, "1");
+      ctx.events.broadcast("codes");
+      return false;
+    }
+    if ((error as { status?: number }).status === 409 && current === 4 && desired === 6) {
+      ctx.db.setSetting(RESOLUTION_UNAVAILABLE_SETTING, "1");
+      ctx.events.broadcast("codes");
+      return false;
+    }
+    throw error;
+  }
 }
 
 /** Returns a replacement only to the owner of the original recipient. */
 export function currentOwnedPickupCode(ctx: Context, memberId: string, rawCode: string): string | null {
+  if (ctx.db.setting(RESOLUTION_UNAVAILABLE_SETTING) === "1") return null;
   const code = normalizeCode(rawCode);
   if (!code) return null;
   const entry = ctx.db.get<{ kind: PickupCodeKind; target_id: string }>(

@@ -56,7 +56,7 @@ Every share gets a link, a QR code and a short numeric code. Links can expire, n
 
 ### 🗂️ A library that keeps everything
 
-Every completed upload is saved first, whether you shared it or not. Search, sort and preview images, video, audio, PDFs and text. Download any folder as a ZIP. Deleted items wait in Trash for 30 days, or as long as each person chooses.
+Every completed upload is saved first, whether you shared it or not. Search, sort and preview images, video, audio, PDFs and text. Download any folder as a ZIP. Deleted items wait in Trash for the chosen recovery period (30 days by default), bounded by the administrator's maximum content age.
 
 </td>
 </tr>
@@ -65,14 +65,14 @@ Every completed upload is saved first, whether you shared it or not. Search, sor
 
 ### 📥 Upload requests
 
-Ask someone without an account to send you files. They open a link, drop files in, and the files land in your library, counted against your quota.
+Ask someone without an account to send you files. They open a link, drop files in, and the files land in your library, counted as your storage.
 
 </td>
 <td valign="top">
 
 ### 🔐 Private by design
 
-Accounts are invite-only. Sign in with a password, a passkey, or a code from a device where you're already signed in. Administrators manage accounts and limits, but can't see anyone's files.
+Accounts are invite-only. Sign in with a password, a passkey, or a code from a device where you're already signed in. Administrators manage accounts and limits. Their dashboard does not browse members’ files, but administrators are trusted: resetting a member’s password lets them sign in as that member.
 
 </td>
 </tr>
@@ -117,7 +117,9 @@ cd relay
 docker compose up -d --build
 ```
 
-Open **http://localhost:3090**. Relay walks you through the rest in about a minute: create your administrator account, choose how much space and time everyone gets, and invite your first person. There's nothing to configure first.
+The default stack creates its own network and binds to loopback. For a containerized HTTPS proxy or tunnel, see the [optional network overlay](docs/self-hosting.md#proxy-in-another-container).
+
+Open **http://localhost:3090** to create your administrator account, choose member limits, and invite people. If others can reach the server before you finish setup, set `RELAY_SETUP_KEY=true` so setup also asks for a one-time key only the server's owner can read. For a public hostname, first set `RELAY_ORIGIN` to your HTTPS address; see [self-hosting](docs/self-hosting.md).
 
 > [!TIP]
 > To share Relay beyond your own machine, put it behind HTTPS. The [self-hosting guide](docs/self-hosting.md) covers reverse proxies, optional settings and updates.

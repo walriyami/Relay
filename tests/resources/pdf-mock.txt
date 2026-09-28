@@ -1,0 +1,114 @@
+// Deterministic page loading/render completion lets the actual React component exercise races.
+const stats = (window.resourceStats = {
+  loading: 0,
+  maxLoading: 0,
+  rendering: 0,
+  maxRendering: 0,
+  overlap: 0,
+  cleanups: 0,
+  cleanupDuringRender: 0,
+  documents: 0,
+  destroyed: 0,
+  workers: 0,
+  workersDestroyed: 0,
+  cancels: 0,
+});
+const stage = new URLSearchParams(location.search).get("stage");
+export const GlobalWorkerOptions = {};
+export class PDFWorker {
+  static create() {
+    return new PDFWorker();
+  }
+  promise =
+    stage === "worker"
+      ? new Promise((resolve) => {
+          window.releasePdfStage = resolve;
+        })
+      : Promise.resolve();
+  constructor() {
+    stats.workers++;
+  }
+  destroy() {
+    stats.workersDestroyed++;
+  }
+}
+export function getDocument({ url }) {
+  stats.documents++;
+  const cache = new Map();
+  const busy = new Set();
+  const doc = {
+    numPages: 300,
+    async getPage(number) {
+      stats.loading++;
+      stats.maxLoading = Math.max(stats.maxLoading, stats.loading);
+      await (stage === "page"
+        ? new Promise((resolve) => {
+            window.releasePdfStage = resolve;
+          })
+        : new Promise((resolve) => setTimeout(resolve, 8)));
+      stats.loading--;
+      if (!cache.has(number))
+        cache.set(number, {
+          getViewport({ scale }) {
+            // An extremely tall page also exercises the hard canvas-side limit.
+            return { width: 600 * scale, height: (number === 150 ? 60000 : 800) * scale };
+          },
+          render({ canvasContext, canvas }) {
+            if (busy.has(number)) stats.overlap++;
+            busy.add(number);
+            stats.rendering++;
+            stats.maxRendering = Math.max(stats.maxRendering, stats.rendering);
+            let done = false,
+              timer,
+              reject;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              busy.delete(number);
+              stats.rendering--;
+            };
+            const promise = new Promise((resolve, fail) => {
+              reject = fail;
+              if (!window.holdPdfRender)
+                timer = setTimeout(() => {
+                  canvasContext.fillStyle = "#abc";
+                  canvasContext.fillRect(0, 0, canvas.width, canvas.height);
+                  finish();
+                  resolve();
+                }, 100);
+            });
+            return {
+              promise,
+              cancel() {
+                if (done) return;
+                stats.cancels++;
+                clearTimeout(timer);
+                // Cancellation is deliberately not synchronous: the queue must wait before reuse.
+                setTimeout(() => {
+                  finish();
+                  reject(new Error("RenderingCancelledException"));
+                }, 70);
+              },
+            };
+          },
+          cleanup() {
+            stats.cleanups++;
+            if (busy.has(number)) stats.cleanupDuringRender++;
+          },
+        });
+      return cache.get(number);
+    },
+  };
+  return {
+    promise: url.includes("second")
+      ? Promise.reject(new Error("Bad document"))
+      : stage === "document"
+        ? new Promise((resolve) => {
+            window.releasePdfStage = () => resolve(doc);
+          })
+        : Promise.resolve(doc),
+    async destroy() {
+      stats.destroyed++;
+    },
+  };
+}
