@@ -5,7 +5,7 @@ import { composer, destinations, deviceContext, fileInput, signedIn, textFile, u
 test("only live devices are offered, and they disappear when closed", async ({ page, browser }) => {
   await signedIn(page, "Laptop");
   const targets = destinations(page);
-  await expect(targets.getByRole("button", { name: "Phone" })).toHaveCount(0);
+  await expect(targets.getByRole("button", { name: "Phone", exact: true })).toHaveCount(0);
   const phone = await deviceContext(browser, "Phone");
   try {
     // Other browser projects can already own these names; use the server's canonical labels.
@@ -23,7 +23,7 @@ test("only live devices are offered, and they disappear when closed", async ({ p
   } finally {
     await phone.context.close();
   }
-  await expect(targets.getByRole("button", { name: "Phone" })).toHaveCount(0, { timeout: 45_000 });
+  await expect(targets.getByRole("button", { name: "Phone", exact: true })).toHaveCount(0, { timeout: 45_000 });
   await expect(targets.getByText("Devices show up here while Relay is open on them.")).toBeVisible();
 });
 
@@ -38,7 +38,7 @@ test("a device accepts what your others send it: it downloads and opens in a pop
   await fileInput(page).setInputFiles([textFile(`${name}.txt`, "attached file")]);
   await writeText(page, `wifi password for ${name}`);
   const download = phone.page.waitForEvent("download");
-  await targets.getByRole("button", { name: "Phone" }).click({ timeout: 20_000 });
+  await targets.getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
   const card = page.locator(".transfer").first();
 
   // Auto-accept is on by default: the phone downloads the file (text is shown, never downloaded)
@@ -75,7 +75,7 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     // Declined in the popup: it stays in Files, and the sender is told so.
     const first = unique("declined");
     await writeText(page, `note ${first}`);
-    await destinations(page).getByRole("button", { name: "Phone" }).click({ timeout: 20_000 });
+    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
     const received = phone.page.getByRole("dialog", { name: new RegExp(`^Text`) });
     await expect(received.getByRole("region", { name: "Text" })).toContainText(`note ${first}`);
     await expect(received).toContainText("Also saved in your Files.");
@@ -89,7 +89,7 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     await phone.page.getByRole("button", { name: /^Account:/ }).click();
     const second = unique("waiting");
     await fileInput(page).setInputFiles([textFile(`${second}.txt`, "for later")]);
-    await destinations(page).getByRole("button", { name: "Phone" }).click({ timeout: 20_000 });
+    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
     await expect(page.locator(".transfer").first()).toContainText(/Sent to Phone( \d+)? · not accepted yet/);
     const popup = phone.page.getByRole("dialog", { name: `${second}.txt` });
     await expect(phone.page.getByRole("button", { name: /^Activity, \d+ new$/ })).toBeVisible();
@@ -138,7 +138,7 @@ test("a delivery that fails leaves everything saved, and Done keeps it in Files"
       }),
     );
     await fileInput(page).setInputFiles([textFile(`${name}.txt`, "for the phone")]);
-    await destinations(page).getByRole("button", { name: "Phone" }).click({ timeout: 20_000 });
+    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
     const card = page.locator(".transfer").first();
     await expect(card).toContainText("Saved, but not sent to Phone");
     // Nothing is running any more, so the drop box says so and offers Done.

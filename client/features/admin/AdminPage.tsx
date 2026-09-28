@@ -15,6 +15,7 @@ import {
 import { USERNAME } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { ago, bytes, dateTime, plural } from "../../lib/format";
+import { storageSummary } from "../../components/StorageMeter";
 import { notifyChange, useLive } from "../../lib/live";
 import type { CodeLength } from "../../../shared/codes";
 import { CodeProtectionNotice } from "../codes/CodeProtectionNotice";
@@ -177,9 +178,7 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
                   {u.disabled && <span className="pill danger">Suspended</span>}
                 </strong>
                 <span className="muted">
-                  {u.limits.storage === null
-                    ? `${bytes(u.usage.used)} saved · ${bytes(u.usage.reserved)} reserved`
-                    : `${bytes(u.usage.used)} saved · ${bytes(u.usage.reserved)} reserved of ${bytes(u.limits.storage)}${used > u.limits.storage ? " · Over limit" : ""}`}
+                  {storageSummary(u.usage, u.limits.storage)}
                   {" · "}
                   {u.lastActive ? `active ${ago(u.lastActive)}` : "never signed in on a device"}
                 </span>
@@ -338,7 +337,7 @@ function Capacity({ data, onSaved }: { data: Overview; onSaved: () => void }) {
       <div className="form-grid">
         <ByteSizeField
           label="Total storage"
-          hint={`${bytes(data.storage.used)} saved · ${bytes(data.storage.reserved)} reserved · ${bytes(data.storage.diskFree)} free on disk.${used > capacity ? " Over the total storage limit." : ""}`}
+          hint={`${bytes(data.storage.used)} saved${data.storage.reserved > 0 ? ` · ${bytes(data.storage.reserved)} uploading` : ""} · ${bytes(data.storage.diskFree)} free on disk.${used > capacity ? " Over the total storage limit." : ""}`}
           draft={draft}
           original={baseline}
           onChange={setDraft}
@@ -582,12 +581,7 @@ function ManageMember({
           <div className="limits-panel">
             <div className="limits-panel-head">
               <strong>Limits</strong>
-              <span className="muted">
-                {bytes(member.usage.used)} saved · {bytes(member.usage.reserved)} reserved
-                {member.limits.storage !== null && member.usage.used + member.usage.reserved > member.limits.storage
-                  ? " · Over limit"
-                  : ""}
-              </span>
+              <span className="muted">{storageSummary(member.usage, member.limits.storage)}</span>
             </div>
             {limits.stale && (
               <p className="notice" role="alert">

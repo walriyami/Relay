@@ -4,6 +4,20 @@ import type { Me } from "../api";
 import { bytes } from "../lib/format";
 import { ProgressBar } from "./ui";
 
+type Usage = Me["usage"];
+
+/** The whole picture in words. Uploads still arriving are only worth a mention while there are any. */
+export function storageSummary(usage: Usage, limit: number | null) {
+  const used = usage.used + usage.reserved;
+  return [
+    limit === null ? `${bytes(used)} used · ${bytes(usage.available)} free` : `${bytes(used)} of ${bytes(limit)} used`,
+    usage.reserved > 0 && `${bytes(usage.reserved)} uploading`,
+    limit !== null && used > limit && "Over limit",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** Used (including uploads still arriving), the most they could hold, and how it reads. */
 export function storageOf(me: Pick<Me, "usage" | "user">) {
   const used = me.usage.used + me.usage.reserved;
@@ -15,10 +29,14 @@ export function storageOf(me: Pick<Me, "usage" | "user">) {
     limit,
     // Near the end of the space, it says so in words as well as in the bar.
     tight: max > 0 && me.usage.available < max * 0.1,
-    summary:
+    /** Short enough for a menu: what matters most, in a few words. */
+    figure:
       limit === null
-        ? `${bytes(me.usage.used)} saved · ${bytes(me.usage.reserved)} reserved · ${bytes(me.usage.available)} free`
-        : `${bytes(me.usage.used)} saved · ${bytes(me.usage.reserved)} reserved of ${bytes(limit)}${used > limit ? " · Over limit" : ""}`,
+        ? `${bytes(me.usage.available)} free`
+        : used > limit
+          ? `Over limit · ${bytes(limit)}`
+          : `${bytes(used)} of ${bytes(limit)}`,
+    summary: storageSummary(me.usage, limit),
   };
 }
 

@@ -2948,12 +2948,15 @@ audio.preview-media {
 }
 .account-usage-line {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
 }
 .account-usage-line .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
 }

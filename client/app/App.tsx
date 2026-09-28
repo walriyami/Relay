@@ -545,7 +545,9 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
               <span className="account-usage-body">
                 <span className="account-usage-line">
                   <span>Usage</span>
-                  <span className="muted">{storage.summary}</span>
+                  <span className="muted" title={storage.summary}>
+                    {storage.figure}
+                  </span>
                 </span>
                 <span className="progress" aria-hidden>
                   <span

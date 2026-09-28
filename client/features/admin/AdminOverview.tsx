@@ -83,7 +83,7 @@ function Report({ data, report, range }: { data: Overview; report: AdminUsageRep
             color="var(--chart-2)"
             label="Saved"
             value={bytes(storage.used)}
-            detail={`${bytes(storage.reserved)} reserved · ${percent(used, report.capacity)} of ${bytes(report.capacity)}${used > report.capacity ? " · Over limit" : ""}`}
+            detail={`${storage.reserved > 0 ? `${bytes(storage.reserved)} uploading · ` : ""}${percent(used, report.capacity)} of ${bytes(report.capacity)}${used > report.capacity ? " · Over limit" : ""}`}
           />
         </div>
         <div role="listitem">

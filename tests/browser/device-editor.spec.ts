@@ -315,6 +315,10 @@ test("long device names and the editor fit small screens, dark mode, and enlarge
     const panelBox = (await panel.boundingBox())!;
     expect(editBox.x + editBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width);
     await page.mouse.move(0, 0);
+    await panel
+      .locator(".destination-wrap")
+      .filter({ hasText: remoteName })
+      .screenshot({ path: testInfo.outputPath(`${label}-row.png`) });
     await page.screenshot({ path: testInfo.outputPath(`${label}-destinations.png`), fullPage: true });
     await edit.click();
     const dialog = page.getByRole("dialog", { name: "Edit this device", exact: true });

@@ -37,7 +37,7 @@ test("a member sees what they keep and what they moved, from the account menu", 
     // The account menu says how full their storage is, and opens the rest.
     await member.getByRole("button", { name: /^Account/ }).click();
     const usage = member.getByRole("menuitem", { name: /^Usage/ });
-    await expect(usage).toContainText("2 MB saved · 0 B reserved of 10 MB");
+    await expect(usage).toContainText("2 MB of 10 MB");
     await usage.click();
     await expect(member).toHaveURL(/\/usage$/);
     await expect(member.getByRole("heading", { name: "Usage", level: 1 })).toBeVisible();

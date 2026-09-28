@@ -145,6 +145,16 @@ test("add-device code creation failure offers a retry and then shows the QR", as
 });
 
 const axeClean = async (page: Page) => {
+  // A popup fades and grows in; checked mid-way its text is still faint. Wait for entrances to end,
+  // leaving endless ones (spinners) running.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished.catch(() => {})),
+    ),
+  );
   const result = await new AxeBuilder({ page }).analyze();
   expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
 };
