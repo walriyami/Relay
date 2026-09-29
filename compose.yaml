@@ -17,8 +17,11 @@ services:
       # Caddy has a fixed address on the private backend network. Add any other
       # explicitly trusted proxies with RELAY_TRUST_PROXY.
       RELAY_TRUST_PROXY: ${RELAY_GATEWAY_IP:-172.31.247.2},${RELAY_TRUST_PROXY:-127.0.0.1,::1}
+      # Shared with relay-local, which passes on requests from browsers on this network.
+      RELAY_LOCAL: /run/relay-local
     volumes:
       - relay-data:/data
+      - relay-local:/run/relay-local
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -31,6 +34,33 @@ services:
       default:
         ipv4_address: ${RELAY_APP_IP:-172.31.247.3}
         aliases: [relay-app]
+
+  # Direct transfers: browsers on this host's network connect to it (WebRTC, UDP RELAY_LOCAL_PORT)
+  # and send uploads and downloads straight to Relay rather than over the internet. It needs the
+  # host's own network to be reached there; see docs/self-hosting.md.
+  relay-local:
+    image: relay:1.0.0
+    init: true
+    restart: unless-stopped
+    command: ["node", "local/main.ts"]
+    network_mode: host
+    environment:
+      RELAY_LOCAL: /run/relay-local
+      RELAY_LOCAL_PORT: ${RELAY_LOCAL_PORT:-3090}
+      # Optional. The addresses browsers are told to reach; unset, the host's private addresses.
+      RELAY_LOCAL_ADDRESSES: ${RELAY_LOCAL_ADDRESSES:-}
+    volumes:
+      - relay-local:/run/relay-local
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "local/health.ts"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
 
   # Stable loopback origin for an HTTPS proxy. Optional container-network
   # integration is configured separately; see compose.tunnel.yaml.
@@ -66,6 +96,7 @@ services:
 
 volumes:
   relay-data:
+  relay-local:
 
 networks:
   default:

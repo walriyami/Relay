@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Download, FolderDown, FolderOpen } from "lucide-react";
 import type { Node } from "../api";
-import { downloadUrl } from "../lib/format";
+import { download } from "../lib/download";
 import { downloadZip, type ContentSource } from "../lib/source";
 import { EntryBrowser } from "./EntryBrowser";
 import { FilePreview, PreviewViewer } from "./PreviewViewer";
@@ -16,7 +16,7 @@ export const isSingleFile = (nodes: Node[]) => filesOf(nodes).length === 1 && !n
 /** Downloads everything an item holds in place: a lone file as itself, anything else as a ZIP. */
 export function downloadContents(source: ContentSource, nodes: Node[], itemId: string) {
   const files = filesOf(nodes);
-  if (isSingleFile(nodes)) downloadUrl(source.file(files[0].id), files[0].name);
+  if (isSingleFile(nodes)) download(source.file(files[0].id), files[0].name);
   else downloadZip(source, itemId);
 }
 
@@ -77,7 +77,7 @@ export function ContentView({
               size="sm"
               label={`Download ${node.name}`}
               icon={<Download size={16} />}
-              onClick={() => downloadUrl(source.file(node.id), node.name)}
+              onClick={() => download(source.file(node.id), node.name)}
             />
           )}
           folderAction={({ node }) => (

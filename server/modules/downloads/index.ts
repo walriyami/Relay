@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context, ShareAccess } from "../../context.ts";
-import { memberFromToken, requireMember, sessionCookie } from "../../lib/auth.ts";
+import { currentMember, requireMember } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { ownedReadable } from "../library/items.ts";
 import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send } from "./serve.ts";
@@ -42,11 +42,10 @@ type Query = { inline?: string; folder?: string };
 export function registerDownloads(app: FastifyInstance, ctx: Context) {
   const thumbnail = createThumbnails(ctx);
 
-  const currentMember = (req: FastifyRequest) =>
-    memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)]) ?? fail(401, "Sign in to continue.");
-  const ownedItem = (req: FastifyRequest, id: string) => ownedReadable(ctx, currentMember(req).userId, id);
+  const signedIn = (req: FastifyRequest) => currentMember(ctx, req) ?? fail(401, "Sign in to continue.");
+  const ownedItem = (req: FastifyRequest, id: string) => ownedReadable(ctx, signedIn(req).userId, id);
   const ownedNode = (req: FastifyRequest, id: string) => {
-    const owner = currentMember(req).userId;
+    const owner = signedIn(req).userId;
     const node = ctx.db.get<NodeRow>(`${NODE} AND owner = ?`, id, owner) ?? notFound("That file");
     ownedReadable(ctx, owner, node.item);
     return node;
@@ -56,7 +55,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
   const shareAccess = (req: FastifyRequest<{ Params: Params }>) => {
     const access = ctx.links.content(req.params.token, req);
     // authOf caches the initial member. Its password bypass must not survive session revocation.
-    if (access.byOwner) currentMember(req);
+    if (access.byOwner) signedIn(req);
     return access;
   };
   /**

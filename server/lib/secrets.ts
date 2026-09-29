@@ -101,6 +101,23 @@ export class Secrets {
   pickupAddressKey(address: string) {
     return this.mac("pickup-address", address).toString("hex");
   }
+  /**
+   * Names a session to Relay's local socket. The helper attaches it to every request it forwards
+   * for a browser that set up its connection with that session; browsers never see it. It lasts as
+   * long as the session does.
+   */
+  localToken(sessionHash: string) {
+    return `${sessionHash}.${this.mac("local-session", sessionHash).toString("base64url")}`;
+  }
+  /** The session hash a local token names, or null when the token is not one of ours. */
+  localSession(token: unknown): string | null {
+    if (typeof token !== "string") return null;
+    const [hash, mac, extra] = token.split(".");
+    if (extra !== undefined || !/^[0-9a-f]{64}$/.test(hash) || !mac) return null;
+    const expected = this.mac("local-session", hash);
+    const actual = Buffer.from(mac, "base64url");
+    return actual.length === expected.length && timingSafeEqual(actual, expected) ? hash : null;
+  }
   /** Stable sign-in URL secret for a pending device code; unlike the numeric code, this never rotates. */
   deviceToken(codeId: string) {
     return this.mac("device-code-link", codeId).toString("base64url");

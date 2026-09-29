@@ -12,8 +12,9 @@ COPY --from=build --chown=node:node /app/package*.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/server ./server
 COPY --from=build --chown=node:node /app/shared ./shared
+COPY --from=build --chown=node:node /app/local ./local
 COPY --from=build --chown=node:node /app/dist ./dist
-RUN mkdir -m 0700 /data && chown node:node /data
+RUN mkdir -m 0700 /data /run/relay-local && chown node:node /data /run/relay-local
 USER node
 EXPOSE 3090
 HEALTHCHECK --interval=20s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:3090/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"

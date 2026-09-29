@@ -162,16 +162,6 @@ export async function copyText(value: string) {
     return ok;
   }
 }
-// Starts a download in place. Never opens a tab.
-export function downloadUrl(url: string, name?: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name || "";
-  a.rel = "noopener";
-  document.body.append(a);
-  a.click();
-  a.remove();
-}
 /** "Text · 38 characters": how lists name text, never by its content, which is often private. */
 export function textLabel(text: string) {
   const chars = [...text].length;

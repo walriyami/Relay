@@ -9,9 +9,18 @@ export type LocalPrefs = {
   popups: boolean;
   sound: boolean;
   system: boolean;
+  /** Uploads and downloads go straight to Relay while this browser is on its network. */
+  direct: boolean;
 };
 const KEY = "relay-local-prefs";
-const defaults: LocalPrefs = { theme: "system", autoAccept: true, popups: true, sound: false, system: false };
+const defaults: LocalPrefs = {
+  theme: "system",
+  autoAccept: true,
+  popups: true,
+  sound: false,
+  system: false,
+  direct: true,
+};
 function read(): LocalPrefs {
   try {
     return { ...defaults, ...(JSON.parse(localStorage.getItem(KEY) || "{}") as Partial<LocalPrefs>) };
@@ -32,14 +41,14 @@ export function setLocalPrefs(patch: Partial<LocalPrefs>) {
   listeners.forEach((fn) => fn());
 }
 export const getLocalPrefs = () => prefs;
+export function subscribeLocalPrefs(fn: () => void) {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
 export function useLocalPrefs() {
-  return useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn);
-      return () => listeners.delete(fn);
-    },
-    () => prefs,
-  );
+  return useSyncExternalStore(subscribeLocalPrefs, () => prefs);
 }
 export function applyTheme() {
   const dark =

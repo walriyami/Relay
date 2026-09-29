@@ -112,6 +112,8 @@ export type Me = {
   device: { id: Id; name: string; kind: DeviceKind };
   prefs: Prefs;
   usage: Usage;
+  /** The server offers direct transfers on the local network (see shared/local.ts). */
+  local: boolean;
 };
 
 /** What a device is, from its browser when it signed in; it picks the icon, whatever the name. */
@@ -384,7 +386,14 @@ export type AdminOverview = {
     capacity: number;
   };
   activity: { activeUploads: number; receivedBytesLastHour: number };
+  local: LocalStatus;
 };
+/**
+ * Direct transfers on the local network. off: RELAY_LOCAL is not set. down: the relay-local helper
+ * isn't answering. ready: browsers on these addresses' networks can connect.
+ */
+export type LocalStatus =
+  { state: "off" } | { state: "down" } | { state: "ready"; addresses: string[]; port: number; links: number };
 
 /** The periods Usage and Admin can show: days, or calendar months. */
 export const USAGE_RANGES = ["7d", "30d", "90d", "12m"] as const;

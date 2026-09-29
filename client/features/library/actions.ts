@@ -9,7 +9,8 @@ import {
   type Link,
   type Prefs,
 } from "../../api";
-import { copyText, dateTime, downloadUrl, plural } from "../../lib/format";
+import { download } from "../../lib/download";
+import { copyText, dateTime, plural } from "../../lib/format";
 import { downloadZip, ownerSource } from "../../lib/source";
 import { notifyChange } from "../../lib/live";
 import { startTransfer, subscribe as onTransfers } from "../../lib/transfers";
@@ -69,7 +70,7 @@ export async function downloadItem(c: ItemSummary | ItemDetail) {
         : c.preview?.kind === "file"
           ? c.preview
           : (await loadItem(c.id)).nodes.find((n) => n.kind === "file");
-    if (file) return downloadUrl(ownerSource.file(file.id), file.name);
+    if (file) return download(ownerSource.file(file.id), file.name);
   }
   downloadZip(ownerSource, c.id);
 }

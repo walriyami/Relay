@@ -38,6 +38,7 @@ import {
 } from "../api";
 import { navigate, useRoute, useSearch } from "../lib/router";
 import { connectLive, disconnectLive, onChange } from "../lib/live";
+import { startLink, stopLink } from "../lib/local/link";
 import { coalesce } from "../lib/coalesce";
 import { abandonAll, isBusy, setTransferPrefs, transfers } from "../lib/transfers";
 import { clearDraft } from "../lib/draft";
@@ -51,6 +52,7 @@ import { FilesPage } from "../features/library/FilesPage";
 import { ActivityProvider } from "../features/activity/ActivityProvider";
 import { ActivityButton } from "../features/activity/ActivityButton";
 import { CodeButton } from "../features/codes/CodeButton";
+import { DirectButton } from "../features/direct/DirectButton";
 import { CodeProtectionBanner } from "../features/codes/CodeProtectionNotice";
 import { LinksPage } from "../features/links/LinksPage";
 import { RequestsPage } from "../features/requests/RequestsPage";
@@ -293,6 +295,12 @@ function Private() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect only when the signed-in user or device changes.
   }, [me?.user.id, me?.device.id]);
+  // The direct connection acts for this sign-in; another needs its own.
+  useEffect(() => {
+    if (!me?.local) return;
+    startLink();
+    return stopLink;
+  }, [me?.user.id, me?.device.id, me?.local]);
   if (loading)
     return (
       <main className="boot" tabIndex={-1}>
@@ -464,6 +472,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
               })}
             </nav>
             <div className="topbar-actions">
+              <DirectButton />
               <CodeButton />
               <ActivityButton />
               <AccountMenu onSignedOut={onSignedOut} active={["/settings", "/usage", "/admin"].includes(section)} />
@@ -676,6 +685,7 @@ export async function signOut(to = "/") {
   await abandonAll();
   // Closed first, so the server's "signed out" notice for this device doesn't come back to this tab.
   disconnectLive();
+  stopLink();
   await call(api.session.signOut).catch(() => {});
   clearDraft();
   setPrincipal(null);

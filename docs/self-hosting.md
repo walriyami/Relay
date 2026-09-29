@@ -1,10 +1,11 @@
 # Self-hosting
 
-Relay's Compose stack runs the app and a bundled gateway, with one persistent data volume for the app. This guide covers a production setup behind HTTPS.
+Relay's Compose stack runs the app, a bundled gateway and a helper for [direct transfers](#direct-transfers-on-your-network), with one persistent data volume for the app. This guide covers a production setup behind HTTPS.
 
 - [Requirements](#requirements)
 - [Install with Docker Compose](#install-with-docker-compose)
 - [Put it behind HTTPS](#put-it-behind-https)
+- [Direct transfers on your network](#direct-transfers-on-your-network)
 - [Configuration](#configuration)
 - [First sign-in and members](#first-sign-in-and-members)
 - [Limits and storage](#limits-and-storage)
@@ -33,7 +34,7 @@ Relay now listens on `127.0.0.1:3090`, which only this machine can reach. Put a 
 > [!IMPORTANT]
 > Until the administrator exists, whoever opens Relay first creates it. If others can reach the server before you do, set `RELAY_SETUP_KEY=true`: setup then also asks for a one-time key from the server. Run `docker compose exec relay cat /data/setup.key`, or for a direct Node installation read `<RELAY_DATA>/setup.key` (default `.data/setup.key`). The key survives restarts until the administrator is created and is then deleted. Keep it private. Existing installations never ask for it. For remote local setup, use `ssh -L 3090:localhost:3090 your-server`, then open http://localhost:3090.
 
-Both containers run as unprivileged users with read-only root filesystems and `no-new-privileges`. The app drops all Linux capabilities; the gateway retains only `NET_BIND_SERVICE`, required by its Caddy binary. The app's data volume is persistent; temporary writable directories use bounded memory-backed filesystems.
+All three containers run as unprivileged users with read-only root filesystems and `no-new-privileges`. The app and the helper drop all Linux capabilities; the gateway retains only `NET_BIND_SERVICE`, required by its Caddy binary. The app's data volume is persistent; temporary writable directories use bounded memory-backed filesystems.
 
 > [!IMPORTANT]
 > Run exactly **one** Relay container per data volume. The database takes an exclusive lock, so a second process on the same volume fails at startup. That is intended, so don't add replicas.
@@ -101,6 +102,35 @@ Direct Node deployments trust loopback by default. Compose additionally trusts t
 
 For a tunnel plus gateway, set `RELAY_CADDY_TRUSTED_PROXIES` to the space-separated addresses/CIDRs of the trusted connector chain. Caddy uses strict forwarded-address parsing, rejects untrusted forwarded addresses, and sends the verified client address to Relay. Relay trusts only the gateway for this handoff. Keep the app port private; never trust a header just because its name is `CF-Connecting-IP` or `X-Forwarded-For`. Verify distinct client addresses on a disposable instance before relying on per-IP limits.
 
+## Direct transfers on your network
+
+When a member is on the same network as the server, their uploads and downloads can skip the internet connection and go straight to Relay, at the speed of the local network. The Compose stack includes this as the `relay-local` container. Devices need nothing set up: no certificates, host names or apps.
+
+After someone signs in, their browser tries a direct connection in the background. If it works, a **Direct** button appears in the top bar and their transfers go direct. The button switches this off, and on again, for that browser. Anywhere else the connection never works, the button never appears and nothing changes. If a direct connection drops mid-transfer, the transfer carries on the usual way from where it was.
+
+How it works: `relay-local` runs on the host's own network and listens on UDP port `RELAY_LOCAL_PORT` (default `3090`). Relay introduces each signed-in browser to it, and the browser connects with WebRTC, encrypted end to end between the two. The helper passes the browser's upload chunks and file and ZIP downloads to Relay through a private socket in the `relay-local` volume, as the member who signed in. Nothing else travels that way, so sign-in, links, upload requests and guests always use the usual way.
+
+Requirements:
+
+- **Linux with Docker Engine.** The helper uses the host's network (`network_mode: host`). Docker Desktop on macOS and Windows runs containers in a virtual machine that other devices can't reach, so there direct transfers stay unavailable and everything works as before.
+- **UDP `RELAY_LOCAL_PORT` open to your local network** in the host's firewall. With ufw, for example, `sudo ufw allow from 192.168.1.0/24 to any port 3090 proto udp`. Don't forward it on your router; only devices on your own network need it.
+- **Devices that can reach the host.** Guest Wi-Fi and access points with client isolation keep devices apart, and so do most VPNs; their transfers go the usual way.
+
+The helper tells browsers to reach it at the host's private addresses (`10.x`, `172.16–31.x`, `192.168.x` and unique local IPv6), skipping Docker and virtual machine bridges. If those include addresses your devices can't reach, list the right ones in `RELAY_LOCAL_ADDRESSES`.
+
+**Admin → Overview** shows where direct transfers are offered and how many browsers are connected, and warns when the helper stops answering. Its log is `docker compose logs relay-local`.
+
+To turn direct transfers off for everyone, add this to `compose.override.yaml`, then run `docker compose up -d` and `docker compose rm -sf relay-local`:
+
+```yaml
+services:
+  relay:
+    environment:
+      RELAY_LOCAL: ""
+  relay-local:
+    profiles: [off]
+```
+
 ## Configuration
 
 Relay reads its configuration from environment variables. With Docker Compose, set them in `.env`.
@@ -117,6 +147,9 @@ Relay reads its configuration from environment variables. With Docker Compose, s
 | `RELAY_DATA`                  | `.data`           | Data directory. Set to `/data` in the image.                                                                                                                                                    |
 | `HOST`                        | `127.0.0.1`       | Listen address. Set to `0.0.0.0` in the image.                                                                                                                                                  |
 | `PORT`                        | `3090`            | Listen port.                                                                                                                                                                                    |
+| `RELAY_LOCAL`                 | none              | Directory shared with the `relay-local` helper, which offers direct transfers. Unset, there are none. Compose sets it for both.                                                                 |
+| `RELAY_LOCAL_PORT`            | `3090`            | UDP port the helper listens on for direct connections.                                                                                                                                          |
+| `RELAY_LOCAL_ADDRESSES`       | host's private    | Comma-separated IP addresses browsers are told to reach the helper at, instead of the host's private addresses.                                                                                 |
 
 An invalid value stops Relay at startup with a message naming the variable.
 
@@ -186,6 +219,13 @@ RELAY_DATA=/var/lib/relay npm start
 ```
 
 Run it under a process manager such as systemd, and give it the same reverse proxy setup as above. `npm start` serves both the API and the built web app.
+
+For [direct transfers](#direct-transfers-on-your-network), also run the helper as a second service, with the same `RELAY_LOCAL` directory for both:
+
+```sh
+RELAY_LOCAL=/run/relay-local RELAY_DATA=/var/lib/relay npm start
+RELAY_LOCAL=/run/relay-local node local/main.ts
+```
 
 ### Time and restored backups
 

@@ -23,6 +23,11 @@ export type Config = {
   logger: boolean;
   /** Serves the built client from dist/ when present. */
   serveClient: boolean;
+  /**
+   * The directory Relay shares with the relay-local helper, which offers direct transfers on the
+   * local network (see shared/local.ts). Unset, there are none.
+   */
+  local?: string;
 };
 
 export function configFromEnv(env = process.env): Config {
@@ -36,6 +41,7 @@ export function configFromEnv(env = process.env): Config {
     sweepMs: 60_000,
     logger: true,
     serveClient: true,
+    local: env.RELAY_LOCAL ? resolve(env.RELAY_LOCAL) : undefined,
   };
 }
 

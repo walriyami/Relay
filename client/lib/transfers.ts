@@ -18,6 +18,7 @@ import {
   type Prefs,
 } from "../api";
 import { autoName, copyText, shareUrl } from "./format";
+import { LocalFailure, routeFor, send, tusStack, type Route } from "./local/transport";
 import { isOnline, isProxyFailure, onConnectivity, reportFailure, whenOnline, whenSettled } from "./connection";
 import { notifyChange } from "./live";
 import { eventStream } from "./event-stream";
@@ -118,9 +119,10 @@ export type Transfer = {
   rejected?: 413 | 507;
 };
 
-// Chunks are sized so one request takes about CHUNK_SECONDS at the rate requests are achieving: a
-// slow uplink still finishes each well inside the server's two-minute request timeout, and a fast
-// one sends few requests. Until a rate is known, the first chunks are small.
+// Chunks are sized so one request takes about CHUNK_SECONDS at the rate requests are achieving on
+// its route: a slow uplink still finishes each well inside the server's two-minute request timeout,
+// and a fast one (the direct connection, say) sends few requests. Until a rate is known, the first
+// chunks are small.
 const CHUNK_MIN = 256 * 1024;
 const CHUNK_START = 1024 ** 2;
 const CHUNK_MAX = LIMITS.chunkBytes;
@@ -147,8 +149,8 @@ const running = new Map<string, Set<FileTask>>();
 /** Per transfer, when it last started a task, so transfers with equal shares take turns. */
 const turns = new Map<string, number>();
 let turn = 0;
-/** Smoothed bytes per second of one upload request, shared by every upload in the tab. */
-let requestRate = 0;
+/** Smoothed bytes per second of one upload request on each route, shared by every upload in the tab. */
+const rates: Record<Route, number> = { direct: 0, relay: 0 };
 /** Per transfer, the index of the first task that may still be queued. */
 const cursors = new Map<string, number>();
 /** The account preferences uploads follow. */
@@ -511,57 +513,57 @@ function settle(t: Transfer) {
  * Records what one upload request achieved. A short request mostly measures latency, so only one
  * that carried at least a minimum chunk, or ran for seconds, says what the connection can do.
  */
-function measure(bytes: number, ms: number) {
+function measure(route: Route, bytes: number, ms: number) {
   if (ms <= 0 || (bytes < CHUNK_MIN && ms < 5000)) return;
   const rate = (bytes * 1000) / ms;
-  requestRate = requestRate ? requestRate * 0.7 + rate * 0.3 : rate;
+  rates[route] = rates[route] ? rates[route] * 0.7 + rate * 0.3 : rate;
 }
-const chunkSize = () =>
-  requestRate
-    ? Math.min(CHUNK_MAX, Math.max(CHUNK_MIN, Math.floor((requestRate * CHUNK_SECONDS) / CHUNK_MIN) * CHUNK_MIN))
+const chunkSize = (route: Route) =>
+  rates[route]
+    ? Math.min(CHUNK_MAX, Math.max(CHUNK_MIN, Math.floor((rates[route] * CHUNK_SECONDS) / CHUNK_MIN) * CHUNK_MIN))
     : CHUNK_START;
 
 /**
  * Sends a whole file in one PATCH. Only for a file that fits in one chunk and has never been tried:
  * its upload was just created at offset 0, so asking the server first (tus's HEAD) would only confirm
- * that. Anything but success is "retry", and the tus client then asks where the upload stands.
+ * that. A response retrying cannot fix fails the task as the tus client's would, carrying the
+ * response the same way; anything else is "retry", and the tus client then asks where the upload
+ * stands.
  */
-/**
- * Sends a small file in one request. A response retrying cannot fix fails the task as the tus
- * client's would, carrying the response the same way; anything else is resumed through tus.
- */
-function sendWhole(task: FileTask, onProgress: (sent: number) => void, onStop: (stop: () => void) => void) {
-  return new Promise<"done" | "stopped" | "retry">((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const started = performance.now();
-    xhr.open("PATCH", urls.upload(task.uploadId!));
-    const all = {
+async function sendWhole(
+  task: FileTask,
+  route: Route,
+  onProgress: (sent: number) => void,
+  onStop: (stop: () => void) => void,
+): Promise<"done" | "stopped" | "retry"> {
+  const started = performance.now();
+  const sending = send(route, {
+    method: "PATCH",
+    url: urls.upload(task.uploadId!),
+    headers: {
       "Tus-Resumable": "1.0.0",
       "Upload-Offset": "0",
       "Content-Type": "application/offset+octet-stream",
       ...writeHeaders(),
-    };
-    for (const [name, value] of Object.entries(all)) xhr.setRequestHeader(name, value);
-    xhr.upload.onprogress = (event) => onProgress(event.loaded);
-    xhr.onload = () => {
-      const offset = xhr.getResponseHeader("Upload-Offset");
-      if (xhr.status === 204 && offset === String(task.file.size)) {
-        measure(task.file.size, performance.now() - started);
-        return resolve("done");
-      }
-      if (!isFinal(xhr.status, offset)) return resolve("retry");
-      const response = {
-        getStatus: () => xhr.status,
-        getBody: () => xhr.responseText,
-        getHeader: (name: string) => xhr.getResponseHeader(name),
-      };
-      reject(Object.assign(new Error(`Upload failed with ${xhr.status}.`), { originalResponse: response }));
-    };
-    xhr.onerror = () => resolve("retry");
-    xhr.onabort = () => resolve("stopped");
-    onStop(() => xhr.abort());
-    xhr.send(task.file);
+    },
+    body: task.file,
+    onProgress,
   });
+  onStop(sending.abort);
+  let answer: Awaited<typeof sending.answer>;
+  try {
+    answer = await sending.answer;
+  } catch (error) {
+    return error instanceof DOMException && error.name === "AbortError" ? "stopped" : "retry";
+  }
+  const offset = answer.header("Upload-Offset");
+  if (answer.status === 204 && offset === String(task.file.size)) {
+    measure(route, task.file.size, performance.now() - started);
+    return "done";
+  }
+  if (!isFinal(answer.status, offset)) return "retry";
+  const response = { getStatus: () => answer.status, getBody: () => answer.text, getHeader: answer.header };
+  throw Object.assign(new Error(`Upload failed with ${answer.status}.`), { originalResponse: response });
 }
 
 function uploadMessage(error: unknown) {
@@ -601,10 +603,13 @@ async function runTask(t: Transfer, task: FileTask) {
     task.stop = undefined;
     if (task.status === "uploading") requeue(t, task);
   };
+  const member = !t.guest;
+  const uploadUrl = urls.upload(task.uploadId!);
   try {
-    if (!task.started && task.file.size <= chunkSize()) {
+    const whole = routeFor("PATCH", uploadUrl, member);
+    if (!task.started && task.file.size <= chunkSize(whole)) {
       task.started = true;
-      const outcome = await sendWhole(task, progress, (stop) => {
+      const outcome = await sendWhole(task, whole, progress, (stop) => {
         task.stop = () => {
           aborted = true;
           stop();
@@ -627,14 +632,21 @@ async function runTask(t: Transfer, task: FileTask) {
     };
     const { Upload } = await loadTus();
     if (aborted) return requeueStopped();
-    // When the request that is sending bytes began, and from which offset; zero between requests.
+    // The route of the request tus sent last; when the request sending bytes began, and from which
+    // offset (zero between requests).
+    let route: Route = "relay";
     let requestStart = 0;
     let requestFrom = 0;
     await new Promise<void>((resolve, reject) => {
       const upload = new Upload(task.file, {
-        uploadUrl: location.origin + urls.upload(task.uploadId!),
+        uploadUrl: location.origin + uploadUrl,
         headers: writeHeaders(),
-        chunkSize: chunkSize(),
+        chunkSize: CHUNK_START,
+        // Each request's chunk is sized for the route it takes, as tus opens it.
+        httpStack: tusStack(member, (next) => {
+          route = next;
+          upload.options.chunkSize = chunkSize(next);
+        }),
         retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
         storeFingerprintForResuming: false,
         onBeforeRequest: (req) => {
@@ -643,15 +655,16 @@ async function runTask(t: Transfer, task: FileTask) {
           requestFrom = task.sent;
         },
         onShouldRetry: (error) => {
+          // A chunk cut short still shows the rate it was getting.
+          if (requestStart) {
+            measure(route, task.sent - requestFrom, performance.now() - requestStart);
+            requestStart = 0;
+          }
+          // The direct connection failed and is dropped; sent again, the request goes the usual way.
+          if (error.causingError instanceof LocalFailure) return true;
           const response = error.originalResponse;
           const status = response?.getStatus() ?? 0;
           if (!status || isProxyFailure(status)) reportFailure();
-          // A chunk cut short still shows the rate it was getting, and the retry is sized to match.
-          if (requestStart) {
-            measure(task.sent - requestFrom, performance.now() - requestStart);
-            requestStart = 0;
-            upload.options.chunkSize = chunkSize();
-          }
           // While Relay can't be reached, the task goes back to the queue and continues when it can.
           if (!isOnline()) return false;
           if (isFinal(status, response?.getHeader("Upload-Offset") ?? null)) return false;
@@ -662,10 +675,8 @@ async function runTask(t: Transfer, task: FileTask) {
         onProgress: progress,
         onChunkComplete: (chunk, bytesAccepted) => {
           accepted = bytesAccepted;
-          if (requestStart) measure(chunk, performance.now() - requestStart);
+          if (requestStart) measure(route, chunk, performance.now() - requestStart);
           requestStart = 0;
-          // tus reads the size afresh for every chunk.
-          upload.options.chunkSize = chunkSize();
         },
         onError: reject,
         onSuccess: () => resolve(),
@@ -687,11 +698,13 @@ async function runTask(t: Transfer, task: FileTask) {
     task.stop = undefined;
     task.sent = Math.min(task.sent, accepted);
     const status = (error as DetailedError).originalResponse?.getStatus();
-    if (!status || isProxyFailure(status)) {
+    // Out of retries on a direct failure says nothing about the usual way; the task just fails.
+    const direct = (error as DetailedError).causingError instanceof LocalFailure;
+    if (!direct && (!status || isProxyFailure(status))) {
       reportFailure();
       await whenSettled();
     }
-    if (stopped(t) || t.status === "paused" || ((!status || isProxyFailure(status)) && !isOnline()))
+    if (stopped(t) || t.status === "paused" || (!direct && (!status || isProxyFailure(status)) && !isOnline()))
       return requeueStopped();
     if (status === 401) window.dispatchEvent(new Event("relay-session-expired"));
     else if (status === 404 && !t.guest) {

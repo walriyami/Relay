@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
 import type { NodeRef } from "../api";
-import { bytes, downloadUrl, kindLabel, previewKind } from "../lib/format";
+import { download } from "../lib/download";
+import { bytes, kindLabel, previewKind } from "../lib/format";
 import type { ContentSource } from "../lib/source";
 import { PdfPreview } from "./PdfPreview";
 import { FileTypeIcon } from "./Thumbnail";
@@ -289,7 +290,7 @@ export function PreviewViewer({
             size="sm"
             variant="primary"
             icon={<Download size={16} />}
-            onClick={() => downloadUrl(source.file(entry.id), entry.name)}
+            onClick={() => download(source.file(entry.id), entry.name)}
           >
             Download
           </Button>

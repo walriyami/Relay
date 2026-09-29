@@ -1,5 +1,5 @@
 import { urls } from "../api";
-import { downloadUrl } from "./format";
+import { download } from "./download";
 
 // Where content comes from: the owner's library (deliveries too — they are the owner's own items)
 // or a public link token (links and pickup codes).
@@ -23,5 +23,5 @@ export const shareSource = (token: string): ContentSource => ({
 
 /** ZIPs stream straight from the server (with resumable ranges); nothing is prepared first. */
 export function downloadZip(source: ContentSource, itemId: string, folderId?: string) {
-  downloadUrl(source.zip(itemId, folderId));
+  download(source.zip(itemId, folderId));
 }

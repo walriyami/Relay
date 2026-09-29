@@ -12,7 +12,7 @@ import { Database } from "./db/database.ts";
 import { EventBus } from "./lib/events.ts";
 import { HttpError } from "./lib/errors.ts";
 import { Secrets } from "./lib/secrets.ts";
-import { checkHost, checkCsrf, sessionCookie, memberFromToken } from "./lib/auth.ts";
+import { checkHost, checkCsrf, currentMember, isLocal } from "./lib/auth.ts";
 import { route } from "./lib/http.ts";
 import { api, headers } from "../shared/api.ts";
 import { createBlobStore } from "./storage/blobs.ts";
@@ -29,6 +29,7 @@ import { registerAdmin } from "./modules/admin/index.ts";
 import { registerSetup } from "./modules/setup/index.ts";
 import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { createUsageMeter, registerUsage } from "./modules/usage/index.ts";
+import { registerLocal } from "./modules/local/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
 
@@ -100,10 +101,11 @@ export async function buildApp(config: Config): Promise<App> {
     await app.register(rateLimit, {
       max: 6000,
       timeWindow: "1 minute",
-      // One bucket per IPv4 address or IPv6 /64, so an IPv6 host cannot rotate addresses.
-      keyGenerator: (req) => addressKey(req.ip),
+      // One bucket per IPv4 address or IPv6 /64, so an IPv6 host cannot rotate addresses. Requests
+      // through the local helper have no address, and each carries a member's session.
+      keyGenerator: (req) => (isLocal(req) ? "local" : addressKey(req.ip)),
       // Signed-in members are trusted; the limit protects anonymous surfaces.
-      allowList: (req) => !!memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]),
+      allowList: (req) => !!currentMember(ctx, req),
     });
 
     app.addHook("onRequest", async (req, reply) => {
@@ -135,6 +137,7 @@ export async function buildApp(config: Config): Promise<App> {
           route: req.routeOptions.url,
           status: reply.statusCode,
           ms: Math.round(reply.elapsedTime),
+          ...(isLocal(req) ? { local: true } : {}),
         },
         "request",
       );
@@ -189,6 +192,7 @@ export async function buildApp(config: Config): Promise<App> {
     registerSetup(app, ctx);
     registerActivity(app, ctx);
     registerUsage(app, ctx);
+    registerLocal(app, ctx);
 
     const sweep = () =>
       (sweeping ??= (async () => {
@@ -233,8 +237,9 @@ export async function buildApp(config: Config): Promise<App> {
           reply.header("Cache-Control", fingerprinted ? "public, max-age=31536000, immutable" : "no-cache");
         },
       });
+      // /local/ belongs to the direct download worker (public/local-sw.js); what it doesn't serve is gone.
       app.setNotFoundHandler((req, reply) =>
-        req.url.startsWith("/api/") || req.url.startsWith("/uploads/") || req.url.startsWith("/assets/")
+        ["/api/", "/uploads/", "/assets/", "/local/"].some((prefix) => req.url.startsWith(prefix))
           ? reply.code(404).send({ error: "Not found." })
           : reply.type("text/html").sendFile("index.html"),
       );

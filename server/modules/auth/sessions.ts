@@ -104,6 +104,7 @@ export function me(ctx: Context, userId: string, deviceId: string, csrf: string)
     device: { id: deviceId, name: device?.name ?? "", kind: device?.kind ?? "computer" },
     prefs: readPrefs(user.prefs),
     usage: usageOf(ctx, userId),
+    local: !!ctx.config.local,
   };
 }
 

@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["server", "client", "shared", "scripts", "tests", "vite.config.ts", "playwright.config.ts"]
+  "include": ["server", "local", "client", "shared", "scripts", "tests", "vite.config.ts", "playwright.config.ts"]
 }

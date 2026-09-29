@@ -12,6 +12,7 @@ import {
 } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
+import { localStatus } from "../local/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { hashPassword, sha256 } from "../../lib/secrets.ts";
 import {
@@ -89,6 +90,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         activeUploads: ctx.transfers.activeUploads(),
         receivedBytesLastHour: ctx.transfers.receivedBytesSince(hourAgo),
       },
+      local: await localStatus(ctx),
     };
   });
 

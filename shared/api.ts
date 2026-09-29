@@ -4,6 +4,7 @@ import type { CodeLength } from "./codes.ts";
 // Byte streams (downloads, ZIPs, thumbnails, tus uploads, server-sent events) are addressed by `urls`.
 // zod/mini is tree-shakable, so the client bundle carries only the validators it uses.
 import * as z from "zod/mini";
+import { LOCAL } from "./local.ts";
 import { LIMITS, USAGE_RANGES, USERNAME } from "./model.ts";
 import type * as M from "./model.ts";
 
@@ -456,6 +457,16 @@ export const api = {
         sender: z.optional(z.string().check(z.trim(), z.maxLength(LIMITS.senderLength))),
       }),
     }),
+  },
+
+  local: {
+    /** Sets up a direct connection on the local network: the browser's offer, the helper's answer. */
+    connect: endpoint<{ answer: string }>()("POST", "/api/local/connect", {
+      auth: "member",
+      body: z.object({ offer: text(1, LOCAL.offerBytes) }),
+    }),
+    /** Answers only through a direct connection, proving the whole route before it carries anything. */
+    check: ok("GET", "/api/local/check", { auth: "member" }),
   },
 
   admin: {

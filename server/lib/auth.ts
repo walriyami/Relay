@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { IncomingMessage } from "node:http";
 import type { Auth as AuthKind } from "../../shared/api.ts";
 import type { Auth, Context, Grant, Member } from "../context.ts";
 import { fail } from "./errors.ts";
@@ -26,6 +27,8 @@ export function requestOrigin(ctx: Context, req: FastifyRequest) {
  * The public health probe has no credentials or user data and also serves container-local probes.
  */
 export function checkHost(ctx: Context, req: FastifyRequest) {
+  // The helper's socket is reached by no browser, so no name can be rebound to it.
+  if (isLocal(req)) return;
   if ((req.method === "GET" || req.method === "HEAD") && req.url.split("?")[0] === "/api/health") return;
   let url: URL;
   try {
@@ -64,14 +67,29 @@ type MemberRow = {
   admin: number;
 };
 
+const LOCAL = Symbol("relay.local-session");
+type LocalRequest = IncomingMessage & { [LOCAL]?: string };
+/**
+ * Marks a request that arrived on Relay's local socket, forwarded by the helper for a browser on the
+ * local network, as acting for the session whose hash its local token names.
+ */
+export function markLocal(raw: IncomingMessage, sessionHash: string) {
+  (raw as LocalRequest)[LOCAL] = sessionHash;
+}
+const localSession = (req: FastifyRequest) => (req.raw as LocalRequest)[LOCAL];
+/** Arrived through the local helper rather than a browser's own connection. */
+export const isLocal = (req: FastifyRequest) => localSession(req) !== undefined;
+
 /** Looks up a session token. Used by requests and by long-lived streams that re-check it. */
 export function memberFromToken(ctx: Context, token: string | undefined): Member | null {
-  if (!token) return null;
+  return token ? memberFromSession(ctx, sha256(token)) : null;
+}
+function memberFromSession(ctx: Context, sessionHash: string): Member | null {
   const row = ctx.db.get<MemberRow>(
     `SELECT s.token_hash, s.user_id, s.device_id, s.csrf, u.username, u.admin
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires > ? AND u.disabled = 0`,
-    sha256(token),
+    sessionHash,
     Date.now(),
   );
   return row
@@ -122,18 +140,30 @@ function grantFromToken(ctx: Context, requestId: string, token: string): Grant |
     : null;
 }
 
-/** Everything the request's cookies authenticate. Computed once per request. */
+/**
+ * The member a request acts for, read afresh: its session cookie's, or for a request through the
+ * local helper, the session its connection was set up with. For a check at the last moment, after
+ * `authOf` was cached.
+ */
+export function currentMember(ctx: Context, req: FastifyRequest): Member | null {
+  const session = localSession(req);
+  if (session !== undefined) return memberFromSession(ctx, session);
+  return memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]);
+}
+
+/** Everything the request's credentials authenticate. Computed once per request. */
 export function authOf(ctx: Context, req: FastifyRequest): Auth {
   let auth = cache.get(req);
   if (auth) return auth;
   const grants: Grant[] = [];
   const prefix = guestCookiePrefix(ctx, req);
-  for (const [name, value] of Object.entries(req.cookies)) {
+  // The helper forwards no cookies; a local request is its session alone.
+  for (const [name, value] of isLocal(req) ? [] : Object.entries(req.cookies)) {
     if (!value || !name.startsWith(prefix)) continue;
     const grant = grantFromToken(ctx, name.slice(prefix.length), value);
     if (grant) grants.push(grant);
   }
-  auth = { member: memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)]), grants };
+  auth = { member: currentMember(ctx, req), grants };
   cache.set(req, auth);
   return auth;
 }

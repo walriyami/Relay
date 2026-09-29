@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get, type IncomingHttpHeaders } from "node:http";
 import { gunzipSync } from "node:zlib";
-import { REPO, assert, freePort, waitForHealth, setUpAdmin } from "./lib/relay.ts";
+import { api } from "../shared/api.ts";
+import { REPO, Session, assert, freePort, sleep, waitForHealth, setUpAdmin } from "./lib/relay.ts";
 
 type ComposeResource = { name?: string; external?: boolean };
 type ComposeConfig = {
@@ -82,6 +83,7 @@ try {
         RELAY_BACKEND_SUBNET: `${prefix}.0/29`,
         RELAY_GATEWAY_IP: `${prefix}.2`,
         RELAY_APP_IP: `${prefix}.3`,
+        RELAY_LOCAL_PORT: String(await freePort()),
       },
     }),
   ) as ComposeConfig;
@@ -90,8 +92,10 @@ try {
     "Default Compose requires an external network",
   );
   config.name = run;
-  config.services.relay.image = "relay-verify";
-  delete config.services.relay.build;
+  for (const service of ["relay", "relay-local"]) {
+    config.services[service].image = "relay-verify";
+    delete config.services[service].build;
+  }
   config.services["relay-gateway"].ports[0].published = String(port);
   for (const resource of [...Object.values(config.volumes), ...Object.values(config.networks)]) delete resource.name;
   await writeFile(file, JSON.stringify(config));
@@ -99,6 +103,17 @@ try {
   compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "120");
   await waitForHealth(origin, 60_000);
   await setUpAdmin(origin, password, () => compose("exec", "-T", "relay", "cat", "/data/setup.key"));
+  // Relay and relay-local find each other through their shared socket directory.
+  const admin = new Session(origin);
+  await admin.signIn("admin", password, "Compose verification");
+  let local = (await admin.call(api.admin.overview)).local;
+  for (const started = Date.now(); local.state !== "ready" && Date.now() - started < 30_000;) {
+    await sleep(500);
+    local = (await admin.call(api.admin.overview)).local;
+  }
+  assert(local.state === "ready", `relay-local is ${local.state}`);
+  assert((await admin.call(api.session.get)).local, "Signed-in browsers are not offered direct transfers");
+  await admin.call(api.session.signOut);
   const html = await wire("/", "identity");
   assert(html.headers["cache-control"] === "no-cache", "HTML must revalidate");
   const asset = html.body.toString().match(/src="(\/assets\/[^"]+\.js)"/)?.[1];
@@ -129,7 +144,7 @@ try {
   console.log(
     JSON.stringify({
       passed: true,
-      scope: "portable Compose with bundled gateway, disposable loopback HTTP",
+      scope: "portable Compose with bundled gateway and relay-local, disposable loopback HTTP",
       javascript: { originalBytes: plain.body.length, gzipBytes: compressed.body.length },
     }),
   );

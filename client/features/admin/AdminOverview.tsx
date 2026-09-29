@@ -285,7 +285,7 @@ function MemberUsage({ report, range }: { report: AdminUsageReport; range: Usage
 }
 
 /** What needs the administrator, if anything; everything else about the service can wait below. */
-function healthProblems({ operations: o, storage, integrity, usageBuffer }: Overview) {
+function healthProblems({ operations: o, storage, integrity, usageBuffer, local }: Overview) {
   const stale = (stage: Overview["operations"]["maintenance"][number]) =>
     o.sampled - stage.attempted > Math.max(5 * 60_000, 3 * o.maintenanceIntervalMs);
   return [
@@ -301,6 +301,8 @@ function healthProblems({ operations: o, storage, integrity, usageBuffer }: Over
       "Maintenance failed. Other cleanup jobs continue; failed jobs retry on the next sweep. Inspect server logs for the affected job.",
     o.maintenance.some(stale) &&
       "Maintenance has not run recently. Check the process and its configured sweep interval.",
+    local.state === "down" &&
+      "The relay-local helper isn’t answering, so uploads and downloads on Relay’s network go over the internet. Check that its container is running.",
   ].filter((problem): problem is string => !!problem);
 }
 
@@ -392,6 +394,8 @@ function ServiceHealth({ data }: { data: Overview }) {
             {plural(data.usageBuffer.pending, "buffered row")} ·{" "}
             {plural(data.usageBuffer.discarded, "discarded sample")} since startup
           </dd>
+          <dt>Direct transfers</dt>
+          <dd>{directTransfers(data.local)}</dd>
           <dt>File check</dt>
           <dd>
             At startup {dateTime(o.reconciliation.checked)} · {plural(o.reconciliation.removedOrphans, "orphan file")}{" "}
@@ -402,6 +406,13 @@ function ServiceHealth({ data }: { data: Overview }) {
       </details>
     </section>
   );
+}
+
+function directTransfers(local: Overview["local"]) {
+  if (local.state === "off") return "Not set up. Run relay-local to let browsers on Relay’s network transfer directly.";
+  if (local.state === "down") return "The relay-local helper isn’t answering.";
+  const where = local.addresses.length ? local.addresses.join(", ") : "no network address yet";
+  return `At ${where} on UDP port ${local.port} · ${plural(local.links, "browser")} connected`;
 }
 
 function IntegrityCheck({ integrity }: { integrity: Overview["integrity"] }) {

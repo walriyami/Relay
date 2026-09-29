@@ -34,7 +34,7 @@ export default tseslint.config(
     rules: { "react-hooks/rules-of-hooks": "error", "react-hooks/exhaustive-deps": "error" },
   },
   {
-    files: ["server/**", "scripts/**", "tests/**", "shared/**", "*.config.{js,ts}"],
+    files: ["server/**", "local/**", "scripts/**", "tests/**", "shared/**", "*.config.{js,ts}"],
     languageOptions: { globals: globals.node },
   },
   {
