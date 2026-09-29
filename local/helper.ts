@@ -1,16 +1,20 @@
-// The relay-local helper: terminates browsers' WebRTC connections on the host's network and forwards
-// what they carry to Relay (see shared/local.ts). Relay asks it to accept a connection over the
-// helper socket; browsers reach it on one UDP port, at the addresses it announces.
+// The direct-transfer helper: terminates browsers' WebRTC connections and forwards what they carry to
+// Relay (see shared/local.ts). Relay asks it to accept a connection over the helper socket. It checks
+// the browser's candidates from its one UDP port, and announces the host's addresses on that port;
+// either way gets the connection up. Checking the browser's matters where the host's addresses
+// can't be known or reached from outside, as for a container on Docker Desktop: its checks leave
+// through the host like any outgoing traffic, and the browser answers them.
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { Agent, createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import nodeDataChannel, { type PeerConnection } from "node-datachannel";
 import { LOCAL, SOCKETS, type HelperStatus } from "../shared/local.ts";
+import { isLocalAddress } from "./addresses.ts";
 import { hold } from "./channels.ts";
 import { exchange } from "./exchange.ts";
 
 export type HelperOptions = {
-  /** The directory shared with Relay (RELAY_LOCAL). */
+  /** The private directory shared with Relay. */
   dir: string;
   /** The UDP port every connection uses. */
   port: number;
@@ -51,7 +55,6 @@ export async function startHelper(options: HelperOptions) {
 
   async function connect(offer: string, token: string) {
     const addresses = options.addresses();
-    if (!addresses.length) throw new HelperError(503, "This host has no local network address.");
     // One browser's tabs replace its oldest connection; many browsers must wait.
     const own = [...links].filter((l) => l.token === token);
     if (own.length >= MAX_LINKS_PER_SESSION) close(own[0]);
@@ -87,7 +90,7 @@ export async function startHelper(options: HelperOptions) {
       link.exchanges.add(cancel);
     });
     try {
-      pc.setRemoteDescription(offer, "offer");
+      pc.setRemoteDescription(localOffer(offer), "offer");
       await gathered(pc);
       const answer = pc.localDescription()?.sdp;
       if (!answer) throw new Error("No answer was created.");
@@ -108,7 +111,7 @@ export async function startHelper(options: HelperOptions) {
   });
   async function handle(req: IncomingMessage, res: ServerResponse) {
     if (req.method === "GET" && req.url === "/status") {
-      const status: HelperStatus = { addresses: options.addresses(), port: options.port, links: connected() };
+      const status: HelperStatus = { links: connected() };
       return reply(res, 200, status);
     }
     if (req.method === "POST" && req.url === "/connect") {
@@ -196,21 +199,39 @@ function gathered(pc: PeerConnection) {
 }
 
 /**
+ * The offer with only the candidates the helper may check: over UDP, at local network addresses
+ * (see isLocalAddress). Checking any other would reach beyond the local network.
+ */
+export function localOffer(sdp: string) {
+  return sdp
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (!line.startsWith("a=candidate:")) return true;
+      // a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> …
+      const [, , transport, , address] = line.slice("a=candidate:".length).split(" ");
+      return transport?.toUpperCase() === "UDP" && isLocalAddress(address ?? "");
+    })
+    .join("\r\n");
+}
+
+/**
  * Replaces the answer's candidates with the addresses the helper announces, all on its one port:
  * the host's own network addresses rather than those the helper's interfaces happen to have, and
- * no container bridges. The browser's checks reach the shared UDP socket whichever it tries.
+ * no container bridges. The browser's checks reach the shared UDP socket whichever it tries. With
+ * none to announce, the helper's own checks set the connection up.
  */
 export function announce(sdp: string, addresses: string[], port: number) {
-  // The connection line and media port name the default candidate: the first announced.
-  const family = addresses[0].includes(":") ? "IP6" : "IP4";
+  // The connection line and media port name the default candidate: the first announced, or none.
+  const first = addresses[0] ?? "0.0.0.0";
+  const family = first.includes(":") ? "IP6" : "IP4";
   const lines = sdp
     .split(/\r?\n/)
     .filter((line) => line && !/^a=(candidate:|end-of-candidates)/.test(line))
     .map((line) =>
       line.startsWith("m=application ")
-        ? line.replace(/^m=application \d+/, `m=application ${port}`)
+        ? line.replace(/^m=application \d+/, `m=application ${addresses.length ? port : 9}`)
         : line.startsWith("c=IN ")
-          ? `c=IN ${family} ${addresses[0]}`
+          ? `c=IN ${family} ${first}`
           : line,
     );
   const candidates = addresses.map(

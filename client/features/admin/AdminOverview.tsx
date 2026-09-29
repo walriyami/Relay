@@ -302,7 +302,7 @@ function healthProblems({ operations: o, storage, integrity, usageBuffer, local 
     o.maintenance.some(stale) &&
       "Maintenance has not run recently. Check the process and its configured sweep interval.",
     local.state === "down" &&
-      "The relay-local helper isn’t answering, so uploads and downloads on Relay’s network go over the internet. Check that its container is running.",
+      `Direct transfers are unavailable${local.problem ? `: ${local.problem}` : "."} Uploads and downloads on Relay’s network go over the internet until Relay gets them running again.`,
   ].filter((problem): problem is string => !!problem);
 }
 
@@ -409,10 +409,11 @@ function ServiceHealth({ data }: { data: Overview }) {
 }
 
 function directTransfers(local: Overview["local"]) {
-  if (local.state === "off") return "Not set up. Run relay-local to let browsers on Relay’s network transfer directly.";
-  if (local.state === "down") return "The relay-local helper isn’t answering.";
-  const where = local.addresses.length ? local.addresses.join(", ") : "no network address yet";
-  return `At ${where} on UDP port ${local.port} · ${plural(local.links, "browser")} connected`;
+  if (local.state === "off") return "Off (RELAY_DIRECT). Everything goes over the internet.";
+  if (local.state === "starting") return "Starting";
+  if (local.state === "down")
+    return `Unavailable${local.problem ? `: ${local.problem}` : ". Relay is starting them again."}`;
+  return `On · ${plural(local.links, "browser")} connected`;
 }
 
 function IntegrityCheck({ integrity }: { integrity: Overview["integrity"] }) {

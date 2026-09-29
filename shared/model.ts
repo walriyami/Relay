@@ -389,11 +389,15 @@ export type AdminOverview = {
   local: LocalStatus;
 };
 /**
- * Direct transfers on the local network. off: RELAY_LOCAL is not set. down: the relay-local helper
- * isn't answering. ready: browsers on these addresses' networks can connect.
+ * Direct transfers on the local network. off: turned off with RELAY_DIRECT. starting: the helper is
+ * starting. down: the helper isn't running, for `problem` when it said why; Relay keeps starting it
+ * again. ready: browsers on the server's networks can connect, and `links` are.
  */
 export type LocalStatus =
-  { state: "off" } | { state: "down" } | { state: "ready"; addresses: string[]; port: number; links: number };
+  | { state: "off" }
+  | { state: "starting" }
+  | { state: "down"; problem: string | null }
+  | { state: "ready"; links: number };
 
 /** The periods Usage and Admin can show: days, or calendar months. */
 export const USAGE_RANGES = ["7d", "30d", "90d", "12m"] as const;

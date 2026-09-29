@@ -6,6 +6,10 @@ services:
     build: .
     init: true
     restart: unless-stopped
+    # The host's own network, so browsers on it can transfer directly: Relay's helper checks and
+    # answers them on UDP RELAY_DIRECT_PORT from here. Relay itself listens only on its socket,
+    # which the gateway alone can reach; see docs/self-hosting.md.
+    network_mode: host
     environment:
       # Required for a public hostname. Unset, only localhost and IP addresses work.
       RELAY_ORIGIN: ${RELAY_ORIGIN:-}
@@ -13,15 +17,13 @@ services:
       RELAY_SECRET: ${RELAY_SECRET:-}
       # Optional. true makes first setup ask for the one-time key in /data/setup.key.
       RELAY_SETUP_KEY: ${RELAY_SETUP_KEY:-}
-      # Only explicitly trusted proxies may report client addresses; see docs/self-hosting.md.
-      # Caddy has a fixed address on the private backend network. Add any other
-      # explicitly trusted proxies with RELAY_TRUST_PROXY.
-      RELAY_TRUST_PROXY: ${RELAY_GATEWAY_IP:-172.31.247.2},${RELAY_TRUST_PROXY:-127.0.0.1,::1}
-      # Shared with relay-local, which passes on requests from browsers on this network.
-      RELAY_LOCAL: /run/relay-local
+      # Optional. false turns direct transfers on the local network off.
+      RELAY_DIRECT: ${RELAY_DIRECT:-}
+      RELAY_DIRECT_PORT: ${RELAY_DIRECT_PORT:-3090}
+      RELAY_SOCKET: /run/relay/relay.sock
     volumes:
       - relay-data:/data
-      - relay-local:/run/relay-local
+      - relay-socket:/run/relay
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -30,37 +32,6 @@ services:
     mem_limit: 1g
     pids_limit: 128
     stop_grace_period: 2m
-    networks:
-      default:
-        ipv4_address: ${RELAY_APP_IP:-172.31.247.3}
-        aliases: [relay-app]
-
-  # Direct transfers: browsers on this host's network connect to it (WebRTC, UDP RELAY_LOCAL_PORT)
-  # and send uploads and downloads straight to Relay rather than over the internet. It needs the
-  # host's own network to be reached there; see docs/self-hosting.md.
-  relay-local:
-    image: relay:1.0.0
-    init: true
-    restart: unless-stopped
-    command: ["node", "local/main.ts"]
-    network_mode: host
-    environment:
-      RELAY_LOCAL: /run/relay-local
-      RELAY_LOCAL_PORT: ${RELAY_LOCAL_PORT:-3090}
-      # Optional. The addresses browsers are told to reach; unset, the host's private addresses.
-      RELAY_LOCAL_ADDRESSES: ${RELAY_LOCAL_ADDRESSES:-}
-    volumes:
-      - relay-local:/run/relay-local
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    mem_limit: 256m
-    pids_limit: 64
-    healthcheck:
-      test: ["CMD", "node", "local/health.ts"]
-      interval: 20s
-      timeout: 5s
-      start_period: 10s
 
   # Stable loopback origin for an HTTPS proxy. Optional container-network
   # integration is configured separately; see compose.tunnel.yaml.
@@ -88,19 +59,12 @@ services:
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     volumes:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - relay-socket:/run/relay:ro
+    # Relay's group, which its socket belongs to.
+    group_add: ["1000"]
     ports:
       - 127.0.0.1:3090:3090
-    networks:
-      default:
-        ipv4_address: ${RELAY_GATEWAY_IP:-172.31.247.2}
 
 volumes:
   relay-data:
-  relay-local:
-
-networks:
-  default:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: ${RELAY_BACKEND_SUBNET:-172.31.247.0/29}
+  relay-socket:

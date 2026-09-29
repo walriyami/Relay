@@ -1,10 +1,11 @@
 // A browser's side of a direct connection (see shared/local.ts), in Node: node-datachannel stands in
-// for RTCPeerConnection, so tests drive the helper and Relay's socket exactly as a page does.
+// for RTCPeerConnection, so tests and verification drive the helper and Relay's socket exactly as a
+// page does.
 import nodeDataChannel, { type DataChannel, type PeerConnection } from "node-datachannel";
 import { api } from "../../shared/api.ts";
 import { hold } from "../../local/channels.ts";
 import { LOCAL, type LocalControl, type LocalResponse } from "../../shared/local.ts";
-import type { Client } from "./harness.ts";
+import type { Session } from "./relay.ts";
 
 export type LocalReply = { status: number; headers: Record<string, string>; body: Buffer };
 export type LocalFetch = {
@@ -25,13 +26,14 @@ export class LocalPeer {
   }
 
   /** Sets up a connection the way the page does, signed in as `client`. */
-  static async connect(client: Client): Promise<LocalPeer> {
+  static async connect(client: Pick<Session, "call">): Promise<LocalPeer> {
     const pc = new nodeDataChannel.PeerConnection("browser", { iceServers: [] });
     const first = pc.createDataChannel("relay");
     hold(first);
     try {
       pc.setLocalDescription();
-      const offer = await until(() => pc.localDescription()?.sdp);
+      // With its candidates, as a page's offer has them.
+      const offer = await until(() => (pc.gatheringState() === "complete" ? pc.localDescription()?.sdp : undefined));
       const { answer } = await client.call(api.local.connect, { body: { offer } });
       pc.setRemoteDescription(answer, "answer");
       await opened(first);

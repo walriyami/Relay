@@ -18,7 +18,7 @@
 		not path /api/* /uploads/*
 	}
 	encode @app zstd gzip
-	reverse_proxy relay-app:3090 {
+	reverse_proxy unix//run/relay/relay.sock {
 		# Forward only Caddy's verified client address, never the raw chain.
 		header_up X-Forwarded-For {client_ip}
 		lb_try_duration 30s

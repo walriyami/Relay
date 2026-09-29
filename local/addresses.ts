@@ -1,4 +1,4 @@
-import { isIP } from "node:net";
+import { isIPv4, isIPv6 } from "node:net";
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 // Bridges that containers and virtual machines hang off. Nothing else on the network can reach
@@ -28,14 +28,18 @@ function isPrivateV4(address: string) {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
-/** RELAY_LOCAL_ADDRESSES: addresses to announce instead, for a helper whose own interfaces aren't the host's. */
-export function parseAddresses(value: string): string[] {
-  const addresses = value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (const address of addresses)
-    if (!isIP(address)) throw new Error(`RELAY_LOCAL_ADDRESSES must list IP addresses; "${address}" is not one.`);
-  if (!addresses.length) throw new Error("RELAY_LOCAL_ADDRESSES must list at least one IP address.");
-  return [...new Set(addresses)];
+/**
+ * Whether the helper may check a browser's candidate at `address`: a .local name (as browsers hide
+ * their addresses, found only on the local network), or a private, link-local or loopback address.
+ * Anything else would reach beyond the local network.
+ */
+export function isLocalAddress(address: string) {
+  if (/^[0-9a-z][0-9a-z-]*\.local$/i.test(address)) return true;
+  if (isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number);
+    return isPrivateV4(address) || (a === 169 && b === 254) || a === 127;
+  }
+  return (
+    isIPv6(address) && (/^f[cd][0-9a-f]{2}:/i.test(address) || /^fe[89ab][0-9a-f]:/i.test(address) || address === "::1")
+  );
 }

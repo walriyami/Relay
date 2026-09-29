@@ -2,50 +2,46 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createSocket, type Socket } from "node:dgram";
-import { mkdtemp, rm } from "node:fs/promises";
 import { request } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { api, urls } from "../shared/api.ts";
 import { LOCAL, LOCAL_TOKEN_HEADER, SOCKETS } from "../shared/local.ts";
 import { LIMITS } from "../shared/model.ts";
-import { lanAddresses, parseAddresses } from "../local/addresses.ts";
+import { isLocalAddress, lanAddresses } from "../local/addresses.ts";
 import { heldChannels } from "../local/channels.ts";
-import { announce, startHelper } from "../local/helper.ts";
+import { announce, localOffer } from "../local/helper.ts";
+import { localStatus } from "../server/modules/local/index.ts";
 import { Client, member, start, type ApiError, type Instance } from "./support/harness.ts";
 import nodeDataChannel, { type DataChannel } from "node-datachannel";
-import { LocalPeer } from "./support/local-peer.ts";
+import { LocalPeer } from "../scripts/lib/local-peer.ts";
 
 // The library's threads keep the process alive until it's told to stop.
 after(() => nodeDataChannel.cleanup());
 
-type Helper = Awaited<ReturnType<typeof startHelper>>;
-type Kit = { instance: Instance; dir: string; port: number; helper: Helper | null; client: Client };
+type Kit = { instance: Instance; dir: string; port: number; client: Client };
 
-/** A Relay with direct transfers, its helper announcing loopback, and a signed-in member. */
-async function withLocal(run: (kit: Kit) => Promise<void>, { helper = true } = {}) {
-  const dir = await mkdtemp(join(tmpdir(), "relay-local-"));
-  const instance = await start({ local: dir });
-  await instance.app.ready();
+/** A Relay with direct transfers, the helper it runs up, and a signed-in member. */
+async function withLocal(run: (kit: Kit) => Promise<void>) {
   const port = await freeUdpPort();
-  const kit: Kit = {
-    instance,
-    dir,
-    port,
-    helper: helper ? await startHelper({ dir, port, addresses: () => ["127.0.0.1"], log: () => {} }) : null,
-    client: await member(instance, "tia"),
-  };
+  const instance = await start({ local: { port } });
+  const helper = instance.ctx.local!;
   try {
-    await run(kit);
+    await instance.app.ready();
+    await until(() => helper.state === "ready");
+    await run({ instance, dir: helper.dir!, port, client: await member(instance, "tia") });
   } finally {
-    await kit.helper?.close();
     await instance.close();
-    await rm(dir, { recursive: true, force: true });
   }
-  // Every channel's close was reported, so none is left for cleanup() to trip over.
-  for (const started = Date.now(); heldChannels() && Date.now() - started < 3000;)
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(heldChannels(), 0);
+  // The helper closed its connections and shut its library down cleanly when Relay stopped it.
+  assert.deepEqual(helper.lastExit, { code: 0, signal: null });
+  // And the test's own peers had every channel's close reported, so none is left for cleanup() to
+  // trip over.
+  await until(() => heldChannels() === 0);
+}
+
+async function until(done: () => boolean, timeoutMs = 10_000) {
+  for (const started = Date.now(); !done(); await new Promise((resolve) => setTimeout(resolve, 20)))
+    if (Date.now() - started > timeoutMs) throw new Error("Timed out.");
 }
 
 /**
@@ -284,24 +280,52 @@ test("local: Relay's socket serves only the bulk routes, only with a local token
   });
 });
 
-test("local: connecting needs the feature, a running helper and a data offer", async () => {
+test("local: Relay runs the helper, and starts it again once it can", async () => {
+  const port = await freeUdpPort();
+  const taken = await take(port);
+  let released = false;
+  const instance = await start({ local: { port } });
+  const helper = instance.ctx.local!;
+  try {
+    await instance.app.ready();
+    const client = await member(instance, "tia");
+    // The helper can't have its port, says so, and stops.
+    await until(() => helper.state === "down");
+    assert.deepEqual(await localStatus(instance.ctx), {
+      state: "down",
+      problem: `UDP port ${port} is already in use.`,
+    });
+    await assert.rejects(client.call(api.local.connect, { body: { offer: "v=0" } }), (e: ApiError) => e.status === 503);
+    // Relay starts it again, and once the port is free it runs.
+    await taken.release();
+    released = true;
+    await until(() => helper.state === "ready");
+    assert.deepEqual(await localStatus(instance.ctx), { state: "ready", links: 0 });
+    const peer = await LocalPeer.connect(client);
+    try {
+      assert.equal((await peer.fetch({ path: "/api/local/check" })).status, 200);
+      assert.deepEqual(await localStatus(instance.ctx), { state: "ready", links: 1 });
+    } finally {
+      peer.close();
+    }
+  } finally {
+    if (!released) await taken.release();
+    await instance.close();
+  }
+  assert.deepEqual(helper.lastExit, { code: 0, signal: null });
+  await until(() => heldChannels() === 0);
+});
+
+test("local: connecting needs the feature and a data offer", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
     assert.equal((await client.call(api.session.get)).local, false);
+    assert.deepEqual(await localStatus(instance.ctx), { state: "off" });
     await assert.rejects(client.call(api.local.connect, { body: { offer: "v=0" } }), (e: ApiError) => e.status === 404);
   } finally {
     await instance.close();
   }
-  await withLocal(
-    async ({ client }) => {
-      await assert.rejects(
-        client.call(api.local.connect, { body: { offer: "v=0" } }),
-        (e: ApiError) => e.status === 503,
-      );
-    },
-    { helper: false },
-  );
   await withLocal(async ({ client, port }) => {
     await assert.rejects(
       client.call(api.local.connect, { body: { offer: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" } }),
@@ -359,6 +383,39 @@ test("local: closing a channel abandons its request, and the upload resumes from
   });
 });
 
+test("local: the helper checks only the offer's candidates on the local network", () => {
+  const offer = [
+    "v=0",
+    "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+    "c=IN IP4 0.0.0.0",
+    "a=mid:0",
+    "a=candidate:1 1 udp 2113937151 0b6ad5e2-3c8f-4c3e-9f0a-1f2e3d4c5b6a.local 53211 typ host generation 0",
+    "a=candidate:2 1 UDP 2113937151 192.168.1.30 53212 typ host",
+    "a=candidate:3 1 UDP 2113937151 fe80::1c2b:3a4d 53213 typ host",
+    "a=candidate:4 1 UDP 1677729535 203.0.113.9 53214 typ srflx raddr 0.0.0.0 rport 0",
+    "a=candidate:5 1 UDP 2113937151 2001:db8::30 53215 typ host",
+    "a=candidate:6 1 TCP 1518280447 192.168.1.30 9 typ host tcptype active",
+    "a=candidate:7 1 UDP 2113937151 relay.example.com 53216 typ host",
+    "a=end-of-candidates",
+    "",
+  ].join("\r\n");
+  assert.deepEqual(
+    localOffer(offer)
+      .split("\r\n")
+      .filter((l) => l.startsWith("a=candidate")),
+    [
+      "a=candidate:1 1 udp 2113937151 0b6ad5e2-3c8f-4c3e-9f0a-1f2e3d4c5b6a.local 53211 typ host generation 0",
+      "a=candidate:2 1 UDP 2113937151 192.168.1.30 53212 typ host",
+      "a=candidate:3 1 UDP 2113937151 fe80::1c2b:3a4d 53213 typ host",
+    ],
+  );
+  assert.ok(localOffer(offer).includes("a=end-of-candidates"));
+  for (const address of ["10.1.2.3", "172.16.0.1", "169.254.9.9", "127.0.0.1", "fd12::1", "::1"])
+    assert.ok(isLocalAddress(address), address);
+  for (const address of ["172.32.0.1", "100.64.1.1", "8.8.8.8", "2001:db8::1", "local", "a.b.local", "x.local.evil"])
+    assert.ok(!isLocalAddress(address), address);
+});
+
 test("local: the answer announces only the helper's addresses, on its one port", () => {
   const answer = [
     "v=0",
@@ -381,6 +438,13 @@ test("local: the answer announces only the helper's addresses, on its one port",
   assert.ok(lines.includes("m=application 3090 UDP/DTLS/SCTP webrtc-datachannel"));
   assert.ok(lines.includes("c=IN IP4 192.168.1.20"));
   assert.equal(lines.filter((l) => l === "a=end-of-candidates").length, 1);
+
+  // With nothing to announce, the helper's own checks set the connection up.
+  const none = announce(answer, [], 3090).split("\r\n");
+  assert.equal(none.filter((l) => l.startsWith("a=candidate")).length, 0);
+  assert.ok(none.includes("m=application 9 UDP/DTLS/SCTP webrtc-datachannel"));
+  assert.ok(none.includes("c=IN IP4 0.0.0.0"));
+  assert.ok(none.includes("a=end-of-candidates"));
 });
 
 test("local: the helper announces private addresses of real interfaces, IPv4 first", () => {
@@ -403,6 +467,4 @@ test("local: the helper announces private addresses of real interfaces, IPv4 fir
     }),
     ["192.168.1.20", "10.0.0.5", "172.20.1.9", "fd12:3456::1"],
   );
-  assert.deepEqual(parseAddresses(" 192.168.1.20, fd00::1 ,192.168.1.20"), ["192.168.1.20", "fd00::1"]);
-  assert.throws(() => parseAddresses("relay.lan"), /RELAY_LOCAL_ADDRESSES/);
 });

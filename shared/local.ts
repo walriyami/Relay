@@ -1,8 +1,11 @@
 // Direct transfers on the local network. A signed-in browser on the server's network opens a WebRTC
-// connection to the relay-local helper, which runs on the host's network next to Relay, and sends
-// its bulk requests (upload chunks and downloads) through it instead of the internet connection.
-// The helper passes each request on to Relay over a private socket, as the session that set up the
-// connection. Every request travels on a data channel of its own:
+// connection to the helper, a process Relay runs beside itself, and sends its bulk requests (upload
+// chunks and downloads) through it instead of the internet connection. The browser's offer names
+// its own addresses (usually hidden behind .local names), and the helper's answer names the host's.
+// Each side checks the other's, only ever at local network addresses, so the connection comes up
+// only on the server's own networks, whichever side's checks get through. The helper passes each
+// request on to Relay over a private socket, as the session that set up the connection. Every
+// request travels on a data channel of its own:
 //
 //   browser → helper   text: LocalRequest, then exactly `length` body bytes as binary messages
 //   helper → browser   text: LocalResponse, then the body as binary messages, then {end} or {error}
@@ -81,18 +84,23 @@ export function pickHeaders(headers: Record<string, unknown>, allowed: ReadonlyS
   return picked;
 }
 
-// Relay and the helper share a directory (RELAY_LOCAL) and talk over two sockets in it: Relay
-// serves the helper's forwarded requests, and the helper answers Relay's connection requests.
+// Relay runs the helper as a process of its own and gives it a private directory, where the two
+// talk over two sockets: Relay serves the helper's forwarded requests, and the helper answers
+// Relay's connection requests.
 export const SOCKETS = { relay: "relay.sock", helper: "helper.sock" } as const;
 /** Set by the helper on every forwarded request; see Secrets.localToken. */
 export const LOCAL_TOKEN_HEADER = "x-relay-local";
 
 /** The helper's answer to Relay's status request. */
 export type HelperStatus = {
-  /** Addresses browsers are told to reach it at. */
-  addresses: string[];
-  /** Its UDP port. */
-  port: number;
   /** Browsers connected right now. */
   links: number;
 };
+
+/** What the helper's process tells Relay's over their IPC channel. */
+export type HelperMessage =
+  | { type: "log"; level: "info" | "warn" | "error"; msg: string; fields?: Record<string, unknown> }
+  /** It is answering on its socket. */
+  | { type: "ready" }
+  /** It can't run, for this reason; it exits next. */
+  | { type: "failed"; reason: string };

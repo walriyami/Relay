@@ -49,9 +49,9 @@ Every API response carries a change stamp: how many changes the server had publi
 
 ## Direct transfers
 
-On the server's own network, a member's uploads and downloads skip the internet connection. The `relay-local` helper runs on the host's network and accepts WebRTC connections on one UDP port. The browser asks Relay to set a connection up: Relay passes its offer to the helper with a token for the member's session, and returns the helper's answer. The answer names only the host's private addresses, so the connection works only from its networks, and no STUN or TURN server is involved. The browser counts the connection as ready only once a check request has made the whole trip back to Relay.
+On the server's own network, a member's uploads and downloads skip the internet connection. Relay runs a helper as a child process, so a failure in its native WebRTC library can't take Relay down, and starts it again if it stops. The helper accepts WebRTC connections on one UDP port. The browser asks Relay to set a connection up: Relay passes its offer to the helper with a token for the member's session, and returns the helper's answer. The offer names the browser's addresses, usually as `.local` names, and the answer the host's private addresses. The helper checks the browser's candidates from its port and the browser checks the helper's, so the connection comes up even where the host's address can't be known or reached first, as from a container on Docker Desktop. Only local network addresses are ever checked, so the connection works only on the server's networks, and no STUN or TURN server is involved. The browser counts the connection as ready only once a check request has made the whole trip back to Relay.
 
-Each request then travels on a data channel of its own: a head, the body in 64 KiB messages under a 4 MiB credit window each way, the response, and an end. The helper passes it to Relay over a Unix socket in a directory the two share, carrying the session token instead of cookies. That socket serves only the bulk routes (upload chunks, file and ZIP downloads, and the check) as the session behind the token, and refuses anything else. The protocol is in `shared/local.ts`.
+Each request then travels on a data channel of its own: a head, the body in 64 KiB messages under a 4 MiB credit window each way, the response, and an end. The helper passes it to Relay over a Unix socket in a private directory the two share, carrying the session token instead of cookies. That socket serves only the bulk routes (upload chunks, file and ZIP downloads, and the check) as the session behind the token, and refuses anything else. The protocol is in `shared/local.ts`.
 
 - **Uploads** keep tus: only the transport changes, request by request. A chunk that fails on the direct connection is retried the usual way from the server's offset. Chunk sizes adapt to each route's measured throughput.
 - **Downloads** arrive on a data channel and are handed to a service worker (`public/local-sw.js`), which serves them to a hidden frame as an ordinary download. The browser saves them to disk as they arrive, with its own progress and cancel. Back pressure runs from the disk through the worker and the page to the helper. If the connection drops, the rest comes over HTTP from the same byte, with `If-Range` ensuring it's the same file. After an upgrade, a newer worker waits until no download depends on the old one, because taking over would cut off the downloads the old one is serving.
@@ -92,7 +92,7 @@ client/            React app
   features/        One folder per area: send, library, links, requests, incoming, settings, admin…
   lib/             Transfers engine, live connection, formatting, previews
   styles/          Design tokens and CSS
-local/             relay-local, the direct-transfer helper (WebRTC to Relay's local socket)
+local/             Direct-transfer helper, run by Relay (WebRTC to Relay's local socket)
 server/
   app.ts           Fastify setup, security headers, rate limits, route wiring
   config.ts        Environment configuration

@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get, type IncomingHttpHeaders } from "node:http";
 import { gunzipSync } from "node:zlib";
+import nodeDataChannel from "node-datachannel";
 import { api } from "../shared/api.ts";
+import { LocalPeer } from "./lib/local-peer.ts";
 import { REPO, Session, assert, freePort, sleep, waitForHealth, setUpAdmin } from "./lib/relay.ts";
 
 type ComposeResource = { name?: string; external?: boolean };
@@ -49,25 +51,6 @@ const wire = (path: string, encoding: string) =>
   });
 let created = false;
 try {
-  // Pick a /29 outside existing Docker subnets, without changing the topology under test.
-  const ids = docker("network", "ls", "-q").split(/\s+/).filter(Boolean);
-  const networks = ids.length
-    ? (JSON.parse(docker("network", "inspect", ...ids)) as { IPAM: { Config: { Subnet?: string }[] } }[])
-    : [];
-  const ipv4 = (s: string) => s.split(".").reduce((n, p) => (n * 256 + Number(p)) >>> 0, 0);
-  const used = networks
-    .flatMap((n) => n.IPAM.Config ?? [])
-    .map((c) => c.Subnet)
-    .filter((s): s is string => !!s && !s.includes(":"));
-  const third = Array.from({ length: 250 }, (_, i) => i + 1).find((i) =>
-    used.every((s) => {
-      const [address, bits] = s.split("/");
-      const mask = Number(bits) === 0 ? 0 : (0xffffffff << (32 - Number(bits))) >>> 0;
-      return (ipv4(`172.29.${i}.0`) & mask) !== (ipv4(address) & mask);
-    }),
-  );
-  assert(third !== undefined, "No free verifier subnet in 172.29.0.0/16");
-  const prefix = `172.29.${third}`;
   const config = JSON.parse(
     execFileSync("docker", ["compose", "--env-file", "/dev/null", "-f", "compose.yaml", "config", "--format", "json"], {
       cwd: REPO,
@@ -78,12 +61,10 @@ try {
         ...process.env,
         RELAY_ORIGIN: origin,
         RELAY_SECRET: "",
-        RELAY_TRUST_PROXY: "127.0.0.1,::1",
         RELAY_CADDY_TRUSTED_PROXIES: "127.0.0.1 ::1",
-        RELAY_BACKEND_SUBNET: `${prefix}.0/29`,
-        RELAY_GATEWAY_IP: `${prefix}.2`,
-        RELAY_APP_IP: `${prefix}.3`,
-        RELAY_LOCAL_PORT: String(await freePort()),
+        RELAY_DIRECT: "",
+        // Relay shares the host's network, where a live Relay may have the default port.
+        RELAY_DIRECT_PORT: String(20000 + Math.floor(Math.random() * 12000)),
       },
     }),
   ) as ComposeConfig;
@@ -92,10 +73,8 @@ try {
     "Default Compose requires an external network",
   );
   config.name = run;
-  for (const service of ["relay", "relay-local"]) {
-    config.services[service].image = "relay-verify";
-    delete config.services[service].build;
-  }
+  config.services.relay.image = "relay-verify";
+  delete config.services.relay.build;
   config.services["relay-gateway"].ports[0].published = String(port);
   for (const resource of [...Object.values(config.volumes), ...Object.values(config.networks)]) delete resource.name;
   await writeFile(file, JSON.stringify(config));
@@ -103,7 +82,8 @@ try {
   compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "120");
   await waitForHealth(origin, 60_000);
   await setUpAdmin(origin, password, () => compose("exec", "-T", "relay", "cat", "/data/setup.key"));
-  // Relay and relay-local find each other through their shared socket directory.
+  // Relay runs its direct-transfer helper, and a peer on this host connects to it the way a
+  // browser on the server's network does, with no address configured anywhere.
   const admin = new Session(origin);
   await admin.signIn("admin", password, "Compose verification");
   let local = (await admin.call(api.admin.overview)).local;
@@ -111,8 +91,17 @@ try {
     await sleep(500);
     local = (await admin.call(api.admin.overview)).local;
   }
-  assert(local.state === "ready", `relay-local is ${local.state}`);
+  assert(local.state === "ready", `Direct transfers are ${JSON.stringify(local)}`);
   assert((await admin.call(api.session.get)).local, "Signed-in browsers are not offered direct transfers");
+  const peer = await LocalPeer.connect(admin);
+  try {
+    const check = await peer.fetch({ path: "/api/local/check" });
+    assert(check.status === 200, `The direct check answered ${check.status}`);
+    local = (await admin.call(api.admin.overview)).local;
+    assert(local.state === "ready" && local.links === 1, `Direct transfers are ${JSON.stringify(local)}`);
+  } finally {
+    peer.close();
+  }
   await admin.call(api.session.signOut);
   const html = await wire("/", "identity");
   assert(html.headers["cache-control"] === "no-cache", "HTML must revalidate");
@@ -144,7 +133,7 @@ try {
   console.log(
     JSON.stringify({
       passed: true,
-      scope: "portable Compose with bundled gateway and relay-local, disposable loopback HTTP",
+      scope: "portable Compose with bundled gateway and direct transfers, disposable loopback HTTP",
       javascript: { originalBytes: plain.body.length, gzipBytes: compressed.body.length },
     }),
   );
@@ -165,5 +154,7 @@ try {
     process.exitCode = 1;
   } finally {
     await rm(temp, { recursive: true, force: true });
+    // The peer's library threads keep the process alive until it's told to stop.
+    nodeDataChannel.cleanup();
   }
 }

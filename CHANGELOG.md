@@ -10,7 +10,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Per-member settings. Each member has their own storage, upload retention, link lifetime and Trash retention. Setup chooses what new members start with, and **Admin → New members** changes it later.
 - Administrators can change a member's name, username, link lifetime and Trash retention.
 - Members choose how long Trash keeps what they delete, in **Settings → Storage**.
-- Direct transfers. On the server's own network, members' uploads and downloads go straight to Relay over WebRTC instead of the internet connection, with nothing to set up on their devices. A **Direct** button in the top bar shows when this is on and switches it off. The new `relay-local` container provides it; see [Self-hosting](docs/self-hosting.md#direct-transfers-on-your-network).
+- Direct transfers. On the server's own network, members' uploads and downloads go straight to Relay over WebRTC instead of the internet connection, with nothing to set up on their devices. A **Direct** button in the top bar shows when this is on and switches it off. It's on by default and needs no configuration: Relay runs the helper itself, and the connection comes up without any address being set, including on Docker Desktop and when the server changes networks. In Compose, the Relay container now shares the host's network and serves the gateway on a Unix socket, so the fixed backend subnet and addresses (`RELAY_BACKEND_SUBNET`, `RELAY_GATEWAY_IP`, `RELAY_APP_IP`) are gone. See [Self-hosting](docs/self-hosting.md#direct-transfers-on-your-network).
 
 ### Changed
 

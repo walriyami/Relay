@@ -3,8 +3,8 @@ import { api, call } from "../../api";
 import { getLocalPrefs, setLocalPrefs, subscribeLocalPrefs } from "../local-prefs";
 import { exchange, LocalFailure, opened } from "./channel";
 
-// The direct connection: this tab's WebRTC connection to the relay-local helper on Relay's own
-// network, set up through Relay (see shared/local.ts). It is tried whenever Relay offers it and is
+// The direct connection: this tab's WebRTC connection to Relay's direct-transfer helper on Relay's
+// own network, set up through Relay (see shared/local.ts). It is tried whenever Relay offers it and is
 // ready only once a request has made the whole trip, so a browser elsewhere never routes anything
 // to it. Uploads and downloads use it while it is ready and switched on, and fall back the usual
 // way at the first sign of trouble.
@@ -17,6 +17,8 @@ export type LinkState = "off" | "connecting" | "ready" | "unavailable";
 
 /** A browser on Relay's network connects in well under a second; anywhere else, it never does. */
 const CONNECT_TIMEOUT_MS = 8000;
+/** Finding this browser's addresses takes moments; the offer goes with those found by then. */
+const GATHER_MS = 2000;
 /** Waits after tries that failed, or connections that dropped, in a row. */
 const BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 300_000];
 /** A hidden tab lets its connection go after this long, so idle tabs don't hold the helper's. */
@@ -111,8 +113,11 @@ async function connect() {
   pc = next;
   try {
     const check = next.createDataChannel("relay");
-    // No candidates to wait for: the helper finds this browser from its connection checks.
     await next.setLocalDescription(await next.createOffer());
+    // The offer names this browser's addresses, so the helper can reach it where this browser
+    // can't reach the helper first: the helper's own address may be unknown to it.
+    await gathered(next);
+    if (current !== run) return;
     const { answer } = await call(api.local.connect, { body: { offer: next.localDescription!.sdp } });
     if (current !== run) return;
     await next.setRemoteDescription({ type: "answer", sdp: answer });
@@ -134,6 +139,23 @@ async function connect() {
     if (current !== run) return;
     unavailable(backoff(failures++));
   }
+}
+
+/** Resolves once the connection knows its addresses, or after GATHER_MS with those it knows. */
+function gathered(connection: RTCPeerConnection) {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      connection.removeEventListener("icegatheringstatechange", check);
+      resolve();
+    };
+    const check = () => {
+      if (connection.iceGatheringState === "complete") done();
+    };
+    const timer = setTimeout(done, GATHER_MS);
+    connection.addEventListener("icegatheringstatechange", check);
+    check();
+  });
 }
 
 function lost() {

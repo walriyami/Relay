@@ -29,6 +29,7 @@ import { registerAdmin } from "./modules/admin/index.ts";
 import { registerSetup } from "./modules/setup/index.ts";
 import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { createUsageMeter, registerUsage } from "./modules/usage/index.ts";
+import { LocalHelper } from "./modules/local/helper.ts";
 import { registerLocal } from "./modules/local/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
@@ -54,7 +55,9 @@ export async function buildApp(config: Config): Promise<App> {
     // the event stream's heartbeats never idle.
     requestTimeout: 120_000,
     connectionTimeout: 120_000,
-    trustProxy: config.trustProxy,
+    // On a socket, every request comes through the proxy that alone can reach it, which sets
+    // X-Forwarded-For to the client's address; there is no peer address of its own to check.
+    trustProxy: config.socket ? (_address, hop) => hop === 0 : config.trustProxy,
   });
 
   try {
@@ -65,6 +68,7 @@ export async function buildApp(config: Config): Promise<App> {
       operations: new Operations(config.sweepMs),
       secrets: new Secrets(config.root, config.secret),
       events: new EventBus(),
+      local: config.local ? new LocalHelper(config.local.port, app.log) : null,
       log: app.log,
     } as Context;
     ctx.blobs = createBlobStore(ctx);

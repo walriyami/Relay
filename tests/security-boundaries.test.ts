@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stat, chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { start } from "./support/harness.ts";
+import { start, type Instance } from "./support/harness.ts";
 import { configFromEnv } from "../server/config.ts";
 import { api } from "../shared/api.ts";
 
@@ -80,6 +80,45 @@ test("the setup key is off unless RELAY_SETUP_KEY turns it on, and a typo stops 
   for (const value of ["true", "1", "True"]) assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, true);
   for (const value of ["yes", "on", "ture"])
     assert.throws(() => configFromEnv({ RELAY_SETUP_KEY: value }), /RELAY_SETUP_KEY must be true or false/);
+});
+
+test("direct transfers are on unless RELAY_DIRECT turns them off, on a valid UDP port", () => {
+  assert.deepEqual(configFromEnv({}).local, { port: 3090 });
+  assert.deepEqual(configFromEnv({ RELAY_DIRECT: "true", RELAY_DIRECT_PORT: " 4000 " }).local, { port: 4000 });
+  assert.equal(configFromEnv({ RELAY_DIRECT: "false" }).local, undefined);
+  assert.throws(() => configFromEnv({ RELAY_DIRECT: "off" }), /RELAY_DIRECT must be true or false/);
+  for (const value of ["0", "65536", "3090.5", "udp"])
+    assert.throws(() => configFromEnv({ RELAY_DIRECT_PORT: value }), /RELAY_DIRECT_PORT/);
+});
+
+test("on a socket, Relay takes each client's address from the proxy in front of it", async () => {
+  assert.equal(configFromEnv({ RELAY_SOCKET: "/run/relay/relay.sock" }).socket, "/run/relay/relay.sock");
+  const pickup = (instance: Instance, address: string) =>
+    instance.app.inject({
+      method: "POST",
+      url: api.pickup.resolve.path,
+      // A socket's peer has no address; whatever the connection shows, the proxy's header counts.
+      remoteAddress: "203.0.113.200",
+      headers: { host: "relay.test", "x-forwarded-for": address },
+      payload: { code: "short" },
+    });
+  const behind = await start({ socket: "/unused.sock" }, undefined, { setup: false });
+  try {
+    for (let i = 1; i <= 5; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 4 ? 404 : 429);
+    assert.equal((await pickup(behind, "198.51.100.2")).statusCode, 404);
+    // The container's health check comes without one.
+    assert.equal((await behind.app.inject({ url: "/api/health" })).statusCode, 200);
+  } finally {
+    await behind.close();
+  }
+  // On a port, an untrusted peer's header is ignored: both addresses are the peer's.
+  const open = await start({}, undefined, { setup: false });
+  try {
+    for (let i = 1; i <= 4; i++) await pickup(open, "198.51.100.1");
+    assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
+  } finally {
+    await open.close();
+  }
 });
 
 test("existing data directories are made private at startup", async () => {

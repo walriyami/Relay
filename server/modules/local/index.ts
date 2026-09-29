@@ -1,8 +1,8 @@
-// Direct transfers on the local network (see shared/local.ts). Relay sets up a browser's connection
-// with the relay-local helper, and serves the requests the helper forwards on a socket of its own:
-// only the bulk routes, each as the session whose local token it carries.
+// Direct transfers on the local network (see shared/local.ts). Relay runs the helper (see helper.ts),
+// sets up a browser's connection with it, and serves the requests the helper forwards on a socket of
+// its own: only the bulk routes, each as the session whose local token it carries.
 import type { FastifyInstance } from "fastify";
-import { mkdir, chmod, rm } from "node:fs/promises";
+import { chmod } from "node:fs/promises";
 import { createServer, request, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { api } from "../../../shared/api.ts";
@@ -13,6 +13,7 @@ import { currentMember, isLocal, markLocal } from "../../lib/auth.ts";
 import { fail, HttpError, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { addressKey } from "../auth/limits.ts";
+import type { LocalHelper } from "./helper.ts";
 
 const UNAVAILABLE = "Direct transfers are unavailable right now.";
 
@@ -22,9 +23,9 @@ export function registerLocal(app: FastifyInstance, ctx: Context) {
     ctx,
     api.local.connect,
     async ({ member, body }) => {
-      const dir = ctx.config.local ?? fail(404, "Direct transfers are not set up on this server.");
+      const helper = ctx.local ?? fail(404, "Direct transfers are off on this server.");
       const token = ctx.secrets.localToken(member.sessionHash);
-      const { answer } = await askHelper<{ answer: string }>(dir, "POST", "/connect", { offer: body.offer, token });
+      const { answer } = await askHelper<{ answer: string }>(helper, "POST", "/connect", { offer: body.offer, token });
       return { answer };
     },
     {
@@ -38,26 +39,30 @@ export function registerLocal(app: FastifyInstance, ctx: Context) {
   );
   route(app, ctx, api.local.check, ({ req }) => (isLocal(req) ? { ok: true as const } : notFound()));
 
-  if (ctx.config.local) serveSocket(app, ctx, ctx.config.local);
+  if (ctx.local) serveHelper(app, ctx, ctx.local);
 }
 
 /** Whether browsers can connect, for the administrator. */
 export async function localStatus(ctx: Context): Promise<LocalStatus> {
-  if (!ctx.config.local) return { state: "off" };
+  const helper = ctx.local;
+  if (!helper) return { state: "off" };
+  // Starting again after it stopped for a reason it gave is still down for that reason.
+  if (helper.state === "starting" && !helper.problem) return { state: "starting" };
   try {
-    return { state: "ready", ...(await askHelper<HelperStatus>(ctx.config.local, "GET", "/status")) };
+    if (helper.state === "ready")
+      return { state: "ready", ...(await askHelper<HelperStatus>(helper, "GET", "/status")) };
   } catch {
-    return { state: "down" };
+    // Reported as down.
   }
+  return { state: "down", problem: helper.problem };
 }
 
 /**
- * Serves the requests the helper forwards. The socket lives in the directory Relay shares with the
- * helper alone, and each request must carry a local token (see Secrets.localToken); anything but
- * the bulk routes is refused before it reaches the app.
+ * Serves the requests the helper forwards, and runs the helper. The socket lives in the directory
+ * Relay shares with the helper alone, and each request must carry a local token (see
+ * Secrets.localToken); anything but the bulk routes is refused before it reaches the app.
  */
-function serveSocket(app: FastifyInstance, ctx: Context, dir: string) {
-  const path = join(dir, SOCKETS.relay);
+function serveHelper(app: FastifyInstance, ctx: Context, helper: LocalHelper) {
   // The same limits as the app's own server (see app.ts).
   const server = createServer({ requestTimeout: 120_000 }, (req, res) => {
     const session = ctx.secrets.localSession(req.headers[LOCAL_TOKEN_HEADER]);
@@ -70,9 +75,7 @@ function serveSocket(app: FastifyInstance, ctx: Context, dir: string) {
   });
   server.setTimeout(120_000);
   app.addHook("onReady", async () => {
-    await mkdir(dir, { recursive: true });
-    // A socket left by a Relay that did not shut down would refuse the new one.
-    await rm(path, { force: true });
+    const path = join(await helper.prepare(), SOCKETS.relay);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(path, () => {
@@ -81,13 +84,17 @@ function serveSocket(app: FastifyInstance, ctx: Context, dir: string) {
       });
     });
     await chmod(path, 0o600);
+    helper.run();
   });
-  // Stop taking requests with the app's own server, and let those under way finish.
+  // Stop taking requests with the app's own server, and let those under way finish before the
+  // helper and its connections go.
   app.addHook("preClose", async () => {
-    if (!server.listening) return;
-    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-    server.closeIdleConnections();
-    await closed;
+    if (server.listening) {
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeIdleConnections();
+      await closed;
+    }
+    await helper.stop();
   });
 }
 
@@ -96,12 +103,13 @@ function refuse(res: ServerResponse, status: number, error: string) {
 }
 
 /** A request to the helper's socket. Any failure is the helper being unavailable, except a refused offer. */
-function askHelper<T>(dir: string, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+function askHelper<T>(helper: LocalHelper, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise<T>((resolve, reject) => {
+    if (!helper.dir || helper.state !== "ready") return reject(new HttpError(503, UNAVAILABLE));
     const req = request(
       {
-        socketPath: join(dir, SOCKETS.helper),
+        socketPath: join(helper.dir, SOCKETS.helper),
         method,
         path,
         headers: payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {},

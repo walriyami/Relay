@@ -4,6 +4,7 @@ import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from "fastify";
 import type { Stats } from "node:fs";
 import type { Operations } from "./lib/operations.ts";
 import type { Config } from "./config.ts";
+import type { LocalHelper } from "./modules/local/helper.ts";
 import type { Database } from "./db/database.ts";
 import type { EventBus } from "./lib/events.ts";
 import type { Secrets } from "./lib/secrets.ts";
@@ -246,5 +247,7 @@ export type Context = {
   deliveries: Deliveries;
   activity: Activity;
   usage: UsageMeter;
+  /** The direct-transfer helper, when direct transfers are on. */
+  local: LocalHelper | null;
   log: FastifyBaseLogger;
 };

@@ -24,10 +24,15 @@ export type Config = {
   /** Serves the built client from dist/ when present. */
   serveClient: boolean;
   /**
-   * The directory Relay shares with the relay-local helper, which offers direct transfers on the
-   * local network (see shared/local.ts). Unset, there are none.
+   * Direct transfers on the local network (see shared/local.ts): Relay runs the helper that
+   * browsers connect to, on this UDP port. Unset, there are none.
    */
-  local?: string;
+  local?: { port: number };
+  /**
+   * Serves on this Unix socket instead of a TCP port, behind a reverse proxy that is the only one
+   * with access to it and sets X-Forwarded-For.
+   */
+  socket?: string;
 };
 
 export function configFromEnv(env = process.env): Config {
@@ -36,21 +41,30 @@ export function configFromEnv(env = process.env): Config {
     origin: env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined,
     secret: env.RELAY_SECRET,
     trustProxy: (env.RELAY_TRUST_PROXY || "127.0.0.1,::1").split(",").map((s) => s.trim()),
-    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY),
+    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, false),
     tabLeaseMs: 5 * 60_000,
     sweepMs: 60_000,
     logger: true,
     serveClient: true,
-    local: env.RELAY_LOCAL ? resolve(env.RELAY_LOCAL) : undefined,
+    local: flag("RELAY_DIRECT", env.RELAY_DIRECT, true) ? { port: udpPort(env.RELAY_DIRECT_PORT) } : undefined,
+    socket: env.RELAY_SOCKET ? resolve(env.RELAY_SOCKET) : undefined,
   };
 }
 
-/** On for "true" or "1", off when unset, "false" or "0", or a startup error naming the variable. */
-function flag(name: string, value: string | undefined) {
+/** On for "true" or "1", off for "false" or "0", `fallback` when unset, or a startup error naming the variable. */
+function flag(name: string, value: string | undefined, fallback: boolean) {
   const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "") return fallback;
   if (normalized === "true" || normalized === "1") return true;
-  if (normalized === "" || normalized === "false" || normalized === "0") return false;
+  if (normalized === "false" || normalized === "0") return false;
   throw new Error(`${name} must be true or false.`);
+}
+
+function udpPort(value: string | undefined) {
+  const port = Number(value?.trim() || 3090);
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error("RELAY_DIRECT_PORT must be a UDP port number.");
+  return port;
 }
 
 /** "https://relay.example.com" exactly as browsers send it in Origin, or a startup error naming the variable. */
