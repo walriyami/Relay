@@ -26,7 +26,7 @@ import { Brand } from "./Brand";
 
 type Width = "narrow" | "medium" | "wide";
 
-function PublicFrame({ children, width = "medium" }: { children: ReactNode; width?: Width }) {
+export function PublicFrame({ children, width = "medium" }: { children: ReactNode; width?: Width }) {
   return (
     <div className="public">
       <header className={`public-head ${width}`}>
@@ -47,7 +47,7 @@ function shareTitle(share: PublicShare) {
   return share.name === autoName([], text) || share.name === "Text" ? "Shared text" : share.name;
 }
 
-function Unavailable({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+export function Unavailable({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
   return (
     <div className="card-surface public-card">
       <div className="public-title">

@@ -14,14 +14,24 @@ import type { Endpoint, Input, Response } from "../../shared/api";
 import { coalesce, type Coalesced } from "./coalesce";
 import { connection, onConnectivity, reportFailure, reportReachable } from "./connection";
 import { eventStream } from "./event-stream";
+import type { NearbyEvent } from "../../shared/nearby";
 
-const ALL: Topic[] = ["items", "links", "deliveries", "devices", "requests", "account", "activity", "codes"];
+const ALL: Topic[] = ["items", "links", "deliveries", "devices", "requests", "account", "activity", "codes", "nearby"];
 /** Told the stamp a new stream opened at, when that is why it runs; see `missed`. */
 type Listener = (opened?: ChangeStamp) => void;
 const listeners = new Map<Topic, Set<Listener>>();
 let source: ReturnType<typeof eventStream> | undefined;
 // A new principal gets a new tab id and a new stream.
 let sourceTab = "";
+/** The stream is open (not a limited probe): this tab can be its device's Nearby endpoint. */
+let open = false;
+const openListeners = new Set<() => void>();
+const nearbyListeners = new Set<(event: NearbyEvent) => void>();
+function setOpen(next: boolean) {
+  if (open === next) return;
+  open = next;
+  openListeners.forEach((fn) => fn());
+}
 
 function fire(topic: Topic, opened?: ChangeStamp) {
   listeners.get(topic)?.forEach((fn) => fn(opened));
@@ -38,9 +48,26 @@ export function connectLive() {
   };
   source = eventStream(urls.events(sourceTab), {
     // Whatever changed before the stream opened, it won't send: views read earlier load again.
-    ready: refresh,
+    ready: (changes) => {
+      refresh(changes);
+      // Each new stream is a new endpoint to Relay; listeners register it again.
+      setOpen(false);
+      setOpen(true);
+    },
     // Overflow tabs still refresh their views and renew their lease on each bounded probe.
-    limited: () => refresh(),
+    limited: () => {
+      setOpen(false);
+      refresh();
+    },
+    nearby: (event) => {
+      let sent: NearbyEvent;
+      try {
+        sent = JSON.parse(event.data) as NearbyEvent;
+      } catch {
+        return;
+      }
+      nearbyListeners.forEach((fn) => fn(sent));
+    },
     change: (event) => {
       try {
         const { topics } = JSON.parse(event.data) as ChangeEvent;
@@ -60,6 +87,7 @@ export function connectLive() {
       window.dispatchEvent(new CustomEvent<SessionEnded>("relay-session-expired", { detail: { reason } }));
     },
     failed: () => {
+      setOpen(false);
       reportFailure();
       // A refused probe has no SSE reason. Recheck the session so overflow tabs also sign out
       // promptly after revocation, even when they have no view queries in flight.
@@ -70,6 +98,24 @@ export function connectLive() {
 export function disconnectLive() {
   source?.close();
   source = undefined;
+  setOpen(false);
+}
+
+/** Whether this tab's stream is open, so Relay can reach this tab. */
+export const liveOpen = () => open;
+/** Runs `fn` whenever the stream opens (again) or closes. */
+export function onLiveOpen(fn: () => void) {
+  openListeners.add(fn);
+  return () => {
+    openListeners.delete(fn);
+  };
+}
+/** Nearby's events for this tab; see shared/nearby.ts. */
+export function onNearby(fn: (event: NearbyEvent) => void) {
+  nearbyListeners.add(fn);
+  return () => {
+    nearbyListeners.delete(fn);
+  };
 }
 // A successful connectivity check can shorten a network retry, but cannot bypass admission limits.
 onConnectivity(() => {

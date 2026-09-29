@@ -6,6 +6,7 @@ Relay runs as one container with one persistent data volume. This guide covers a
 - [Install with Docker Compose](#install-with-docker-compose)
 - [Put it behind HTTPS](#put-it-behind-https)
 - [Direct transfers on your network](#direct-transfers-on-your-network)
+- [Nearby](#nearby)
 - [Configuration](#configuration)
 - [First sign-in and members](#first-sign-in-and-members)
 - [Limits and storage](#limits-and-storage)
@@ -121,6 +122,16 @@ How it works: Relay runs a helper process beside itself that accepts WebRTC conn
 **Admin → Overview** shows whether direct transfers are on and how many browsers are connected, and warns when they're unavailable, with the reason, such as the UDP port being taken by another program. Relay starts the helper again by itself if it stops. Its messages are in `docker compose logs relay`.
 
 To turn direct transfers off for everyone, set `RELAY_DIRECT=false` in `.env` and run `docker compose up -d`.
+
+## Nearby
+
+**Nearby** sends files and text from one device straight to another when both are on the same network, wherever that is, such as from an iPad to an iPhone at the office while Relay runs at home. Relay only introduces the two devices, so the transfer runs at the speed of the local network, and nothing is stored on the server. It needs nothing set up on the server: no port, setting or helper.
+
+- **Your own devices** appear whenever you're signed in on them. They can receive while Relay is open on them, and they take what you send without asking.
+- **Other members** appear when both of you have Relay open on the same network and both allow it with **Visible to people nearby**, in Nearby or **Settings → Sending**. They're asked before anything arrives.
+- **People without an account** join with a Nearby code or link from **Invite someone**, and give a name. They can send to and receive from your devices, and are asked before anything arrives. A code lasts an hour unless you extend it. You can remove anyone who joined, and ending the code removes everyone.
+
+Relay judges which devices share a network by the address it sees them at: the same public IPv4 address or IPv6 /64, or its own private networks. Behind a proxy or tunnel, that means `RELAY_TRUST_PROXY` must be set as described [above](#put-it-behind-https). Otherwise every member appears to be at the proxy's address, and members elsewhere are listed for each other, although their devices never connect. The connection itself only ever uses the devices' local addresses: there are no STUN or TURN servers. Where devices can't reach each other, as on guest Wi-Fi with client isolation, Nearby says so and offers to send to your own device the usual way through Relay instead.
 
 ## Configuration
 

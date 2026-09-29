@@ -76,6 +76,8 @@ export class Client {
   readonly cookies = new Map<string, string>();
   csrf = "";
   readonly tab = crypto.randomUUID().replaceAll("-", "");
+  /** The address requests come from, where it matters (rate limits, Nearby's networks). */
+  address: string | undefined;
   constructor(instance: Instance) {
     this.instance = instance;
   }
@@ -87,7 +89,11 @@ export class Client {
     };
     if (this.cookies.size) headers.cookie = [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
     if (this.csrf && !headers["x-relay-csrf"]) headers["x-relay-csrf"] = this.csrf;
-    const res = await this.instance.app.inject({ ...options, headers });
+    const res = await this.instance.app.inject({
+      ...(this.address ? { remoteAddress: this.address } : {}),
+      ...options,
+      headers,
+    });
     for (const cookie of res.cookies as { name: string; value: string; maxAge?: number; expires?: Date }[]) {
       const expired = cookie.maxAge === 0 || (cookie.expires && cookie.expires.getTime() <= Date.now());
       if (expired || !cookie.value) this.cookies.delete(cookie.name);

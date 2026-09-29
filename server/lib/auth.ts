@@ -53,6 +53,9 @@ export const sessionCookie = (ctx: Context, req: FastifyRequest) => `${cookiePre
 const guestCookiePrefix = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay_guest_`;
 export const guestCookie = (ctx: Context, req: FastifyRequest, requestId: string) =>
   guestCookiePrefix(ctx, req) + requestId;
+/** A Nearby guest's cookie for one code. */
+export const nearbyCookie = (ctx: Context, req: FastifyRequest, inviteId: string) =>
+  `${cookiePrefix(ctx, req)}relay_nearby_${inviteId}`;
 /** Tells one person opening shared links from another; it grants nothing by itself. */
 export const visitorCookie = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay_visitor`;
 

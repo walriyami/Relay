@@ -67,7 +67,7 @@ export function CodeButton() {
             autoFocus
             onOpen={goFrom(opened)}
             fieldLabel="Code"
-            description="Open a share, upload to a request, or accept an invitation."
+            description="Open a share, upload to a request, join someone’s Nearby, or accept an invitation."
           />
         </Popover>
       )}

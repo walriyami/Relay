@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { DEFAULT_CODE_LENGTH, formatCode, type CodeLength } from "../../shared/codes.ts";
 import { fail } from "./errors.ts";
+import type { PickupCodeKind } from "./pickup-codes.ts";
 
 export { formatCode, normalizeCode } from "../../shared/codes.ts";
 
@@ -93,6 +94,9 @@ export class Secrets {
   inviteToken(inviteId: string) {
     return this.mac("invite", inviteId).toString("base64url");
   }
+  nearbyToken(inviteId: string) {
+    return this.mac("nearby", inviteId).toString("base64url");
+  }
   /** A database-safe, purpose-separated digest for a low-entropy numeric pickup code. */
   pickupCodeHash(digits: string) {
     return `hmac-sha256:${this.mac("pickup-code", digits).toString("hex")}`;
@@ -134,12 +138,10 @@ export class Secrets {
   devicePickupCode(codeId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
     return this.code("device-pickup", codeId, nonce, length);
   }
-  pickupCodeFor(
-    kind: "share" | "request" | "invitation" | "device",
-    id: string,
-    nonce = 0,
-    length: CodeLength = DEFAULT_CODE_LENGTH,
-  ) {
+  nearbyPickupCode(inviteId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
+    return this.code("nearby-pickup", inviteId, nonce, length);
+  }
+  pickupCodeFor(kind: PickupCodeKind, id: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
     switch (kind) {
       case "share":
         return this.pickupCode(id, nonce, length);
@@ -149,6 +151,8 @@ export class Secrets {
         return this.invitePickupCode(id, nonce, length);
       case "device":
         return this.devicePickupCode(id, nonce, length);
+      case "nearby":
+        return this.nearbyPickupCode(id, nonce, length);
     }
   }
   private code(purpose: string, id: string, nonce: number, length: CodeLength) {

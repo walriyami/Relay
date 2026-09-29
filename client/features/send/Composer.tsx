@@ -513,7 +513,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
               ) : (
                 <ul className="selection-list" aria-label="Selected items">
                   {items.slice(0, shown).map((item) => (
-                    <SelectionRow key={item.key} item={item} />
+                    <SelectionRow key={item.key} item={item} onRemove={() => removeItem(item.key)} />
                   ))}
                   {items.length > shown && (
                     <li className="selection-more">
@@ -793,7 +793,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   );
 }
 
-function DestinationRow({
+export function DestinationRow({
   icon,
   label,
   detail,
@@ -903,7 +903,7 @@ function StoppedNotice({
   );
 }
 
-function SelectionRow({ item }: { item: DraftItem }) {
+export function SelectionRow({ item, onRemove }: { item: DraftItem; onRemove: () => void }) {
   return (
     <li className="selection-row">
       {item.kind === "folder" ? (
@@ -924,7 +924,7 @@ function SelectionRow({ item }: { item: DraftItem }) {
           {bytes(item.size)}
         </span>
       </div>
-      <IconButton size="sm" label={`Remove ${item.name}`} icon={<X size={16} />} onClick={() => removeItem(item.key)} />
+      <IconButton size="sm" label={`Remove ${item.name}`} icon={<X size={16} />} onClick={onRemove} />
     </li>
   );
 }

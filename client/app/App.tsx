@@ -20,6 +20,7 @@ import {
   Monitor,
   Moon,
   Pencil,
+  Radar,
   Send,
   Settings,
   Shield,
@@ -39,6 +40,9 @@ import {
 import { navigate, useRoute, useSearch } from "../lib/router";
 import { connectLive, disconnectLive, onChange } from "../lib/live";
 import { startLink, stopLink } from "../lib/local/link";
+import { isActive, nearbySnapshot } from "../lib/nearby/engine";
+import { startPresence, stopPresence } from "../lib/nearby/presence";
+import { clearSelection } from "../lib/nearby/selection";
 import { coalesce } from "../lib/coalesce";
 import { abandonAll, isBusy, setTransferPrefs, transfers } from "../lib/transfers";
 import { clearDraft } from "../lib/draft";
@@ -48,6 +52,9 @@ import { AuthFrame, SignIn } from "../features/auth/Auth";
 import { Join } from "../features/join/Join";
 import { Setup } from "../features/setup/Setup";
 import { SendPage } from "../features/send/SendPage";
+import { NearbyPage } from "../features/nearby/NearbyPage";
+import { NearbyAlerts } from "../features/nearby/NearbyAlerts";
+import { NearbyGuestPage } from "../features/nearby/GuestPage";
 import { FilesPage } from "../features/library/FilesPage";
 import { ActivityProvider } from "../features/activity/ActivityProvider";
 import { ActivityButton } from "../features/activity/ActivityButton";
@@ -140,6 +147,12 @@ export function App() {
         <GuestUpload token={parts[1]} />
       </Public>
     );
+  if (parts[0] === "n" && parts[1])
+    return (
+      <Public>
+        <NearbyGuestPage token={parts[1]} />
+      </Public>
+    );
   if (parts[0] === "pickup")
     return (
       <Public>
@@ -184,6 +197,7 @@ function Private() {
       // Another sign-in in this tab starts clean: it never inherits someone else's work or draft.
       void abandonAll();
       clearDraft();
+      clearSelection();
     }
     previousPrincipal.current = principal;
     setPrincipal(principal);
@@ -264,6 +278,8 @@ function Private() {
   useEffect(() => {
     if (!me) return;
     connectLive();
+    // This device is present for Nearby while Relay is open, whichever page shows.
+    startPresence(me.device.id);
     // Preferences and usage can change from another device.
     const offAccount = onChange("account", () => void sessionRefresh.request());
     // From a 401 on any request, or from the event stream with the server's reason.
@@ -277,6 +293,8 @@ function Private() {
       const stopped = transfers.filter((t) => isBusy(t) && !t.guest).map((t) => t.name);
       void abandonAll();
       disconnectLive();
+      stopPresence();
+      clearSelection();
       setPrincipal(null);
       setCsrf("");
       setMe(null);
@@ -291,6 +309,7 @@ function Private() {
     return () => {
       offAccount();
       disconnectLive();
+      stopPresence();
       window.removeEventListener("relay-session-expired", expire);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect only when the signed-in user or device changes.
@@ -387,6 +406,7 @@ function Private() {
 
 const NAV = [
   { to: "/", label: "Send", icon: <Send size={20} aria-hidden /> },
+  { to: "/nearby", label: "Nearby", icon: <Radar size={20} aria-hidden /> },
   { to: "/files", label: "Files", icon: <FolderOpen size={20} aria-hidden /> },
   { to: "/links", label: "Links", icon: <Link2 size={20} aria-hidden /> },
   { to: "/requests", label: "Requests", icon: <FolderInput size={20} aria-hidden /> },
@@ -415,6 +435,9 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   switch (section) {
     case "/":
       page = <SendPage />;
+      break;
+    case "/nearby":
+      page = <NearbyPage />;
       break;
     case "/files":
       page = <FilesPage key="files" />;
@@ -495,6 +518,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           </PageBoundary>
         </main>
       </div>
+      <NearbyAlerts view={section === "/nearby" ? undefined : () => navigate("/nearby")} />
     </ActivityProvider>
   );
 }
@@ -668,13 +692,18 @@ function AutoAcceptSwitch() {
   );
 }
 
-// Signing out abandons this tab's uploads, so say so first.
+// Signing out abandons this tab's uploads and Nearby transfers, so say so first.
 export async function confirmSignOut() {
   const n = transfers.filter(isBusy).length;
-  if (!n) return true;
+  const nearby = nearbySnapshot().transfers.filter(isActive).length;
+  if (!n && !nearby) return true;
+  const what = [
+    n && (n === 1 ? "1 upload" : `${n} uploads`),
+    nearby && (nearby === 1 ? "1 Nearby transfer" : `${nearby} Nearby transfers`),
+  ].filter(Boolean);
   return confirmDialog({
-    title: `Sign out and cancel ${n === 1 ? "1 upload" : `${n} uploads`}?`,
-    body: "Uploads in progress in this tab stop, and anything not finished is discarded.",
+    title: `Sign out and cancel ${what.join(" and ")}?`,
+    body: "What’s in progress in this tab stops, and anything not finished is discarded.",
     confirm: "Sign out",
     danger: true,
   });
@@ -686,8 +715,10 @@ export async function signOut(to = "/") {
   // Closed first, so the server's "signed out" notice for this device doesn't come back to this tab.
   disconnectLive();
   stopLink();
+  stopPresence();
   await call(api.session.signOut).catch(() => {});
   clearDraft();
+  clearSelection();
   setPrincipal(null);
   setCsrf("");
   navigate(to, true);

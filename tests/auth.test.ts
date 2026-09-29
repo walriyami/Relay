@@ -234,11 +234,13 @@ test("account settings and preferences", async () => {
     const client = await member(instance, "fran");
     const updated = await client.call(api.account.update, { body: { retentionDays: 30, prefs: { linkDays: 3 } } });
     assert.equal(updated.user.retentionDays, 30);
-    assert.deepEqual(updated.prefs, { linkDays: 3, autoCopyLink: true, activity: ALL_ACTIVITY });
-    const again = await client.call(api.account.update, { body: { prefs: { autoCopyLink: false } } });
-    assert.deepEqual(again.prefs, { linkDays: 3, autoCopyLink: false, activity: ALL_ACTIVITY });
+    assert.deepEqual(updated.prefs, { linkDays: 3, autoCopyLink: true, nearbyVisible: true, activity: ALL_ACTIVITY });
+    const again = await client.call(api.account.update, {
+      body: { prefs: { autoCopyLink: false, nearbyVisible: false } },
+    });
+    assert.deepEqual(again.prefs, { linkDays: 3, autoCopyLink: false, nearbyVisible: false, activity: ALL_ACTIVITY });
     const me = await client.call(api.session.get);
-    assert.deepEqual(me.prefs, { linkDays: 3, autoCopyLink: false, activity: ALL_ACTIVITY });
+    assert.deepEqual(me.prefs, { linkDays: 3, autoCopyLink: false, nearbyVisible: false, activity: ALL_ACTIVITY });
     assert.equal(me.user.retentionDays, 30);
   } finally {
     await instance.close();

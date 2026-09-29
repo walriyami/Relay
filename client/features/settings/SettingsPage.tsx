@@ -232,6 +232,12 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
           checked={me.prefs.autoCopyLink}
           onChange={(v) => void save({ prefs: { autoCopyLink: v } })}
         />
+        <Toggle
+          label="Visible to people nearby"
+          description="Other members on the same network as you can see your devices in Nearby and offer to send you things."
+          checked={me.prefs.nearbyVisible}
+          onChange={(v) => void save({ prefs: { nearbyVisible: v } })}
+        />
       </Section>
       <DevicesSection />
       <PasskeysSection />

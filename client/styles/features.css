@@ -318,7 +318,7 @@
     bottom: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0;
     padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
     overflow: visible;
@@ -4681,4 +4681,262 @@ audio.preview-media {
   top: 6px;
   right: 6px;
   color: var(--accent);
+}
+
+/* Nearby: Send's layout, with what was sent and received below instead of Recent. */
+.nearby-elsewhere {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+}
+.nearby-elsewhere > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.nearby-elsewhere > div {
+  flex: 1;
+  min-width: 0;
+}
+.nearby-elsewhere p {
+  margin: 2px 0 0;
+  font-size: 0.88rem;
+}
+.nearby-visible {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+.nearby-visible .toggle-row {
+  padding: 0;
+}
+.nearby-transfer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nearby-kept {
+  margin-top: var(--s4);
+}
+.nearby-transfer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.nearby-transfer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+.nearby-transfer-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--well);
+  color: var(--muted);
+}
+.nearby-transfer.is-active .nearby-transfer-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nearby-transfer.is-done .nearby-transfer-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.nearby-transfer.is-failed .nearby-transfer-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.nearby-transfer-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+.nearby-transfer-title > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nearby-transfer-title .muted {
+  font-size: 0.85rem;
+}
+.nearby-transfer-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.nearby-transfer-status.is-error {
+  color: var(--danger);
+}
+.nearby-transfer-preview {
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.nearby-transfer-actions {
+  margin-top: var(--s1);
+}
+.nearby-files {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+.nearby-files > li {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+.nearby-files > li > .muted {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+.nearby-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nearby-files > li.nearby-files-more {
+  justify-content: center;
+  border-bottom: 0;
+}
+.nearby-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+}
+.nearby-text pre {
+  width: 100%;
+  max-height: 240px;
+  margin: 0;
+  padding: var(--s3);
+  overflow: auto;
+  border-radius: var(--r1);
+  background: var(--well);
+  font: inherit;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.nearby-offer-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  list-style: none;
+  border-radius: var(--r1);
+  background: var(--well);
+  font-size: 0.9rem;
+}
+.nearby-offer-files > li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nearby-offer-text {
+  max-height: 160px;
+  margin: var(--s2) 0 0;
+  padding: var(--s2) var(--s3);
+  overflow: auto;
+  border-radius: var(--r1);
+  background: var(--well);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.nearby-invite {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+.nearby-invite-expiry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.nearby-guests .send-panel-heading {
+  margin-top: 0;
+}
+.nearby-guests ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nearby-guests li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 40px;
+  border-bottom: 1px solid var(--line);
+}
+.nearby-guests li > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.nearby-guests li > .muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 0.82rem;
+}
+.nearby-guest-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nearby-join-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: var(--s2);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+@media (max-width: 560px) {
+  .nearby-elsewhere {
+    flex-wrap: wrap;
+  }
+  .nearby-elsewhere > .btn {
+    width: 100%;
+  }
 }

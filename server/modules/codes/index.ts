@@ -12,6 +12,7 @@ import {
   currentOwnedPickupCode,
   ensurePickupCodeResolutionAvailable,
   reconcilePickupCodeMode,
+  type PickupCodeKind,
 } from "../../lib/pickup-codes.ts";
 
 /** One entry point classifies a code, then its recipient flow applies its own access rules. */
@@ -48,7 +49,7 @@ export function registerCodes(app: FastifyInstance, ctx: Context) {
     const code = normalizeCode(body.code, codeLengthOf(ctx.db));
     const codeHash = code ? ctx.secrets.pickupCodeHash(code) : "";
     const registered = code
-      ? ctx.db.get<{ kind: "share" | "request" | "invitation" | "device"; target_id: string }>(
+      ? ctx.db.get<{ kind: PickupCodeKind; target_id: string }>(
           "SELECT kind, target_id FROM pickup_codes WHERE code_hash = ? AND retired IS NULL",
           codeHash,
         )
@@ -121,6 +122,16 @@ export function registerCodes(app: FastifyInstance, ctx: Context) {
           kind: "device" as const,
           path: `/?device=${encodeURIComponent(ctx.secrets.deviceToken(registered.target_id))}`,
         };
+      }
+      case "nearby": {
+        const invite = ctx.db.get<{ id: string; expires: number; disabled: number }>(
+          `SELECT n.id, n.expires, u.disabled FROM nearby_invites n JOIN users u ON u.id = n.user_id
+             WHERE n.id = ? AND n.code_hash = ?`,
+          registered.target_id,
+          codeHash,
+        );
+        if (!invite || invite.expires <= now || invite.disabled) return reject(410, "This Nearby code has ended.");
+        return { kind: "nearby" as const, path: `/n/${ctx.secrets.nearbyToken(invite.id)}` };
       }
     }
   });

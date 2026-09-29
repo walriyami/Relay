@@ -1,6 +1,6 @@
 -- Relay schema. Times are integer milliseconds since the epoch. Ids are UUIDs (v7 when server-made).
--- Bearer secrets (session, invitation, grant, link, request and device tokens) are stored only as
--- SHA-256 hashes, and pickup codes only as keyed HMAC digests.
+-- Bearer secrets (session, invitation, grant, link, request, device and Nearby tokens) are stored
+-- only as SHA-256 hashes, and pickup codes only as keyed HMAC digests.
 
 CREATE TABLE settings (
   key TEXT PRIMARY KEY,
@@ -106,6 +106,30 @@ CREATE INDEX login_codes_user ON login_codes(user_id, expires);
 CREATE INDEX login_codes_session ON login_codes(session_hash);
 CREATE INDEX login_codes_expires ON login_codes(expires);
 CREATE INDEX login_codes_revoked ON login_codes(revoked) WHERE revoked IS NOT NULL;
+
+-- A member's Nearby code. Whoever opens it and gives a name can exchange files directly with the
+-- member's devices (see shared/nearby.ts) until it expires or the member ends it. One per member.
+CREATE TABLE nearby_invites (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  code_hash TEXT NOT NULL UNIQUE,
+  created INTEGER NOT NULL,
+  expires INTEGER NOT NULL
+) STRICT;
+CREATE INDEX nearby_invites_expires ON nearby_invites(expires);
+
+-- Someone who joined with a Nearby code, holding its per-code cookie. They go with the code.
+CREATE TABLE nearby_guests (
+  id TEXT PRIMARY KEY,
+  invite_id TEXT NOT NULL REFERENCES nearby_invites(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  csrf TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('phone', 'tablet', 'computer')),
+  created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX nearby_guests_invite ON nearby_guests(invite_id);
 
 CREATE TABLE requests (
   id TEXT PRIMARY KEY,
@@ -387,7 +411,7 @@ CREATE TABLE traffic (
 -- to anyone else.
 CREATE TABLE pickup_codes (
   code_hash TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('share', 'request', 'invitation', 'device')),
+  kind TEXT NOT NULL CHECK (kind IN ('share', 'request', 'invitation', 'device', 'nearby')),
   target_id TEXT NOT NULL,
   nonce INTEGER NOT NULL CHECK (nonce >= 0),
   created INTEGER NOT NULL,
@@ -413,4 +437,8 @@ END;
 CREATE TRIGGER retire_device_code_after_login_code_delete AFTER DELETE ON login_codes BEGIN
   UPDATE pickup_codes SET retired = MAX(created, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
   WHERE kind = 'device' AND target_id = OLD.id AND retired IS NULL;
+END;
+CREATE TRIGGER retire_nearby_code_after_invite_delete AFTER DELETE ON nearby_invites BEGIN
+  UPDATE pickup_codes SET retired = MAX(created, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  WHERE kind = 'nearby' AND target_id = OLD.id AND retired IS NULL;
 END;

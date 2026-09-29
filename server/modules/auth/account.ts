@@ -7,6 +7,7 @@ import { hashPassword } from "../../lib/secrets.ts";
 import { checkPassword } from "./passwords.ts";
 import { readPrefs, toUser, USER_COLUMNS, type UserRow } from "./sessions.ts";
 import { streamsOf } from "./streams.ts";
+import { hubOf } from "../nearby/hub.ts";
 import { allowedKeepDays, allowedLinkDays } from "./member-limits.ts";
 import { DAY_MS } from "../../lib/time.ts";
 import { renameUser } from "./users.ts";
@@ -61,6 +62,8 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
       ...(body.trashDays !== undefined ? (["items", "links", "deliveries", "requests"] as const) : []),
       ...(body.prefs?.activity ? (["activity"] as const) : []),
     );
+    // Other members on the same network see this member's devices, and name, in Nearby.
+    if (body.prefs?.nearbyVisible !== undefined || body.name !== undefined) hubOf(ctx).userChanged(member.userId);
     return { prefs: readPrefs(user.prefs), user: toUser(user) };
   });
 

@@ -6,6 +6,7 @@ import { clearCookie, sessionCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { streamsOf } from "./streams.ts";
+import { hubOf } from "../nearby/hub.ts";
 
 type DeviceRow = Pick<Device, "id" | "name" | "kind" | "created" | "seen"> & { signed_in: number };
 
@@ -57,6 +58,7 @@ export function registerDevices(app: FastifyInstance, ctx: Context) {
       );
     });
     ctx.events.publish(member.userId, "devices");
+    hubOf(ctx).userChanged(member.userId);
     return { ok: true as const };
   });
 

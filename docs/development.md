@@ -36,7 +36,7 @@ npx playwright install --with-deps
 
 - **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
 - **Resources** (`npm run test:resources`). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling in Chromium, Firefox and WebKit.
-- **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe.
+- **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe. The Nearby journeys connect two browsers by their local addresses, which only Chromium can be told to reveal, so they run in Chromium and the mobile viewport only.
 
 Tests never touch real data. Every instance uses a new temporary directory and generated files.
 

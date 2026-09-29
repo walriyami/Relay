@@ -7,6 +7,8 @@ import * as z from "zod/mini";
 import { LOCAL } from "./local.ts";
 import { LIMITS, USAGE_RANGES, USERNAME } from "./model.ts";
 import type * as M from "./model.ts";
+import { NEARBY } from "./nearby.ts";
+import type * as N from "./nearby.ts";
 
 export type Method = "GET" | "POST" | "PATCH" | "DELETE";
 /**
@@ -116,6 +118,18 @@ const linkSettings = {
   visitorLimit: z.optional(visitorLimit),
   note: z.optional(linkNote),
 };
+
+const nearbyTab = z.string().check(z.regex(/^[A-Za-z0-9_-]{16,64}$/));
+const nearbySession = z.string().check(z.regex(/^[A-Za-z0-9_-]{8,64}$/));
+const sdp = text(1, NEARBY.sdpBytes);
+const nearbySignalBody = z.object({
+  to: id,
+  signal: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("offer"), session: nearbySession, sdp }),
+    z.object({ kind: z.literal("answer"), session: nearbySession, sdp }),
+    z.object({ kind: z.literal("bye"), session: nearbySession }),
+  ]),
+});
 
 export const destination = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("save") }),
@@ -237,6 +251,7 @@ export const api = {
           z.object({
             linkDays: z.optional(linkDays),
             autoCopyLink: z.optional(z.boolean()),
+            nearbyVisible: z.optional(z.boolean()),
             /** Only the groups given change. */
             activity: z.optional(
               z.object({
@@ -469,6 +484,37 @@ export const api = {
     check: ok("GET", "/api/local/check", { auth: "member" }),
   },
 
+  nearby: {
+    get: endpoint<N.NearbyState>()("GET", "/api/nearby", { auth: "member" }),
+    /**
+     * Makes this device present in Nearby through `tab`'s event stream, which must be open. The
+     * device's latest tab to ask wins; the one it replaces is told so.
+     */
+    present: ok("POST", "/api/nearby/presence", { auth: "member", body: z.object({ tab: nearbyTab }) }),
+    signal: ok("POST", "/api/nearby/signal", { auth: "member", body: nearbySignalBody }),
+    /** The member's Nearby code: the one that's open, or a new one. */
+    invite: endpoint<N.NearbyInvite>()("POST", "/api/nearby/invite", { auth: "member" }),
+    /** Keeps the open code working for another full period. */
+    extendInvite: endpoint<N.NearbyInvite>()("PATCH", "/api/nearby/invite", { auth: "member" }),
+    /** Ends the code, and with it every guest who joined with it. */
+    endInvite: ok("DELETE", "/api/nearby/invite", { auth: "member" }),
+    removeGuest: ok("DELETE", "/api/nearby/guests/:id", { auth: "member" }),
+
+    // A guest's side, by the code's link. Joining sets a cookie for this code; the other writes
+    // carry the guest's CSRF token, which the handlers check (a guest is not a session or grant).
+    guest: endpoint<N.NearbyGuestState>()("GET", "/api/n/:token", { auth: "public" }),
+    join: endpoint<N.NearbyGuestState>()("POST", "/api/n/:token/join", {
+      auth: "public",
+      csrf: false,
+      body: z.object({
+        name: z.string().check(z.trim(), z.minLength(1), z.maxLength(NEARBY.guestNameLength)),
+        kind: deviceKind,
+      }),
+    }),
+    guestSignal: ok("POST", "/api/n/:token/signal", { auth: "public", csrf: false, body: nearbySignalBody }),
+    leave: ok("DELETE", "/api/n/:token/join", { auth: "public", csrf: false }),
+  },
+
   admin: {
     overview: endpoint<M.AdminOverview>()("GET", "/api/admin", { auth: "admin" }),
     integrity: endpoint<M.BlobStatus>()("POST", "/api/admin/integrity", {
@@ -548,8 +594,11 @@ export const urls = {
   events: (tab: string) => `/api/events${q({ tab })}`,
   /** Guest keep-alive stream for a request page's transfers. */
   guestEvents: (token: string, tab: string) => `/api/r/${token}/events${q({ tab })}`,
+  /** A Nearby guest's stream: while it's open, the guest is present to the member's devices. */
+  nearbyEvents: (token: string) => `/api/n/${token}/events`,
   shareLink: (origin: string, token: string) => `${origin}/s/${token}`,
   requestLink: (origin: string, token: string) => `${origin}/r/${token}`,
+  nearbyLink: (origin: string, token: string) => `${origin}/n/${token}`,
 } as const;
 
 export const headers = {

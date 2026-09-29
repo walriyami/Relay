@@ -28,4 +28,6 @@ export async function sweepAuth(ctx: Context, now: number) {
   await ctx.db.deleteBatched("login_codes", "revoked IS NOT NULL");
   await ctx.db.deleteBatched("invites", "expires <= ?", now);
   await ctx.db.deleteBatched("guest_grants", "expires <= ?", now);
+  // Their guests go with them.
+  await ctx.db.deleteBatched("nearby_invites", "expires <= ?", now);
 }

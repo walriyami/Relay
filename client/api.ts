@@ -79,9 +79,26 @@ export async function call<E extends Endpoint>(
 }
 
 /** Like `call`, also saying where changes stood when the server began its answer. */
-export async function stamped<E extends Endpoint>(
+export function stamped<E extends Endpoint>(
   endpoint: E,
   input?: Input<E>,
+): Promise<{ data: Response<E>; changes: ChangeStamp | null }> {
+  return request(endpoint, input, writeHeaders(), true);
+}
+
+/**
+ * Calls a Nearby guest's endpoint with the guest's own CSRF token. A guest has no session, so a
+ * refusal is only an error, never a sign-out.
+ */
+export async function guestCall<E extends Endpoint>(endpoint: E, input: Input<E>, csrf = ""): Promise<Response<E>> {
+  return (await request(endpoint, input, csrf ? { [headers.csrf]: csrf } : {}, false)).data;
+}
+
+async function request<E extends Endpoint>(
+  endpoint: E,
+  input: Input<E> | undefined,
+  sent: Record<string, string>,
+  member: boolean,
 ): Promise<{ data: Response<E>; changes: ChangeStamp | null }> {
   const { params, query, body } = (input ?? {}) as {
     params?: Record<string, string>;
@@ -100,7 +117,7 @@ export async function stamped<E extends Endpoint>(
     res = await fetch(url, {
       method: endpoint.method,
       credentials: "same-origin",
-      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...writeHeaders() },
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...sent },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
@@ -120,6 +137,7 @@ export async function stamped<E extends Endpoint>(
   if (!res.ok) {
     const message = (data as { error?: string })?.error || "Request failed.";
     if (
+      member &&
       !SIGN_IN_PATHS.has(endpoint.path) &&
       (res.status === 401 || (res.status === 403 && message === "Your session has changed. Refresh and retry."))
     )

@@ -56,6 +56,7 @@ export function readPrefs(json: string): Prefs {
     // null keeps new links until they are turned off.
     linkDays: typeof stored.linkDays === "number" || stored.linkDays === null ? stored.linkDays : DEFAULTS.linkDays,
     autoCopyLink: typeof stored.autoCopyLink === "boolean" ? stored.autoCopyLink : true,
+    nearbyVisible: typeof stored.nearbyVisible === "boolean" ? stored.nearbyVisible : true,
     activity: {
       received: shown("received"),
       requests: shown("requests"),

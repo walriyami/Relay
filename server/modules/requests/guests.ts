@@ -4,6 +4,7 @@ import { api } from "../../../shared/api.ts";
 import { LIMITS, type PublicRequest } from "../../../shared/model.ts";
 import { cookieOptions, grantFor, guestCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
+import { cleanLabel } from "../../lib/names.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "../auth/limits.ts";
@@ -61,17 +62,6 @@ export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes
     trashBytes: held.trashBytes,
     pendingBytes: held.pendingBytes,
   };
-}
-
-/** A guest's name as a label: one line, no control or direction characters; null when blank. */
-function cleanSender(value: string | undefined): string | null {
-  const name = (value ?? "")
-    .normalize("NFC")
-    // eslint-disable-next-line no-control-regex -- control characters are exactly what's replaced.
-    .replace(/[\x00-\x1f\x7f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return name ? [...name].slice(0, LIMITS.senderLength).join("") : null;
 }
 
 /**
@@ -140,7 +130,7 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       // One synchronous block: the limits read here are the ones the new uploads are admitted against.
       // Each new transfer gets an independent item; retries resolve their original item by transfer ID.
       const { sender: typed, ...input } = body;
-      const sender = cleanSender(typed);
+      const sender = cleanLabel(typed, LIMITS.senderLength);
       const principal = principalKey(grant);
       const target =
         ctx.db.value<string>("SELECT item FROM transfers WHERE id = ? AND principal = ?", input.id, principal) ??

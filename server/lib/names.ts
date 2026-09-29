@@ -32,3 +32,14 @@ export function splitPath(value: string): string[] {
     if (!segment || segment !== segment.trim() || segment === "." || segment === "..") fail(400, "Invalid file path.");
   return segments.map(cleanName);
 }
+
+/** A name someone gives themselves, as a label: one line, no control or direction characters; null when blank. */
+export function cleanLabel(value: string | undefined, max: number): string | null {
+  const name = (value ?? "")
+    .normalize("NFC")
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what's replaced.
+    .replace(/[\x00-\x1f\x7f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return name ? [...name].slice(0, max).join("") : null;
+}

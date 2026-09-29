@@ -57,6 +57,16 @@ Each request then travels on a data channel of its own: a head, the body in 64 K
 - **Downloads** arrive on a data channel and are handed to a service worker (`public/local-sw.js`), which serves them to a hidden frame as an ordinary download. The browser saves them to disk as they arrive, with its own progress and cancel. Back pressure runs from the disk through the worker and the page to the helper. If the connection drops, the rest comes over HTTP from the same byte, with `If-Range` ensuring it's the same file. After an upgrade, a newer worker waits until no download depends on the old one, because taking over would cut off the downloads the old one is serving.
 - **Guests** never go direct. The helper acts for the session that set up the connection, so a link or request grant would not travel.
 
+## Nearby
+
+Nearby sends files and text from one device straight to another on the same network. Relay only introduces the two devices: the bytes never pass through it and nothing is saved to anyone's Files. The protocol between the devices is in `client/lib/nearby/protocol.ts`; what Relay relays is in `shared/nearby.ts`.
+
+- **Presence.** A signed-in device with Relay open is present. One tab per device is its endpoint: the tab holding a Web Lock, which uses its event stream. Other tabs follow it over a `BroadcastChannel` and can take over. Guests who joined with a member's Nearby code are present while their page is open. Relay keeps presence in memory only.
+- **Who can reach whom.** Relay decides this for every signal. A member's own devices can always reach each other, and they accept automatically. Two members' devices can reach each other when both members allow it (**Visible to people nearby**) and Relay sees both at the same network: the same public IPv4 address or IPv6 /64, or any of Relay's own private networks. Guests can reach the devices of the member whose code they used, and those devices can reach them. Everyone except a member's own devices must accept before anything is sent.
+- **Connecting.** One endpoint sends a WebRTC offer and the other an answer, through Relay's API and event streams. Each carries all of its candidates, so signalling takes two messages. There are no STUN or TURN servers, so only local addresses are tried: where devices can't reach each other, as on guest Wi-Fi with client isolation, the connection fails instead of going anywhere else. A member's own device that can't be reached offers **Send via Relay**, which sends the same files the usual way.
+- **Transfers.** A control channel carries the offer, the answer and the results as JSON. Each file, and the text, then travels on a data channel of its own, three at a time: 64 KiB messages, no more than 8 MiB ahead of what the receiver has stored. If the connection drops, the devices connect again and carry on from what the receiver already has, for up to 90 seconds.
+- **Receiving and saving.** Received bytes are written to the browser's private file system as they arrive, where it has one, and otherwise kept in memory, with a CRC-32 per file. On phones and tablets **Save** opens the share sheet, so photos can go straight to the photo library. On computers files download one at a time, or all together as one uncompressed ZIP made in the browser. Received files belong to the tab and are gone when it closes.
+
 ## Storage
 
 - **Content-addressed files.** Each unique file is stored once under `blobs/`, named by its SHA-256. Several items can share the same bytes, and each owner's storage still counts their saved size.
@@ -89,8 +99,8 @@ Relay isn't end-to-end encrypted. Whoever operates the server can read what's st
 client/            React app
   app/             Shell, routing, session, public pages
   components/      Shared UI components
-  features/        One folder per area: send, library, links, requests, incoming, settings, admin…
-  lib/             Transfers engine, live connection, formatting, previews
+  features/        One folder per area: send, nearby, library, links, requests, incoming, settings, admin…
+  lib/             Transfers engine, Nearby connections, live connection, formatting, previews
   styles/          Design tokens and CSS
 local/             Direct-transfer helper, run by Relay (WebRTC to Relay's local socket)
 server/

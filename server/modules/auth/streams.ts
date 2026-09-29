@@ -6,11 +6,12 @@ import { grantFor, memberFromToken, requireMember, sessionCookie } from "../../l
 import { fail, notFound } from "../../lib/errors.ts";
 import { sha256 } from "../../lib/secrets.ts";
 
-type EndReason = SessionEnded["reason"];
+export type EndReason = SessionEnded["reason"];
 /** Why a user's sessions were just revoked, when the database alone can't tell. */
 export type EndHint = { userId: string; reason: EndReason };
 
 type Stream = {
+  /** The member whose changes it carries, or whose Nearby guest holds it. */
   userId: string;
   /** Set for member streams: the device counts as online while it holds one. */
   deviceId: string | null;
@@ -22,9 +23,21 @@ type Stream = {
   res: ServerResponse;
   /** Null while the credential still works; otherwise why it stopped. */
   ended: (hint: EndHint | undefined) => EndReason | null;
-  tab: string | null;
-  principal: Principal;
+  /** The tab whose lease it renews, and whose transfers it keeps alive. */
+  lease: Lease | null;
   unsubscribe: () => void;
+  /** Run once when it ends; see `Channel.onEnd`. */
+  ends: Set<() => void>;
+  channel?: Channel;
+};
+type Lease = { tab: string; principal: Principal };
+
+/** An open stream as other modules see it: something to send to, that ends. */
+export type Channel = {
+  /** Sends one event. A connection that can't take it is ended. */
+  send(event: string, data: unknown): void;
+  /** Runs `fn` when the stream ends, at once if it has. Returns a way to cancel that. */
+  onEnd(fn: () => void): () => void;
 };
 
 type PollingPresence = Pick<Stream, "userId" | "capKey" | "ended"> & { deviceId: string; expires: number };
@@ -146,23 +159,24 @@ class Streams {
   }
 
   /** Initial admission and overflow probes share the durable cadence without caching auth. */
-  renew(spec: Pick<Stream, "tab" | "principal" | "deviceId">) {
+  renew(spec: Pick<Stream, "lease" | "deviceId">) {
     const now = Date.now();
-    const lease = spec.tab
+    const tab = spec.lease?.tab;
+    const lease = tab
       ? this.ctx.db.get<{ principal: string; lease_expires: number; closed: number | null }>(
           "SELECT principal, lease_expires, closed FROM tabs WHERE id = ?",
-          spec.tab,
+          tab,
         )
       : undefined;
-    if (lease && (lease.closed !== null || lease.principal !== principalKey(spec.principal)))
+    if (lease && (lease.closed !== null || lease.principal !== principalKey(spec.lease!.principal)))
       fail(409, "This tab was closed, so its transfer was cancelled.");
-    const renewTab = spec.tab && (!lease || lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs);
+    const renewTab = tab && (!lease || lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs);
     const renewDevice =
       spec.deviceId &&
       (this.ctx.db.value<number>("SELECT seen FROM devices WHERE id = ?", spec.deviceId) ?? 0) <= now - this.durableMs;
     if (!renewTab && !renewDevice) return;
     this.ctx.db.tx(() => {
-      if (renewTab) this.ctx.transfers.renewTab(spec.tab!, spec.principal);
+      if (renewTab) this.ctx.transfers.renewTab(tab, spec.lease!.principal);
       if (renewDevice) this.ctx.db.run("UPDATE devices SET seen = ? WHERE id = ?", now, spec.deviceId);
     });
   }
@@ -177,6 +191,27 @@ class Streams {
     this.end(stream);
   }
 
+  /** The open stream `tab` holds under this session or grant, if it has one. */
+  channel(capKey: string, tab: string): Channel | null {
+    for (const stream of this.open)
+      if (stream.capKey === capKey && stream.lease?.tab === tab) return this.channelOf(stream);
+    return null;
+  }
+
+  channelOf(stream: Stream): Channel {
+    return (stream.channel ??= {
+      send: (event, data) => this.write(stream, `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+      onEnd: (fn) => {
+        if (!this.open.has(stream)) {
+          fn();
+          return () => {};
+        }
+        stream.ends.add(fn);
+        return () => stream.ends.delete(fn);
+      },
+    });
+  }
+
   /** With a reason, a member stream is told why before it closes, so its tab can end the session. */
   end(stream: Stream, reason?: EndReason) {
     if (!this.open.delete(stream)) return;
@@ -189,6 +224,8 @@ class Streams {
         this.ctx.events.publish(stream.userId, "devices");
       }
     }
+    for (const fn of stream.ends) fn();
+    stream.ends.clear();
     try {
       if (reason) {
         const event: SessionEnded = { reason };
@@ -233,9 +270,9 @@ class Streams {
       const closed = new Set<string>();
       this.ctx.db.tx(() => {
         for (const stream of this.open) {
-          if (stream.tab && !tabs.has(stream.tab)) {
-            tabs.add(stream.tab);
-            if (!this.ctx.transfers.renewTab(stream.tab, stream.principal)) closed.add(stream.tab);
+          if (stream.lease && !tabs.has(stream.lease.tab)) {
+            tabs.add(stream.lease.tab);
+            if (!this.ctx.transfers.renewTab(stream.lease.tab, stream.lease.principal)) closed.add(stream.lease.tab);
           }
           if (stream.deviceId) devices.add(stream.deviceId);
         }
@@ -243,7 +280,7 @@ class Streams {
       });
       // Commit before advancing the cadence or acknowledging life to any client.
       this.flushed = now;
-      for (const stream of this.open) if (stream.tab && closed.has(stream.tab)) this.end(stream);
+      for (const stream of this.open) if (stream.lease && closed.has(stream.lease.tab)) this.end(stream);
     }
     for (const stream of this.open) this.write(stream, "event: beat\ndata: {}\n\n");
   }
@@ -276,12 +313,22 @@ function tabOf(req: FastifyRequest): string | null {
   return typeof tab === "string" && TAB.test(tab) ? tab : null;
 }
 
-function browserOf(req: FastifyRequest): string | null {
+export function browserOf(req: FastifyRequest): string | null {
   const browser = (req.query as { browser?: unknown }).browser;
   return typeof browser === "string" && TAB.test(browser) ? browser : null;
 }
 
-function openStream(ctx: Context, reply: FastifyReply, spec: Omit<Stream, "res" | "unsubscribe">, subscribe: boolean) {
+/**
+ * Answers with an event stream for `spec`: a lasting one while its session or grant has room, else
+ * a probe that tells the tab when to ask again. With `subscribe`, it carries the member's changes.
+ * Returns the lasting stream, if it is one.
+ */
+export function openStream(
+  ctx: Context,
+  reply: FastifyReply,
+  spec: Omit<Stream, "res" | "unsubscribe" | "ends">,
+  subscribe: boolean,
+): Channel | null {
   const streams = streamsOf(ctx);
   streams.renew(spec);
   const admitted = streams.canAdd(spec);
@@ -296,11 +343,12 @@ function openStream(ctx: Context, reply: FastifyReply, spec: Omit<Stream, "res" 
     streams.probe(spec);
     const limited: StreamLimited = { retryMs: streams.beatMs };
     res.end(`event: limited\ndata: ${JSON.stringify(limited)}\n\n`);
-    return;
+    return null;
   }
   const stream: Stream = {
     ...spec,
     res,
+    ends: new Set(),
     unsubscribe: subscribe
       ? ctx.events.subscribe(spec.userId, (topics) => {
           const event: ChangeEvent = { topics };
@@ -316,7 +364,11 @@ function openStream(ctx: Context, reply: FastifyReply, spec: Omit<Stream, "res" 
   streams.add(stream);
   const ready: StreamReady = { beatMs: streams.beatMs, changes };
   streams.write(stream, `event: ready\ndata: ${JSON.stringify(ready)}\n\n`);
+  return streams.channelOf(stream);
 }
+
+/** The streams a session holds are counted, and found, under this. */
+export const sessionKey = (member: Member) => `session:${member.sessionHash}`;
 
 function memberStream(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
   const member: Member = requireMember(ctx, req);
@@ -337,12 +389,11 @@ function memberStream(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
     {
       userId: member.userId,
       deviceId: member.deviceId,
-      capKey: `session:${member.sessionHash}`,
+      capKey: sessionKey(member),
       cap: 4,
       browser: browserOf(req),
       ended,
-      tab,
-      principal: member,
+      lease: tab ? { tab, principal: member } : null,
     },
     true,
   );
@@ -376,8 +427,7 @@ function guestStream(ctx: Context, req: FastifyRequest<{ Params: { token: string
       cap: 2,
       browser: browserOf(req),
       ended,
-      tab,
-      principal: grant,
+      lease: tab ? { tab, principal: grant } : null,
     },
     false,
   );

@@ -6,7 +6,7 @@ import { normalizeCode } from "./secrets.ts";
 import { DEFAULT_CODE_LENGTH, type CodeLength } from "../../shared/codes.ts";
 import { pickupCodeHeightened } from "./pickup-code-guard.ts";
 
-export type PickupCodeKind = "share" | "request" | "invitation" | "device";
+export type PickupCodeKind = "share" | "request" | "invitation" | "device" | "nearby";
 type RegisteredCode = { code_hash: string; nonce: number };
 const SETTING = "pickupCodeLength";
 const EFFECTIVE_SETTING = "pickupCodeEffectiveLength";
@@ -187,6 +187,18 @@ export function rotatePickupCodes(ctx: Context, length: CodeLength, preferredLen
           }
           break;
         }
+        case "nearby": {
+          const invite = ctx.db.get<{ user_id: string; expires: number }>(
+            "SELECT user_id, expires FROM nearby_invites WHERE id = ?",
+            row.target_id,
+          );
+          if (invite) owners.add(invite.user_id);
+          if (invite && invite.expires > now) {
+            const issued = issuePickupCode(ctx.db, ctx.secrets, "nearby", row.target_id, length);
+            ctx.db.run("UPDATE nearby_invites SET code_hash = ? WHERE id = ?", issued.codeHash, row.target_id);
+          }
+          break;
+        }
       }
     }
 
@@ -196,7 +208,7 @@ export function rotatePickupCodes(ctx: Context, length: CodeLength, preferredLen
     ctx.db.setSetting(RESOLUTION_UNAVAILABLE_SETTING, "0");
   });
 
-  for (const owner of owners) ctx.events.publish(owner, "account", "links", "items", "requests", "devices");
+  for (const owner of owners) ctx.events.publish(owner, "account", "links", "items", "requests", "devices", "nearby");
   ctx.events.broadcast("codes");
   return true;
 }
@@ -308,6 +320,17 @@ export function currentOwnedPickupCode(ctx: Context, memberId: string, rawCode: 
            AND c.expires > ? AND s.expires > ? AND u.disabled = 0`,
         entry.target_id,
         now,
+        now,
+      );
+      owner = row?.user_id;
+      usable = !!row;
+      break;
+    }
+    case "nearby": {
+      const row = ctx.db.get<{ user_id: string }>(
+        `SELECT n.user_id FROM nearby_invites n JOIN users u ON u.id = n.user_id
+         WHERE n.id = ? AND n.expires > ? AND u.disabled = 0`,
+        entry.target_id,
         now,
       );
       owner = row?.user_id;

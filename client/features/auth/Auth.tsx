@@ -136,7 +136,7 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
             <p className="muted">
               {loginCode
                 ? "On a device that’s already signed in, choose Add a device on the Send page or in Settings › Devices. Other Relay codes open their destination here."
-                : "Sign in, open a share, upload to a request, or accept an invitation."}
+                : "Sign in, open a share, upload to a request, join someone’s Nearby, or accept an invitation."}
             </p>
           </div>
           <CodeEntryForm

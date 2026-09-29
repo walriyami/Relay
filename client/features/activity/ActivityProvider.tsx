@@ -45,7 +45,7 @@ const BACKGROUND_GRACE = 1500;
 const itemName = (d: Delivery) => d.item?.name || "an item";
 const isNew = (e: ActivityEntry, seen: number) => !e.self && e.created > seen;
 
-function notifySystem(body: string, tag: string, onClick?: () => void) {
+export function notifySystem(body: string, tag: string, onClick?: () => void) {
   const prefs = getLocalPrefs();
   if (!prefs.system || !document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
   const notice = new Notification("Relay", { body, tag });

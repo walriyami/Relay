@@ -4,6 +4,8 @@ type Options = {
   /** With where changes stood when the stream opened, if the server said. */
   ready?: (changes?: ChangeStamp) => void;
   change?: (event: MessageEvent<string>) => void;
+  /** Nearby's signals and notices; see shared/nearby.ts. */
+  nearby?: (event: MessageEvent<string>) => void;
   limited?: () => void;
   ended?: (event: MessageEvent<string>) => void;
   failed?: () => void;
@@ -115,6 +117,11 @@ export function eventStream(url: string, options: Options = {}) {
       heard();
       options.change?.(event as MessageEvent<string>);
     };
+    const nearby = (event: Event) => {
+      if (!valid()) return;
+      heard();
+      options.nearby?.(event as MessageEvent<string>);
+    };
     const capacity = (event: Event) => {
       if (!valid()) return;
       let wait = 20_000;
@@ -132,7 +139,7 @@ export function eventStream(url: string, options: Options = {}) {
       stop();
       options.ended?.(event as MessageEvent<string>);
     };
-    const handlers = { ready, beat, change, limited: capacity, ended, error: failed };
+    const handlers = { ready, beat, change, nearby, limited: capacity, ended, error: failed };
     for (const [name, handler] of Object.entries(handlers)) current.addEventListener(name, handler);
     cleanup = () => {
       clearTimeout(silence);

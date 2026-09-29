@@ -31,6 +31,7 @@ import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { createUsageMeter, registerUsage } from "./modules/usage/index.ts";
 import { LocalHelper } from "./modules/local/helper.ts";
 import { registerLocal } from "./modules/local/index.ts";
+import { registerNearby } from "./modules/nearby/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
 import { ProxyTrust } from "./lib/proxies.ts";
@@ -201,6 +202,7 @@ export async function buildApp(config: Config): Promise<App> {
     registerActivity(app, ctx);
     registerUsage(app, ctx);
     registerLocal(app, ctx);
+    registerNearby(app, ctx);
 
     const sweep = () =>
       (sweeping ??= (async () => {

@@ -97,8 +97,11 @@ export type SetupState = "account" | "choices" | "done";
 /** What Activity shows. Deliveries still waiting for an answer are always shown. */
 export type ActivityGroup = "received" | "requests" | "links" | "security" | "members";
 export type ActivityPrefs = Record<ActivityGroup, boolean>;
-/** `linkDays`: how long new links work; null keeps them until turned off. */
-export type Prefs = { linkDays: number | null; autoCopyLink: boolean; activity: ActivityPrefs };
+/**
+ * `linkDays`: how long new links work; null keeps them until turned off. `nearbyVisible`: other
+ * members on the same network see this member's devices in Nearby (see shared/nearby.ts).
+ */
+export type Prefs = { linkDays: number | null; autoCopyLink: boolean; nearbyVisible: boolean; activity: ActivityPrefs };
 /** The name a member shows other people. */
 export const displayName = (user: Pick<User, "name" | "username">) => user.name || user.username;
 /**
@@ -147,7 +150,8 @@ export type PickupResolution =
   | { kind: "share"; path: string }
   | { kind: "request"; path: string }
   | { kind: "invitation"; path: string }
-  | { kind: "device"; path: string };
+  | { kind: "device"; path: string }
+  | { kind: "nearby"; path: string };
 
 export type NodeKind = "file" | "folder" | "text";
 /** Enough to render a preview tile. `path` is relative to the item root, "/"-separated. */
@@ -456,7 +460,8 @@ export type AdminUsageReport = UsageReportBase & {
 
 /** Server-sent event topics. A client refetches whatever a topic covers. */
 /** `codes`: the deployment's pickup-code length or protection changed. */
-export type Topic = "items" | "links" | "deliveries" | "devices" | "requests" | "account" | "activity" | "codes";
+export type Topic =
+  "items" | "links" | "deliveries" | "devices" | "requests" | "account" | "activity" | "codes" | "nearby";
 export type ChangeEvent = { topics: Topic[] };
 /**
  * The first event on every stream. After it the server sends a `beat` event at least every
