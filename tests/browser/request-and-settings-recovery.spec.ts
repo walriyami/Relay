@@ -235,8 +235,7 @@ test("a failed setting is recovered before later queued choices save", async ({ 
 
 test("two manual accepts download once, and a later explicit Download still works", async ({ page, browser }) => {
   await signedIn(page, "Laptop");
-  const receiverName = unique("Claim receiver");
-  const receiver = await deviceContext(browser, receiverName);
+  const receiver = await deviceContext(browser, unique("Claim receiver"));
   const releaseAnswers = gate();
   try {
     await receiver.page.getByRole("button", { name: /^Account:/ }).click();
@@ -246,7 +245,7 @@ test("two manual accepts download once, and a later explicit Download still work
     await second.goto("/");
     const filename = `${unique("manual-claim")}.txt`;
     await fileInput(page).setInputFiles(textFile(filename));
-    await destinations(page).getByRole("button", { name: receiverName, exact: true }).click();
+    await destinations(page).getByRole("button", { name: receiver.name, exact: true }).click();
     const popups = [receiver.page, second].map((tab) => tab.getByRole("dialog", { name: filename }));
     for (const [index, tab] of [receiver.page, second].entries()) {
       await tab.bringToFront();

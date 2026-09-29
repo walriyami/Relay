@@ -64,12 +64,12 @@ test("device loading and the empty device list are visible before selecting cont
   });
   try {
     await page.setViewportSize({ width: 393, height: 852 });
-    await signedIn(page);
+    const laptop = await signedIn(page);
     const panel = destinations(page);
     await expect(panel.getByText("Loading devices…", { exact: true })).toBeVisible();
     release();
     await expect(panel.getByText("Devices show up here while Relay is open on them.", { exact: true })).toBeVisible();
-    await expect(panel.getByRole("button", { name: "Laptop", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: laptop, exact: true })).toHaveCount(0);
   } finally {
     release();
   }

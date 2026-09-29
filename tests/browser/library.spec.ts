@@ -526,12 +526,17 @@ test("sending to a device reports an offline conflict and refreshes devices", as
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByRole("region", { name: "Text" })).toContainText(name);
     await dialog.getByRole("button", { name: "More actions" }).click();
-    await page.getByRole("menu").getByRole("menuitem", { name: "Send to Phone" }).click();
+    await page
+      .getByRole("menu")
+      .getByRole("menuitem", { name: `Send to ${phone.name}`, exact: true })
+      .click();
     await expect(page.getByRole("alert")).toContainText("That device is not online.");
     await expect.poll(() => deviceReads).toBeGreaterThan(before);
     await phone.context.close();
     await dialog.getByRole("button", { name: "More actions" }).click();
-    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Send to Phone" })).toHaveCount(0);
+    await expect(
+      page.getByRole("menu").getByRole("menuitem", { name: `Send to ${phone.name}`, exact: true }),
+    ).toHaveCount(0);
   } finally {
     await phone.context.close().catch(() => {});
   }

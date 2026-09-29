@@ -1,20 +1,28 @@
 import { test, expect } from "@playwright/test";
-import { api } from "../../shared/api";
-import { composer, destinations, deviceContext, fileInput, signedIn, textFile, unique, writeText } from "./helpers";
+import {
+  composer,
+  destinations,
+  deviceContext,
+  deviceName,
+  endingWith,
+  fileInput,
+  signedIn,
+  textFile,
+  unique,
+  writeText,
+} from "./helpers";
 
 test("only live devices are offered, and they disappear when closed", async ({ page, browser }) => {
-  await signedIn(page, "Laptop");
+  const laptop = await signedIn(page, "Laptop");
   const targets = destinations(page);
-  await expect(targets.getByRole("button", { name: "Phone", exact: true })).toHaveCount(0);
+  // Signed in, but Relay isn't open on it: not offered.
+  const destination = targets.getByRole("button", { name: await deviceName("Phone"), exact: true });
+  await expect(destination).toHaveCount(0);
   const phone = await deviceContext(browser, "Phone");
   try {
-    // Other browser projects can already own these names; use the server's canonical labels.
-    const current = await (await page.request.get(api.session.get.path)).json();
-    const remote = await (await phone.page.request.get(api.session.get.path)).json();
-    const destination = targets.getByRole("button", { name: remote.device.name, exact: true });
     await expect(destination).toBeVisible({ timeout: 20_000 });
     await expect(destination).toBeDisabled();
-    await expect(targets.getByRole("button", { name: current.device.name, exact: true })).toHaveCount(0);
+    await expect(targets.getByRole("button", { name: laptop, exact: true })).toHaveCount(0);
     await writeText(page, "something to send");
     await expect(destination).toBeEnabled();
     await composer(page).getByRole("button", { name: "Clear", exact: true }).click();
@@ -23,7 +31,7 @@ test("only live devices are offered, and they disappear when closed", async ({ p
   } finally {
     await phone.context.close();
   }
-  await expect(targets.getByRole("button", { name: "Phone", exact: true })).toHaveCount(0, { timeout: 45_000 });
+  await expect(destination).toHaveCount(0, { timeout: 45_000 });
   await expect(targets.getByText("Devices show up here while Relay is open on them.")).toBeVisible();
 });
 
@@ -38,7 +46,7 @@ test("a device accepts what your others send it: it downloads and opens in a pop
   await fileInput(page).setInputFiles([textFile(`${name}.txt`, "attached file")]);
   await writeText(page, `wifi password for ${name}`);
   const download = phone.page.waitForEvent("download");
-  await targets.getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
+  await targets.getByRole("button", { name: phone.name, exact: true }).click({ timeout: 20_000 });
   const card = page.locator(".transfer").first();
 
   // Auto-accept is on by default: the phone downloads the file (text is shown, never downloaded)
@@ -57,12 +65,12 @@ test("a device accepts what your others send it: it downloads and opens in a pop
   await expect(phone.page).toHaveURL(/\/$/);
 
   // The sender is told exactly that, and nothing more.
-  await expect(card).toContainText("Accepted on Phone");
+  await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
   await phone.context.close();
 });
 
 test("with auto-accept off, a device answers from the popup or from Activity", async ({ page, browser }) => {
-  await signedIn(page, "Laptop");
+  const laptop = await signedIn(page, "Laptop");
   const phone = await deviceContext(browser, "Phone");
   try {
     await phone.page.getByRole("button", { name: /^Account:/ }).click();
@@ -75,13 +83,15 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     // Declined in the popup: it stays in Files, and the sender is told so.
     const first = unique("declined");
     await writeText(page, `note ${first}`);
-    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
+    await destinations(page).getByRole("button", { name: phone.name, exact: true }).click({ timeout: 20_000 });
     const received = phone.page.getByRole("dialog", { name: new RegExp(`^Text`) });
     await expect(received.getByRole("region", { name: "Text" })).toContainText(`note ${first}`);
     await expect(received).toContainText("Also saved in your Files.");
     await received.getByRole("button", { name: "Decline" }).click();
     await expect(received).toHaveCount(0);
-    await expect(page.locator(".transfer").first()).toContainText(/Declined on Phone( \d+)? · still in Files/);
+    await expect(page.locator(".transfer").first().getByRole("status")).toHaveText(
+      endingWith(`: Declined on ${phone.name} · still in Files`),
+    );
     await composer(page).getByRole("button", { name: "Done" }).click();
 
     // An arrival never opens over a menu the member is using: it waits until the menu closes. The
@@ -89,8 +99,9 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     await phone.page.getByRole("button", { name: /^Account:/ }).click();
     const second = unique("waiting");
     await fileInput(page).setInputFiles([textFile(`${second}.txt`, "for later")]);
-    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
-    await expect(page.locator(".transfer").first()).toContainText(/Sent to Phone( \d+)? · not accepted yet/);
+    await destinations(page).getByRole("button", { name: phone.name, exact: true }).click({ timeout: 20_000 });
+    const card = page.locator(".transfer").first();
+    await expect(card.getByRole("status")).toHaveText(endingWith(`: Sent to ${phone.name} · not accepted yet`));
     const popup = phone.page.getByRole("dialog", { name: `${second}.txt` });
     await expect(phone.page.getByRole("button", { name: /^Activity, \d+ new$/ })).toBeVisible();
     await expect(popup).toHaveCount(0);
@@ -105,15 +116,15 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     const waiting = activity.getByRole("region", { name: "Waiting for you" }).getByRole("listitem");
     await expect(waiting).toHaveCount(1);
     await expect(waiting).toContainText(`${second}.txt`);
-    await expect(waiting).toContainText("From Laptop");
+    await expect(waiting).toContainText(`From ${laptop} · `);
     const download = phone.page.waitForEvent("download");
     await waiting.getByRole("button", { name: "Accept" }).click();
     expect((await download).suggestedFilename()).toBe(`${second}.txt`);
     await expect(activity.getByRole("region", { name: "Waiting for you" })).toHaveCount(0);
-    await expect(activity.getByRole("region", { name: "Recent activity" })).toContainText(
-      `“${second}.txt” from Laptop`,
-    );
-    await expect(page.locator(".transfer").first()).toContainText("Accepted on Phone");
+    await expect(
+      activity.getByRole("region", { name: "Recent activity" }).getByText(endingWith(`“${second}.txt” from ${laptop}`)),
+    ).toBeVisible();
+    await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
     await expect(phone.page).toHaveTitle("Relay");
     await expect(phone.page.getByRole("button", { name: "Activity", exact: true })).toBeVisible();
 
@@ -138,9 +149,9 @@ test("a delivery that fails leaves everything saved, and Done keeps it in Files"
       }),
     );
     await fileInput(page).setInputFiles([textFile(`${name}.txt`, "for the phone")]);
-    await destinations(page).getByRole("button", { name: "Phone", exact: true }).click({ timeout: 20_000 });
+    await destinations(page).getByRole("button", { name: phone.name, exact: true }).click({ timeout: 20_000 });
     const card = page.locator(".transfer").first();
-    await expect(card).toContainText("Saved, but not sent to Phone");
+    await expect(card.getByRole("status")).toHaveText(`Saved, but not sent to ${phone.name}`);
     // Nothing is running any more, so the drop box says so and offers Done.
     await expect(composer(page)).toContainText("Everything is saved in Files. Done keeps it there.");
     await expect(composer(page)).not.toContainText("Keep this tab open");

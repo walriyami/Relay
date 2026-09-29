@@ -1,6 +1,6 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
 import type { TransferResult } from "../../shared/model";
-import { destinations, deviceContext, fileInput, signedIn, textFile, unique } from "./helpers";
+import { destinations, deviceContext, deviceName, fileInput, signedIn, textFile, unique } from "./helpers";
 
 const senderName = unique("Care sender");
 const receiverName = unique("Care receiver");
@@ -34,7 +34,9 @@ async function sendFile(sender: Page, receiver: Page) {
       response.request().method() === "POST" &&
       /^\/api\/transfers\/[^/]+\/complete$/.test(new URL(response.url()).pathname),
   );
-  await destinations(sender).getByRole("button", { name: receiverName, exact: true }).click();
+  await destinations(sender)
+    .getByRole("button", { name: await deviceName(receiverName), exact: true })
+    .click();
   const response = await sent;
   expect(response.ok()).toBe(true);
   const { itemId, delivery } = (await response.json()) as TransferResult;

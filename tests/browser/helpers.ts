@@ -1,6 +1,15 @@
-import { expect, request, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  request,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import sharp from "sharp";
 import { api } from "../../shared/api.ts";
+import type { Me } from "../../shared/model.ts";
 
 export const BASE = `http://localhost:${process.env.RELAY_TEST_PORT || 3091}`;
 const PASSWORD = "Browser-test-password-only";
@@ -27,23 +36,50 @@ export async function deviceState(name: string) {
   return state;
 }
 
+/**
+ * The name the server knows a device by. Signing in only asks for a name: one already used by another
+ * signed-in device is numbered ("Phone 2"), and every browser project, and every worker restarted
+ * after a failure, signs in again on the same server. A device can also be renamed. So tests find a
+ * device by this, never by the name they asked for.
+ */
+async function nameOf(client: APIRequestContext) {
+  const session: Me = await (await client.get(api.session.get.path)).json();
+  return session.device.name;
+}
+
+/** The current name of a signed-in device, without opening Relay on it. */
+export async function deviceName(device: string) {
+  const context = await request.newContext({ baseURL: BASE, storageState: await deviceState(device) });
+  try {
+    return await nameOf(context);
+  } finally {
+    await context.dispose();
+  }
+}
+
+/** Opens Relay on `page` as the given device, and returns the name the server knows it by. */
 export async function signedIn(page: Page, device = "Laptop") {
   await page.context().addCookies((await deviceState(device)).cookies);
   await page.goto("/");
   await expect(composer(page)).toBeVisible();
+  return nameOf(page.request);
 }
 
+/** Opens Relay as the given device in a browser of its own; `name` is what the server knows it by. */
 export async function deviceContext(
   browser: Browser,
   device: string,
   options: Parameters<Browser["newContext"]>[0] = {},
-): Promise<{ context: BrowserContext; page: Page }> {
+): Promise<{ context: BrowserContext; page: Page; name: string }> {
   const context = await browser.newContext({ ...options, baseURL: BASE, storageState: await deviceState(device) });
   const page = await context.newPage();
   await page.goto("/");
   await expect(composer(page)).toBeVisible();
-  return { context, page };
+  return { context, page, name: await nameOf(page.request) };
 }
+
+/** Text ending exactly in `tail`, so that "on Phone" can't also match "on Phone 2". */
+export const endingWith = (tail: string) => new RegExp(`${tail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 export const unique = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
