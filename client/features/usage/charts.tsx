@@ -279,29 +279,32 @@ export function Chart<B>({
           </div>
         )}
       </div>
-      <table className="visually-hidden" id={tableId}>
-        <caption>{title}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Period</th>
-            {series.map((s) => (
-              <th key={s.key} scope="col">
-                {s.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {buckets.map((b, i) => (
-            <tr key={i}>
-              <th scope="row">{labels[i].long}</th>
+      {/* A table sizes to its content whatever its width, so the wrapper is what stays out of view. */}
+      <div className="visually-hidden">
+        <table id={tableId}>
+          <caption>{title}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Period</th>
               {series.map((s) => (
-                <td key={s.key}>{formatValue(s.value(b), unit)}</td>
+                <th key={s.key} scope="col">
+                  {s.label}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {buckets.map((b, i) => (
+              <tr key={i}>
+                <th scope="row">{labels[i].long}</th>
+                {series.map((s) => (
+                  <td key={s.key}>{formatValue(s.value(b), unit)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }
