@@ -33,6 +33,7 @@ import { LocalHelper } from "./modules/local/helper.ts";
 import { registerLocal } from "./modules/local/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
+import { ProxyTrust } from "./lib/proxies.ts";
 
 export type App = { app: FastifyInstance; ctx: Context; sweep: () => Promise<void> };
 
@@ -43,6 +44,8 @@ export async function buildApp(config: Config): Promise<App> {
     // mkdir's mode is ignored for existing volumes, including data from older installations.
     chmodSync(path, 0o700);
   }
+  // Before the database: a mistyped entry stops startup without holding its lock.
+  const proxies = new ProxyTrust(config.trustProxy);
   const db = new Database(join(config.root, "relay.sqlite"));
   const app = Fastify({
     logger: config.logger ? { level: "info", redact: ["req.headers.cookie", "req.headers['x-relay-csrf']"] } : false,
@@ -55,9 +58,7 @@ export async function buildApp(config: Config): Promise<App> {
     // the event stream's heartbeats never idle.
     requestTimeout: 120_000,
     connectionTimeout: 120_000,
-    // On a socket, every request comes through the proxy that alone can reach it, which sets
-    // X-Forwarded-For to the client's address; there is no peer address of its own to check.
-    trustProxy: config.socket ? (_address, hop) => hop === 0 : config.trustProxy,
+    trustProxy: proxies.trusts,
   });
 
   try {
@@ -92,6 +93,7 @@ export async function buildApp(config: Config): Promise<App> {
     });
     app.addHook("onClose", () =>
       Promise.resolve().then(() => {
+        proxies.stop();
         // Counts from the last few seconds, including the requests that just finished.
         try {
           ctx.usage.close();
@@ -101,6 +103,7 @@ export async function buildApp(config: Config): Promise<App> {
       }),
     );
 
+    await proxies.start(app.log);
     await app.register(cookie);
     await app.register(rateLimit, {
       max: 6000,
@@ -113,6 +116,7 @@ export async function buildApp(config: Config): Promise<App> {
     });
 
     app.addHook("onRequest", async (req, reply) => {
+      proxies.checkForwarded(req.socket.remoteAddress, req.headers["x-forwarded-for"]);
       reply
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
@@ -236,8 +240,13 @@ export async function buildApp(config: Config): Promise<App> {
         root: dist,
         prefix: "/",
         wildcard: false,
+        // The build stores Brotli and gzip copies of each text file (see vite.config.ts). They are
+        // chosen by Accept-Encoding, never asked for by name.
+        preCompressed: true,
+        allowedPath: (path) => !/\.(br|gz)$/.test(path),
         setHeaders(reply, path) {
-          const fingerprinted = path.startsWith(join(dist, "assets") + "/") && /-[\w-]{8,}\.[\w]+$/.test(path);
+          const file = path.replace(/\.(br|gz)$/, "");
+          const fingerprinted = file.startsWith(join(dist, "assets") + "/") && /-[\w-]{8,}\.[\w]+$/.test(file);
           reply.header("Cache-Control", fingerprinted ? "public, max-age=31536000, immutable" : "no-cache");
         },
       });

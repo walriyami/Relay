@@ -1,12 +1,20 @@
-# Optional: docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
-# Create RELAY_TUNNEL_NETWORK first and attach your trusted connector to it.
+# Optional: a tunnel connector or proxy in another container reaches Relay at http://relay:3090, on
+# an existing Docker network it shares with Relay. Add this file to COMPOSE_FILE in .env so that
+# every docker compose command includes it:
+#
+#   COMPOSE_FILE=compose.yaml:compose.tunnel.yaml
+#   RELAY_TUNNEL_NETWORK=<the connector's network>
+#   RELAY_TRUST_PROXY=<the connector's container name, such as cloudflared>
+#
+# See docs/self-hosting.md.
 services:
-  relay-gateway:
+  relay:
     networks:
+      default: {}
       tunnel:
         aliases: [relay]
 
 networks:
   tunnel:
     external: true
-    name: ${RELAY_TUNNEL_NETWORK:-streaming_lab_private}
+    name: ${RELAY_TUNNEL_NETWORK:?Set RELAY_TUNNEL_NETWORK in .env to the Docker network your tunnel or proxy is on.}

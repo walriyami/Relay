@@ -1,4 +1,3 @@
-import { chmod, rm } from "node:fs/promises";
 import { buildApp } from "./app.ts";
 import { configFromEnv } from "./config.ts";
 import { setupStateOf } from "./modules/setup/index.ts";
@@ -7,13 +6,7 @@ import { setupKeyPath } from "./modules/setup/setup-key.ts";
 const config = configFromEnv();
 const { app, ctx } = await buildApp(config);
 const port = Number(process.env.PORT || 3090);
-if (config.socket) {
-  // A socket left by a Relay that did not shut down would refuse the new one.
-  await rm(config.socket, { force: true });
-  await app.listen({ path: config.socket });
-  // For the proxy, which shares Relay's group.
-  await chmod(config.socket, 0o660);
-} else await app.listen({ port, host: process.env.HOST || "127.0.0.1" });
+await app.listen({ port, host: process.env.HOST || "127.0.0.1" });
 if (setupStateOf(ctx) !== "done") {
   const key =
     config.setupKey && setupStateOf(ctx) === "account"

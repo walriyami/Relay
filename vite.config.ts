@@ -1,8 +1,57 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip } from "node:zlib";
+
+/**
+ * Stores Brotli (.br) and gzip (.gz) copies of the built text files, compressed once at the highest
+ * settings, which Relay serves to browsers that accept them (see server/app.ts). Only copies that
+ * save something are kept.
+ */
+function precompress(): Plugin {
+  const brotli = promisify(brotliCompress);
+  const gzipped = promisify(gzip);
+  let outDir = "";
+  return {
+    name: "relay-precompress",
+    apply: "build",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    async closeBundle() {
+      const files = await readdir(outDir, { recursive: true, withFileTypes: true });
+      await Promise.all(
+        files
+          .filter((f) => f.isFile() && /\.(html|js|mjs|css|svg|json|webmanifest|txt)$/.test(f.name))
+          .map(async (f) => {
+            const path = join(f.parentPath, f.name);
+            const data = await readFile(path);
+            if (data.length < 1024) return;
+            const copies: [string, Buffer][] = [
+              [
+                ".br",
+                await brotli(data, {
+                  params: {
+                    [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY,
+                    [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT,
+                    [constants.BROTLI_PARAM_SIZE_HINT]: data.length,
+                  },
+                }),
+              ],
+              [".gz", await gzipped(data, { level: constants.Z_BEST_COMPRESSION })],
+            ];
+            for (const [extension, copy] of copies)
+              if (copy.length < data.length * 0.9) await writeFile(path + extension, copy);
+          }),
+      );
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), precompress()],
   server: {
     port: 5178,
     proxy: {

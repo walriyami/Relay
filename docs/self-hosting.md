@@ -1,6 +1,6 @@
 # Self-hosting
 
-Relay's Compose stack runs the app and a bundled gateway, with one persistent data volume for the app. This guide covers a production setup behind HTTPS.
+Relay runs as one container with one persistent data volume. This guide covers a production setup behind HTTPS.
 
 - [Requirements](#requirements)
 - [Install with Docker Compose](#install-with-docker-compose)
@@ -34,7 +34,7 @@ Relay now listens on `127.0.0.1:3090`, which only this machine can reach. Put a 
 > [!IMPORTANT]
 > Until the administrator exists, whoever opens Relay first creates it. If others can reach the server before you do, set `RELAY_SETUP_KEY=true`: setup then also asks for a one-time key from the server. Run `docker compose exec relay cat /data/setup.key`, or for a direct Node installation read `<RELAY_DATA>/setup.key` (default `.data/setup.key`). The key survives restarts until the administrator is created and is then deleted. Keep it private. Existing installations never ask for it. For remote local setup, use `ssh -L 3090:localhost:3090 your-server`, then open http://localhost:3090.
 
-Both containers run as unprivileged users with read-only root filesystems and `no-new-privileges`. The app drops all Linux capabilities; the gateway retains only `NET_BIND_SERVICE`, required by its Caddy binary. The app's data volume is persistent; temporary writable directories use bounded memory-backed filesystems.
+The container runs as an unprivileged user with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Only the data volume persists; `/tmp` is a small memory-backed filesystem.
 
 > [!IMPORTANT]
 > Run exactly **one** Relay container per data volume. The database takes an exclusive lock, so a second process on the same volume fails at startup. That is intended, so don't add replicas.
@@ -46,7 +46,7 @@ Any reverse proxy works. It must:
 1. Set `RELAY_ORIGIN=https://relay.example.com` before exposing a public hostname. Pass the original `Host` header through and serve Relay on exactly that origin. Unconfigured installations accept only localhost and literal IP addresses, preventing DNS rebinding through arbitrary hostnames.
 2. Allow request bodies of at least **32 MiB**. Uploads arrive in 8 MiB chunks.
 3. Not buffer responses. Live updates use Server-Sent Events, and downloads stream.
-4. Send `X-Forwarded-For` and `X-Forwarded-Proto` from an address listed in `RELAY_TRUST_PROXY`. The trusted edge must replace untrusted forwarded headers, and each subsequent trusted hop must preserve the verified client chain. Otherwise unrelated visitors may share a rate-limit bucket, or a client could spoof its address.
+4. Send `X-Forwarded-For` and `X-Forwarded-Proto`, and be listed in `RELAY_TRUST_PROXY`. Relay takes a visitor's address only from the proxies listed there, and gives each visitor their own rate limits by it. A proxy that isn't listed counts as one visitor, and Relay says so once in its log. Never list an address that anyone else can send requests from, or a client could claim any address.
 
 ### Caddy
 
@@ -58,7 +58,7 @@ relay.example.com {
 }
 ```
 
-For the Compose stack, also configure the host proxy's actual source address in `RELAY_CADDY_TRUSTED_PROXIES`. Docker usually presents a host proxy connecting through the published port as the gateway of the stack's Compose network (for example `172.18.0.1` on Linux), not loopback. Confirm the address on your host before trusting it; Docker Desktop and custom networks can differ. Trust only that controlled proxy hop, keep port 3090 private, and verify that two external clients retain distinct addresses through the full chain. This applies to host nginx as well. Direct Node deployments normally see a host proxy on loopback.
+A proxy on the same host reaches Relay at `127.0.0.1:3090`. Without Docker, and on Linux with [`compose.host.yaml`](#direct-transfers-on-your-network), Relay sees it at loopback, which it trusts by default. Through Docker's published port, Relay sees it at the address of the Compose network's gateway instead, such as `172.18.0.1`. Relay logs that address the first time the proxy forwards a request; add it to `RELAY_TRUST_PROXY` in `.env`, such as `RELAY_TRUST_PROXY=172.18.0.1`. The same applies to nginx.
 
 ### nginx
 
@@ -87,20 +87,24 @@ server {
 
 ### Proxy in another container
 
-The default Compose configuration creates its own network for the gateway and publishes it only on loopback. It needs no pre-existing network. For a proxy or tunnel in another container, use the optional overlay:
+A tunnel connector, such as `cloudflared`, or a proxy in another container reaches Relay over a Docker network they share. Add these lines to `.env`, with your network and the connector's container name:
 
 ```sh
-# Use the name of the network shared with your trusted connector.
-export RELAY_TUNNEL_NETWORK=streaming_lab_private
-docker network create "$RELAY_TUNNEL_NETWORK"  # once, if it does not exist
-docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
+COMPOSE_FILE=compose.yaml:compose.tunnel.yaml
+RELAY_TUNNEL_NETWORK=proxy
+RELAY_TRUST_PROXY=cloudflared
 ```
 
-Attach the connector to that network and point it at `http://relay:3090`. The `relay` alias belongs to the stable gateway. Set `RELAY_CADDY_TRUSTED_PROXIES` to the connector's actual stable addresses. Include both Compose files on later updates and shutdowns, or copy the overlay to `compose.override.yaml` to load it automatically.
+Then create the network if it doesn't exist yet, and start Relay:
 
-In Compose, Relay listens only on a Unix socket in the `relay-socket` volume, which only the gateway mounts, and takes each client's address from the gateway; `RELAY_TRUST_PROXY` doesn't apply. Direct Node deployments trust loopback by default. Set any additional `RELAY_TRUST_PROXY` entries to actual proxy addresses only. Do not trust the entire Docker private range or a network with untrusted containers.
+```sh
+docker network create proxy
+docker compose up -d --build
+```
 
-For a tunnel plus gateway, set `RELAY_CADDY_TRUSTED_PROXIES` to the space-separated addresses/CIDRs of the trusted connector chain. Caddy uses strict forwarded-address parsing, rejects untrusted forwarded addresses, and sends the verified client address to Relay. Relay trusts only the gateway for this handoff. Keep the app port private; never trust a header just because its name is `CF-Connecting-IP` or `X-Forwarded-For`. Verify distinct client addresses on a disposable instance before relying on per-IP limits.
+Attach the connector to that network and point it at `http://relay:3090`. `COMPOSE_FILE` makes every `docker compose` command include the overlay, so later updates and shutdowns need nothing extra.
+
+`RELAY_TRUST_PROXY` takes the connector's container name, so Relay trusts it at whatever address Docker gives it, even after it's recreated, and no other container on the network. Every request through a tunnel comes from the connector, so without this, all visitors would share one set of rate limits. Relay also stays published on `127.0.0.1:3090` for this machine.
 
 ## Direct transfers on your network
 
@@ -110,10 +114,8 @@ After someone signs in, their browser tries a direct connection in the backgroun
 
 How it works: Relay runs a helper process beside itself that accepts WebRTC connections, encrypted end to end, on UDP port `RELAY_DIRECT_PORT` (default `3090`). Relay introduces each signed-in browser to it. The browser names its own addresses, usually hidden behind random `.local` names that only devices on its network can look up, and the helper names the server's. Each side checks the other's, only ever at local network addresses, so the connection comes up only on the server's own networks. The helper passes the browser's upload chunks and file and ZIP downloads to Relay through a private socket, as the member who signed in. Nothing else travels that way, so sign-in, links, upload requests and guests always use the usual way.
 
-For this, the Relay container shares the host's network (`network_mode: host`). It listens only on its socket, so the gateway is still the only way in over HTTP.
-
-- **Docker Desktop on a Mac** works as it is. Containers run in a virtual machine that other devices can't reach, so the helper makes the first contact: its checks leave through the Mac like any outgoing traffic, and the browser answers them.
-- **Docker Engine on Linux**: browsers reach the helper at the host's private addresses (`10.x`, `172.16–31.x`, `192.168.x` and unique local IPv6), whichever it has at the time. If the host has a firewall, allow UDP `RELAY_DIRECT_PORT` from your local network; with ufw, for example, `sudo ufw allow from 192.168.1.0/24 to any port 3090 proto udp`. Don't forward it on your router.
+- **Docker Desktop on a Mac or Windows** works as it is. Containers run in a virtual machine that other devices can't reach, so the helper makes the first contact: its checks leave through the computer like any outgoing traffic, and the browser answers them.
+- **Docker Engine on Linux**: browsers reach the helper at the host's private addresses (`10.x`, `172.16–31.x`, `192.168.x` and unique local IPv6), whichever it has at the time, so Relay needs the host's network. Add `COMPOSE_FILE=compose.yaml:compose.host.yaml` to `.env` and run `docker compose up -d`. Relay then listens on the host's `127.0.0.1:3090` only, for a proxy on the same host. A tunnel connector in a container can't reach it there; run the connector on the host, or with its own host networking, pointed at `http://127.0.0.1:3090`, and leave `RELAY_TRUST_PROXY` at its default. If the host has a firewall, allow UDP `RELAY_DIRECT_PORT` from your local network; with ufw, for example, `sudo ufw allow from 192.168.1.0/24 to any port 3090 proto udp`. Don't forward it on your router.
 - **Devices that can reach the server.** Guest Wi-Fi and access points with client isolation keep devices apart, and so do most VPNs; their transfers go the usual way.
 
 **Admin → Overview** shows whether direct transfers are on and how many browsers are connected, and warns when they're unavailable, with the reason, such as the UDP port being taken by another program. Relay starts the helper again by itself if it stops. Its messages are in `docker compose logs relay`.
@@ -122,21 +124,19 @@ To turn direct transfers off for everyone, set `RELAY_DIRECT=false` in `.env` an
 
 ## Configuration
 
-Relay reads its configuration from environment variables. With Docker Compose, set them in `.env`.
+Relay reads its configuration from environment variables. With Docker Compose, set them in `.env`. Compose itself reads two more from there: `COMPOSE_FILE`, the overlays to include ([tunnel](#proxy-in-another-container) or [host network](#direct-transfers-on-your-network)), and `RELAY_TUNNEL_NETWORK`, the network the tunnel overlay joins.
 
-| Variable                      | Default         | Description                                                                                                                                                                                     |
-| ----------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RELAY_ORIGIN`                | none            | Pins the exact URL people open, without a trailing slash. Required for public hostnames. Unset, only localhost and literal IP hosts are accepted. Passkeys need a host name, not an IP address. |
-| `RELAY_SECRET`                | generated       | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`.                                                                          |
-| `RELAY_SETUP_KEY`             | `false`         | `true` makes first setup ask for a one-time key from `<data>/setup.key`, so only someone with access to the server can create the administrator.                                                |
-| `RELAY_DIRECT`                | `true`          | `false` turns [direct transfers](#direct-transfers-on-your-network) off.                                                                                                                        |
-| `RELAY_DIRECT_PORT`           | `3090`          | UDP port direct transfers use.                                                                                                                                                                  |
-| `RELAY_TRUST_PROXY`           | `127.0.0.1,::1` | Comma-separated addresses or CIDR ranges of trusted proxies, for Relay on a TCP port. Configure only actual proxy addresses.                                                                    |
-| `RELAY_CADDY_TRUSTED_PROXIES` | `127.0.0.1 ::1` | Space-separated upstream proxy addresses/CIDRs Caddy trusts to report client addresses. Configure the actual connector chain for public deployments.                                            |
-| `RELAY_DATA`                  | `.data`         | Data directory. Set to `/data` in the image.                                                                                                                                                    |
-| `HOST`                        | `127.0.0.1`     | Listen address. Set to `0.0.0.0` in the image.                                                                                                                                                  |
-| `PORT`                        | `3090`          | Listen port.                                                                                                                                                                                    |
-| `RELAY_SOCKET`                | none            | Listens on this Unix socket instead of `HOST` and `PORT`, for a proxy that alone can reach it and sets `X-Forwarded-For`. Compose sets it for the gateway.                                      |
+| Variable            | Default         | Description                                                                                                                                                                                     |
+| ------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_ORIGIN`      | none            | Pins the exact URL people open, without a trailing slash. Required for public hostnames. Unset, only localhost and literal IP hosts are accepted. Passkeys need a host name, not an IP address. |
+| `RELAY_SECRET`      | generated       | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `<data>/secret.key`.                                                                          |
+| `RELAY_SETUP_KEY`   | `false`         | `true` makes first setup ask for a one-time key from `<data>/setup.key`, so only someone with access to the server can create the administrator.                                                |
+| `RELAY_DIRECT`      | `true`          | `false` turns [direct transfers](#direct-transfers-on-your-network) off.                                                                                                                        |
+| `RELAY_DIRECT_PORT` | `3090`          | UDP port direct transfers use.                                                                                                                                                                  |
+| `RELAY_TRUST_PROXY` | `127.0.0.1,::1` | Comma-separated proxies whose `X-Forwarded-For` Relay believes: addresses, CIDR ranges, or host names such as a connector's container name, looked up every 15 seconds.                         |
+| `RELAY_DATA`        | `.data`         | Data directory. Set to `/data` in the image.                                                                                                                                                    |
+| `HOST`              | `127.0.0.1`     | Listen address. Set to `0.0.0.0` in the image.                                                                                                                                                  |
+| `PORT`              | `3090`          | Listen port.                                                                                                                                                                                    |
 
 An invalid value stops Relay at startup with a message naming the variable.
 
@@ -183,7 +183,7 @@ Relay checks both the database version and its complete schema before opening ex
 
 Everything Relay stores lives in the data volume, including the database, unfinished uploads and generated secret. A backup must preserve the whole directory and any separately configured `RELAY_SECRET`.
 
-1. Stop the service with `docker compose stop` (include the overlay if used). Do not copy a changing SQLite database or omit its WAL files.
+1. Stop the service with `docker compose stop`. Do not copy a changing SQLite database or omit its WAL files.
 2. Snapshot or archive the entire `relay-data` volume using your host's volume backup tool. Record the exact image/build and environment with it. Keep a separate copy before updating.
 3. Restore into a **new** volume, with the same ownership and permissions, and run the matching build against that volume on a private loopback port. Never let two processes open one volume.
 4. Sign in, download representative files and compare their hashes with the originals. Run **Admin → Overview → Check stored files** until the full integrity check completes. Verify shared links, member storage and a resumed upload before replacing the production volume.
@@ -191,7 +191,7 @@ Everything Relay stores lives in the data volume, including the database, unfini
 
 The health endpoint reports database availability and a coarse healthy/degraded status. A running process is not proof that every file is intact. Integrity checks run in the background, one at a time. Each batch admits up to 100 files, 256 MiB or 30 seconds of work, checking byte/time limits between files; one large file can exceed those soft budgets. Continue batches in Admin until the full scan completes. Healthy files remain available when another file is damaged; downloading known-damaged content fails, and uploading a valid copy repairs it. Shutdown cancels and waits for an active scan. Keep external backups: hashes detect damage but cannot reconstruct lost bytes.
 
-The bundled gateway compresses app text assets. Fingerprinted bundles cache immutably for a year; HTML and unversioned files revalidate. The gateway passes API responses, uploads, byte-range downloads and live event streams through unchanged. Relay itself compresses its large metadata responses (collections, and the lists of links, requests, deliveries and activity), and only for requests its own pages make, so another site can never measure a compressed response.
+The build stores Brotli and gzip copies of the web app's text files, and Relay serves whichever the browser accepts, so nothing is compressed while serving. Fingerprinted bundles cache for a year; HTML and other files revalidate. API responses, uploads, byte-range downloads and live event streams go out as they are. Relay itself compresses its large metadata responses (collections, and the lists of links, requests, deliveries and activity), and only for requests its own pages make, so another site can never measure a compressed response.
 
 To stop Relay without touching your data, run `docker compose stop` or `docker compose down`. **Never** run `docker compose down -v`, because `-v` deletes the volumes and every file with them.
 

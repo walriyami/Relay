@@ -10,6 +10,10 @@ export type Config = {
   origin?: string;
   /** Link/request token key. Without it a key is generated in <root>/secret.key. */
   secret?: string;
+  /**
+   * Proxies whose X-Forwarded-For is believed: addresses, CIDR ranges or host names, such as a
+   * tunnel connector's container name (see lib/proxies.ts).
+   */
   trustProxy: string[];
   /**
    * Setup asks for a one-time key from <root>/setup.key before anyone can create the administrator,
@@ -28,11 +32,6 @@ export type Config = {
    * browsers connect to, on this UDP port. Unset, there are none.
    */
   local?: { port: number };
-  /**
-   * Serves on this Unix socket instead of a TCP port, behind a reverse proxy that is the only one
-   * with access to it and sets X-Forwarded-For.
-   */
-  socket?: string;
 };
 
 export function configFromEnv(env = process.env): Config {
@@ -40,14 +39,16 @@ export function configFromEnv(env = process.env): Config {
     root: resolve(env.RELAY_DATA || ".data"),
     origin: env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined,
     secret: env.RELAY_SECRET,
-    trustProxy: (env.RELAY_TRUST_PROXY || "127.0.0.1,::1").split(",").map((s) => s.trim()),
+    trustProxy: (env.RELAY_TRUST_PROXY?.trim() || "127.0.0.1,::1")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
     setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, false),
     tabLeaseMs: 5 * 60_000,
     sweepMs: 60_000,
     logger: true,
     serveClient: true,
     local: flag("RELAY_DIRECT", env.RELAY_DIRECT, true) ? { port: udpPort(env.RELAY_DIRECT_PORT) } : undefined,
-    socket: env.RELAY_SOCKET ? resolve(env.RELAY_SOCKET) : undefined,
   };
 }
 

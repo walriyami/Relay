@@ -4,6 +4,7 @@ import { stat, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { start, type Instance } from "./support/harness.ts";
 import { configFromEnv } from "../server/config.ts";
+import { ProxyTrust } from "../server/lib/proxies.ts";
 import { api } from "../shared/api.ts";
 
 test("unconfigured hosts cannot rebind a browser to Relay", async () => {
@@ -91,34 +92,58 @@ test("direct transfers are on unless RELAY_DIRECT turns them off, on a valid UDP
     assert.throws(() => configFromEnv({ RELAY_DIRECT_PORT: value }), /RELAY_DIRECT_PORT/);
 });
 
-test("on a socket, Relay takes each client's address from the proxy in front of it", async () => {
-  assert.equal(configFromEnv({ RELAY_SOCKET: "/run/relay/relay.sock" }).socket, "/run/relay/relay.sock");
+test("client addresses come only from trusted proxies, given by address, range or host name", async () => {
+  assert.deepEqual(configFromEnv({ RELAY_TRUST_PROXY: " cloudflared, 10.0.0.0/8 ,, ::1 " }).trustProxy, [
+    "cloudflared",
+    "10.0.0.0/8",
+    "::1",
+  ]);
+  assert.deepEqual(configFromEnv({ RELAY_TRUST_PROXY: " " }).trustProxy, ["127.0.0.1", "::1"]);
+  for (const entry of ["10.0.0.0/33", "10.0.0.1/8/8", "-proxy", "https://proxy"])
+    assert.throws(() => new ProxyTrust([entry]), /RELAY_TRUST_PROXY/, entry);
   const pickup = (instance: Instance, address: string) =>
     instance.app.inject({
       method: "POST",
       url: api.pickup.resolve.path,
-      // A socket's peer has no address; whatever the connection shows, the proxy's header counts.
-      remoteAddress: "203.0.113.200",
+      remoteAddress: "127.0.0.1",
       headers: { host: "relay.test", "x-forwarded-for": address },
       payload: { code: "short" },
     });
-  const behind = await start({ socket: "/unused.sock" }, undefined, { setup: false });
-  try {
-    for (let i = 1; i <= 5; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 4 ? 404 : 429);
-    assert.equal((await pickup(behind, "198.51.100.2")).statusCode, 404);
-    // The container's health check comes without one.
-    assert.equal((await behind.app.inject({ url: "/api/health" })).statusCode, 200);
-  } finally {
-    await behind.close();
+  // Trusted by name, as a tunnel connector's container is: each client keeps its own limit.
+  for (const trustProxy of [["localhost"], ["127.0.0.0/8"]]) {
+    const behind = await start({ trustProxy }, undefined, { setup: false });
+    try {
+      for (let i = 1; i <= 5; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 4 ? 404 : 429);
+      assert.equal((await pickup(behind, "198.51.100.2")).statusCode, 404);
+    } finally {
+      await behind.close();
+    }
   }
-  // On a port, an untrusted peer's header is ignored: both addresses are the peer's.
-  const open = await start({}, undefined, { setup: false });
-  try {
-    for (let i = 1; i <= 4; i++) await pickup(open, "198.51.100.1");
-    assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
-  } finally {
-    await open.close();
+  // An untrusted peer's header is ignored, as is a name that doesn't resolve: both addresses are the peer's.
+  for (const trustProxy of [["192.0.2.1"], ["relay-proxy.invalid"]]) {
+    const open = await start({ trustProxy }, undefined, { setup: false });
+    try {
+      for (let i = 1; i <= 4; i++) await pickup(open, "198.51.100.1");
+      assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
+    } finally {
+      await open.close();
+    }
   }
+  const trust = new ProxyTrust(["::ffff:0:0/96", "192.0.2.0/24"]);
+  assert.equal(new ProxyTrust(["streaming_lab_cloudflared"]).trusts("192.0.2.1"), false, "a container name");
+  assert.equal(trust.trusts("::ffff:192.0.2.7"), true, "a dual-stack socket's IPv4 peer");
+  assert.equal(trust.trusts(undefined), false, "the helper's socket has no peer");
+
+  // A proxy missing from the list is named once in the log, and a trusted one never.
+  const warnings: object[] = [];
+  const log = { info() {}, warn: (fields: object) => void warnings.push(fields) };
+  const proxy = new ProxyTrust(["192.0.2.0/24"]);
+  await proxy.start(log);
+  proxy.checkForwarded("192.0.2.7", "203.0.113.1");
+  proxy.checkForwarded("198.51.100.1", undefined);
+  proxy.checkForwarded("::ffff:198.51.100.1", "203.0.113.1");
+  proxy.checkForwarded("198.51.100.2", "203.0.113.1");
+  assert.deepEqual(warnings, [{ address: "198.51.100.1" }]);
 });
 
 test("existing data directories are made private at startup", async () => {

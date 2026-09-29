@@ -14,8 +14,7 @@ COPY --from=build --chown=node:node /app/server ./server
 COPY --from=build --chown=node:node /app/shared ./shared
 COPY --from=build --chown=node:node /app/local ./local
 COPY --from=build --chown=node:node /app/dist ./dist
-# /run/relay holds Relay's socket (RELAY_SOCKET) for a proxy in Relay's group.
-RUN mkdir -m 0700 /data && mkdir -m 0750 /run/relay && chown node:node /data /run/relay
+RUN mkdir -m 0700 /data && chown node:node /data
 USER node
 EXPOSE 3090
 HEALTHCHECK --interval=20s --timeout=5s --start-period=30s CMD ["node", "server/health.ts"]

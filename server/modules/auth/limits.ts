@@ -6,8 +6,7 @@ import { isIPv4, isIPv6 } from "node:net";
  * addresses are grouped by their first four groups; IPv4 (also when IPv6-mapped) stays per address.
  */
 export function addressKey(ip: string): string {
-  // Only a request on Relay's socket without a forwarded address has none: the container's own
-  // health check (see config.socket).
+  // Requests on the direct-transfer helper's private socket have none (see isLocal).
   if (!ip) return "unknown";
   let address = ip.split("%")[0];
   // Normalize an embedded dotted IPv4 tail to its two hexadecimal groups first.

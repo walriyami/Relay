@@ -1,0 +1,15 @@
+# Optional, for Docker Engine on Linux: direct transfers at the server's own network addresses.
+# Relay shares the host's network and listens only on its loopback address, 127.0.0.1:3090, for an
+# HTTPS proxy or tunnel on the same host. Add this file to COMPOSE_FILE in .env so that every
+# docker compose command includes it:
+#
+#   COMPOSE_FILE=compose.yaml:compose.host.yaml
+#
+# Not for Docker Desktop, where direct transfers work without it, and not with compose.tunnel.yaml.
+# See docs/self-hosting.md.
+services:
+  relay:
+    network_mode: host
+    ports: !reset []
+    environment:
+      HOST: 127.0.0.1
