@@ -57,7 +57,7 @@ Each script's header comment lists its options, for example `--size 80MiB --file
 ## Conventions
 
 - **One API contract.** Add or change endpoints in `shared/api.ts` first. The server routes and client calls pick up its types.
-- **Database changes** go in `server/db/schema.sql`. Incompatible prerelease schemas fail startup. Preserve any wanted data and use a new empty data directory after a schema change.
+- **Database changes** go in `server/db/schema.sql`. The known v1 Activity schema upgrades transactionally to v2, preserving saved content and account data. Legacy timestamp read markers become sequence markers; events exactly at the old marker remain unread once because v1 cannot distinguish a later arrival in that millisecond. Unknown or partial schemas fail startup without changing their data; use the matching build to open them.
 - **Formatting and linting.** Prettier formats with a 120-character line width, and ESLint checks types, promises and React Hooks. Run `npm run check` before you open a pull request. It runs everything CI runs except the browser tests.
 - **Lint exceptions** are rare, and each one says why on the same line: `// eslint-disable-next-line <rule> -- <reason>`.
 - **Authorization** is required on every content and archive route, and every new route needs a test that proves outsiders are refused.

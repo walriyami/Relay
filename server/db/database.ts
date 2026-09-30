@@ -1,10 +1,16 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 export type Value = SQLInputValue;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+// Exact v1 schema, with only the known users comment normalized below. Never infer a legacy
+// schema from its version or a subset of columns: unrelated/partial formats must stay untouched.
+const TIMESTAMP_SCHEMA = "3d3fac4594a8f3801114cb02a7ab048a092ff8d325df327d3500eb34a5cb5ee0";
+const timestampComment = "-- Activity up to this time has been seen on some device of the account.";
+const sequenceComment = "-- Activity through this durable insertion sequence has been read on an account device.";
 /** Distinct SQL strings kept prepared; the application uses fewer, so dynamic SQL cannot grow it unboundedly. */
 const STATEMENT_CACHE = 256;
 /** Rows a batched delete removes per transaction. */
@@ -14,7 +20,12 @@ const schemaQuery =
   "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name";
 let expectedSchema: string | undefined;
 function schemaDefinition(sqlite: DatabaseSync) {
-  return JSON.stringify(sqlite.prepare(schemaQuery).all());
+  const rows = sqlite.prepare(schemaQuery).all() as { type: string; name: string; sql: string }[];
+  // SQLite retains comments inside CREATE TABLE. Preserve the users table and all its foreign
+  // keys; recognize this one historical comment verbatim, without ignoring arbitrary SQL text.
+  for (const row of rows)
+    if (row.type === "table" && row.name === "users") row.sql = row.sql.replace(timestampComment, sequenceComment);
+  return JSON.stringify(rows);
 }
 function currentSchema() {
   if (expectedSchema) return expectedSchema;
@@ -72,7 +83,7 @@ export class Database {
     }
   }
 
-  /** This unreleased product supports one schema. Never silently open incompatible or partial data. */
+  /** Accept the exact current format or the one known Activity upgrade. Reject every unknown schema. */
   private initialize() {
     const version = this.value<number>("PRAGMA user_version");
     const empty = !this.get("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1");
@@ -80,15 +91,53 @@ export class Database {
       this.tx(() => this.sqlite.exec(`${schema}\nPRAGMA user_version = ${SCHEMA_VERSION};`));
       return;
     }
-    if (version !== SCHEMA_VERSION || schemaDefinition(this.sqlite) !== currentSchema())
+    const definition = schemaDefinition(this.sqlite);
+    if (version === 1 && createHash("sha256").update(definition).digest("hex") === TIMESTAMP_SCHEMA) {
+      this.migrateActivity();
+      return;
+    }
+    // The earlier Activity draft used the current sequence schema with user_version=1.
+    if (version === 1 && definition === currentSchema()) {
+      this.tx(() => this.sqlite.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`));
+      return;
+    }
+    if (version !== SCHEMA_VERSION || definition !== currentSchema())
       throw Object.assign(
         new Error(
           "This data directory has an incompatible Relay schema. Relay has not changed your data. " +
-            "Use the matching build to export it, or preserve a backup and start with a new empty directory. " +
-            "Unreleased database formats are not migrated automatically.",
+            "Use the matching build to open it. Only the known v1 Activity schema can be upgraded automatically.",
         ),
         { code: "RELAY_SCHEMA_INCOMPATIBLE" },
       );
+  }
+
+  /** DDL, copied rows, converted watermarks and version all commit together, or all roll back. */
+  private migrateActivity() {
+    this.tx(() => {
+      this.sqlite.exec(`
+        DROP INDEX activity_owner;
+        DROP INDEX activity_created;
+        ALTER TABLE activity RENAME TO activity_v1;
+      `);
+      const activitySql = schema.match(
+        /^CREATE TABLE activity \([\s\S]*?\) STRICT;[\s\S]*?^CREATE INDEX activity_created.*;$/m,
+      )![0];
+      this.sqlite.exec(activitySql);
+      this.sqlite.exec(`
+        INSERT INTO activity(id, owner, kind, by_device, created, data)
+          SELECT id, owner, kind, by_device, created, data FROM activity_v1 ORDER BY created, rowid;
+        UPDATE users SET activity_seen = COALESCE((
+          SELECT MAX(sequence) FROM activity
+          WHERE owner = users.id AND created < users.activity_seen AND users.activity_seen > 0
+        ), 0);
+        DROP TABLE activity_v1;
+      `);
+      // Legacy timestamps cannot identify which equal-time events preceded acknowledgement.
+      // Leave that boundary unread once, rather than lose a later arrival at the same millisecond.
+      if (schemaDefinition(this.sqlite) !== currentSchema() || this.get("PRAGMA foreign_key_check"))
+        throw new Error("Activity migration validation failed; no changes were committed.");
+      this.sqlite.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    });
   }
 
   /**
