@@ -2,7 +2,7 @@ import { LIMITS } from "../../../shared/model.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { api } from "../../../shared/api.ts";
 import type { Context, Transfers } from "../../context.ts";
-import { authOf, principalFor } from "../../lib/auth.ts";
+import { authOf, currentPrincipalFor, principalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { createTransfer } from "./create.ts";
@@ -63,7 +63,9 @@ export function registerTransfers(app: FastifyInstance, ctx: Context) {
   );
   route(app, ctx, api.transfers.complete, ({ req, params, body }) => {
     const { transfer, principal } = ownTransfer(ctx, principalOf(req), params.id);
-    return complete(ctx, receivers, transfer, principal, body.destination);
+    return complete(ctx, receivers, transfer, principal, body.destination, () => {
+      if (!currentPrincipalFor(ctx, req, transfer.principal)) fail(401, "Sign in to continue.");
+    });
   });
   route(app, ctx, api.transfers.cancel, ({ req, params }) =>
     cancel(ctx, receivers, ownTransfer(ctx, principalOf(req), params.id).transfer),

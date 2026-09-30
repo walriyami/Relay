@@ -11,6 +11,7 @@ import {
   type PendingInvite,
 } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
+import { currentMember } from "../../lib/auth.ts";
 import { route } from "../../lib/http.ts";
 import { localStatus } from "../local/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
@@ -220,10 +221,13 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     return applied;
   });
 
-  route(app, ctx, api.admin.resetPassword, async ({ params, body }) => {
+  route(app, ctx, api.admin.resetPassword, async ({ member: administrator, params, body, req }) => {
     const target = member(params.id);
     const hash = await hashPassword(body.password);
     ctx.db.tx(() => {
+      const current = currentMember(ctx, req);
+      if (current?.sessionHash !== administrator.sessionHash) fail(401, "Sign in to continue.");
+      if (!current.admin) fail(403, "Administrator access required.");
       ctx.db.run("UPDATE users SET password_hash = ? WHERE id = ?", hash, target.id);
       ctx.db.run("DELETE FROM passkeys WHERE user_id = ?", target.id);
       ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);

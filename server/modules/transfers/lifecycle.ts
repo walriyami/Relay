@@ -138,6 +138,7 @@ export async function complete(
   transfer: TransferRow,
   principal: Principal,
   destination: Destination,
+  authorize: () => void = () => {},
 ): Promise<TransferResult> {
   ensureTransferAvailability(ctx, transfer);
   if (principal.kind === "grant" && destination.kind !== "save") fail(403, "Guests can only save files.");
@@ -148,9 +149,10 @@ export async function complete(
       "SELECT id FROM uploads WHERE transfer = ? AND completed IS NULL AND node IS NOT NULL AND offset = size",
       transfer.id,
     );
-    for (const upload of arrived) await receivers.settle(upload.id);
+    for (const upload of arrived) await receivers.settle(upload.id, authorize);
   }
   ensureTransferAvailability(ctx, transfer);
+  authorize();
   let result: TransferResult;
   try {
     result = ctx.db.tx(() => {

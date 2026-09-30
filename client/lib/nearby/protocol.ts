@@ -37,6 +37,73 @@ export type Control =
   /** The receiver stored everything. */
   | { t: "done"; id: string };
 
+/** Validate controls received from the other endpoint before the engine uses their fields. */
+export function controlOf(value: unknown): Control | null {
+  if (!object(value) || !id(value.id)) return null;
+  switch (value.t) {
+    case "offer": {
+      if (
+        !Array.isArray(value.files) ||
+        value.files.length > 100_000 ||
+        !value.files.every(
+          (file) =>
+            object(file) &&
+            typeof file.path === "string" &&
+            file.path.length > 0 &&
+            file.path.length <= 4096 &&
+            offset(file.size) &&
+            typeof file.type === "string" &&
+            file.type.length < 256 &&
+            Number.isSafeInteger(file.modified),
+        ) ||
+        !Array.isArray(value.folders) ||
+        value.folders.length > 100_000 ||
+        !value.folders.every((folder) => typeof folder === "string" && folder.length <= 4096) ||
+        !offset(value.text) ||
+        typeof value.preview !== "string" ||
+        value.preview.length > 240 ||
+        (value.replaces !== undefined && !id(value.replaces))
+      )
+        return null;
+      const files = value.files as WireFile[];
+      if (!Number.isSafeInteger(files.reduce((bytes, file) => bytes + file.size, value.text))) return null;
+      return {
+        t: "offer",
+        id: value.id,
+        files,
+        folders: value.folders as string[],
+        text: value.text,
+        preview: value.preview,
+        ...(value.replaces !== undefined ? { replaces: value.replaces } : {}),
+      };
+    }
+    case "accept": {
+      if (!object(value.have) || !offset(value.stream) || value.stream >= 2 ** 32) return null;
+      const entries = Object.entries(value.have);
+      if (
+        entries.length > 100_001 ||
+        !entries.every(([key, bytes]) => (key === TEXT || /^(0|[1-9]\d{0,4})$/.test(key)) && offset(bytes))
+      )
+        return null;
+      return { t: "accept", id: value.id, have: value.have as Record<string, number>, stream: value.stream };
+    }
+    case "decline":
+      return value.reason === "declined" || value.reason === "space"
+        ? { t: "decline", id: value.id, reason: value.reason }
+        : null;
+    case "cancel":
+    case "done":
+      return { t: value.t, id: value.id };
+    default:
+      return null;
+  }
+}
+
+const object = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+const id = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 64;
+const offset = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
 /** The entry key of a transfer's text; files are keyed by their index. */
 export const TEXT = "text";
 

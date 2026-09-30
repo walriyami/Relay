@@ -1,7 +1,7 @@
 import { NEARBY, type NearbySignal } from "../../../shared/nearby";
 import type { Mux } from "../../../shared/lanes";
 import { describe, Lanes } from "../lanes";
-import { randomId, type Control } from "./protocol";
+import { controlOf, randomId, type Control } from "./protocol";
 
 // One connection to another Nearby endpoint, made of lanes (see shared/lanes.ts). There are no STUN
 // or TURN servers: the two browsers only try each other's local addresses, so a connection either
@@ -64,7 +64,11 @@ export class Link {
         this.pc,
         channel,
         {
-          control: (message) => this.events.control(this, message as Control),
+          control: (message) => {
+            const control = controlOf(message);
+            if (control) this.events.control(this, control);
+            else this.end("lost");
+          },
           open: (stream) => this.events.stream(this, stream),
           state: (state) => {
             clearTimeout(this.timer);

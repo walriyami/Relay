@@ -5,7 +5,7 @@ import { ensureTransferAvailability, settleTransferAvailability } from "./availa
 import { headers } from "../../../shared/api.ts";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
-import { authOf, principalFor } from "../../lib/auth.ts";
+import { currentAuth, currentPrincipalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { TAB_CLOSED } from "./create.ts";
 import { uploadRow, type Receivers } from "./receivers.ts";
@@ -26,16 +26,16 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
   const access = (req: FastifyRequest) => {
     const upload = uploadRow(ctx, (req.params as { id: string }).id);
     if (upload) settleTransferAvailability(ctx, upload);
-    const auth = authOf(ctx, req);
+    const auth = currentAuth(ctx, req);
     if (!auth.member && !auth.grants.length) fail(401, "Sign in to continue.");
-    const principal = upload ? principalFor(ctx, req, upload.principal) : null;
+    const principal = upload ? currentPrincipalFor(ctx, req, upload.principal) : null;
     if (!upload || !principal) {
       const tab = req.headers[headers.tab.toLowerCase()];
       const row =
         typeof tab === "string"
           ? ctx.db.get<{ principal: string }>("SELECT principal FROM tabs WHERE id = ? AND closed IS NOT NULL", tab)
           : undefined;
-      if (row && principalFor(ctx, req, row.principal)) fail(409, TAB_CLOSED);
+      if (row && currentPrincipalFor(ctx, req, row.principal)) fail(409, TAB_CLOSED);
       return notFound("That upload");
     }
     ensureTransferAvailability(ctx, upload);
@@ -43,6 +43,10 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
     if (upload.state !== "open" && upload.state !== "complete") fail(410, "This transfer was cancelled.");
     if (upload.completed === null && upload.node === null) fail(410, "This file was removed from its transfer.");
     return upload;
+  };
+
+  const recheck = (req: FastifyRequest, principal: string) => () => {
+    if (!currentPrincipalFor(ctx, req, principal)) fail(401, "Sign in to continue.");
   };
 
   app.route({
@@ -57,7 +61,7 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
     handler: async (req, reply) => {
       tus(reply);
       let upload = access(req);
-      await receivers.settle(upload.id);
+      await receivers.settle(upload.id, recheck(req, upload.principal));
       upload = access(req);
       return reply
         .header("Upload-Offset", String(upload.completed === null ? upload.offset : upload.size))
@@ -82,7 +86,7 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
       if (typeof header !== "string" || !/^\d+$/.test(header)) fail(400, "Upload-Offset is required.");
       const offset = Number(header);
       let upload = access(req);
-      await receivers.settle(upload.id);
+      await receivers.settle(upload.id, recheck(req, upload.principal));
       upload = access(req);
       const length = req.headers["content-length"] === undefined ? null : Number(req.headers["content-length"]);
       if (length !== null && length > LIMITS.chunkBytes) fail(413, "This request carries more than one chunk of data.");
@@ -98,7 +102,13 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
           : conflict(upload.size);
       if (length !== null && offset + length > upload.size)
         fail(413, "This request carries more bytes than the file's size.");
-      const received = await receivers.receive(upload.id, offset, req.raw, () => req.raw.destroy());
+      const received = await receivers.receive(
+        upload.id,
+        offset,
+        req.raw,
+        () => req.raw.destroy(),
+        recheck(req, upload.principal),
+      );
       if ("conflict" in received) return conflict(received.conflict);
       return reply.code(204).header("Upload-Offset", String(received.offset)).send();
     },

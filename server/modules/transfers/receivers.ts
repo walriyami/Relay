@@ -128,6 +128,18 @@ export class Receivers {
     try {
       this.checkCurrent(upload.id, receiver, signal);
       const hash = createHash("sha256");
+      if (upload.offset === 0) {
+        // A refused first chunk can leave an uncommitted tail. There is no prefix to hash;
+        // remember its current inode so the authorized writer can detach and truncate it.
+        receiver.source = await stat(this.partPath(upload.id)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+          return null;
+        });
+        this.checkCurrent(upload.id, receiver, signal);
+        receiver.hash = hash;
+        receiver.crc = 0;
+        return;
+      }
       let crc = 0;
       let read = 0;
       let before: Stats | null = null;
@@ -201,7 +213,13 @@ export class Receivers {
    * Streams one PATCH body into the upload at `offset`. A newer PATCH for the same upload destroys
    * an older one still in flight (a dead retry) and waits for it to settle before starting.
    */
-  async receive(id: string, offset: number, body: Readable, destroy: () => void): Promise<Received> {
+  async receive(
+    id: string,
+    offset: number,
+    body: Readable,
+    destroy: () => void,
+    authorize: () => void = () => {},
+  ): Promise<Received> {
     const initial = uploadRow(this.ctx, id);
     if (!initial || !isActive(initial)) fail(410, "This upload is no longer accepting data.");
     ensureTransferAvailability(this.ctx, initial);
@@ -245,7 +263,8 @@ export class Receivers {
       }
       ensureTransferAvailability(this.ctx, upload);
       if (upload.offset !== offset) return { conflict: upload.offset };
-      return { offset: await this.write(upload, receiver, body, signal) };
+      authorize();
+      return { offset: await this.write(upload, receiver, body, signal, authorize) };
     } finally {
       body.off("close", disconnected);
       if (receiver.inflight === inflight) receiver.inflight = null;
@@ -255,7 +274,13 @@ export class Receivers {
     }
   }
 
-  private async write(upload: UploadRow, receiver: Receiver, body: Readable, signal: AbortSignal): Promise<number> {
+  private async write(
+    upload: UploadRow,
+    receiver: Receiver,
+    body: Readable,
+    signal: AbortSignal,
+    authorize: () => void,
+  ): Promise<number> {
     const hash = receiver.hash.copy();
     let crc = receiver.crc;
     let position = upload.offset;
@@ -275,6 +300,7 @@ export class Receivers {
       if (size > position) await file.truncate(position);
       for await (const chunk of body as AsyncIterable<Buffer>) {
         this.checkCurrent(upload.id, receiver, signal);
+        authorize();
         if (position + chunk.length > upload.size) fail(413, "This request carries more bytes than the file's size.");
         if (position + chunk.length - upload.offset > LIMITS.chunkBytes)
           fail(413, "This request carries more than one chunk of data.");
@@ -289,6 +315,7 @@ export class Receivers {
       await file.sync();
       source = await file.stat();
       this.checkCurrent(upload.id, receiver, signal);
+      authorize();
     } catch (error) {
       await file.truncate(upload.offset).catch(() => {});
       throw error;
@@ -310,6 +337,14 @@ export class Receivers {
         fail(410, "This upload is no longer accepting data.");
       ensureTransferAvailability(this.ctx, latest);
     }
+    // close() and the directory sync above also yield. Recheck immediately before committing
+    // offsets and usage, and rebuild the old prefix if this request left an uncommitted tail.
+    try {
+      authorize();
+    } catch (error) {
+      receiver.rebuildRequired = true;
+      throw error;
+    }
     this.ctx.db.run(
       "UPDATE uploads SET offset = ?, touched = CASE WHEN offset < ? THEN ? ELSE touched END WHERE id = ?",
       position,
@@ -325,7 +360,7 @@ export class Receivers {
     this.ctx.usage.add(upload.owner, {
       [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: position - upload.offset,
     });
-    if (position === upload.size) await this.publishOnce(upload.id, receiver);
+    if (position === upload.size) await this.publishOnce(upload.id, receiver, authorize);
     return position;
   }
 
@@ -334,13 +369,13 @@ export class Receivers {
    * loop; then blob row, node ready and upload complete commit in one transaction and the part file
    * is removed. Anything that cancelled or superseded the upload meanwhile wins.
    */
-  private publishOnce(id: string, receiver: Receiver): Promise<void> {
-    return (receiver.publishing ??= this.publish(id, receiver).finally(() => {
+  private publishOnce(id: string, receiver: Receiver, authorize: () => void = () => {}): Promise<void> {
+    return (receiver.publishing ??= this.publish(id, receiver, authorize).finally(() => {
       receiver.publishing = null;
     }));
   }
 
-  private async publish(id: string, receiver: Receiver) {
+  private async publish(id: string, receiver: Receiver, authorize: () => void) {
     const sha256 = receiver.hash.copy().digest("hex");
     const source = receiver.source;
     // The hash describes one inode. Refuse to publish a part replaced or rewritten since: before
@@ -376,6 +411,7 @@ export class Receivers {
     }
     try {
       ensureTransferAvailability(this.ctx, upload);
+      authorize();
       this.finalize(upload, sha256, receiver.crc);
     } catch (error) {
       this.ctx.blobs.unstage(sha256, this.partPath(id));
@@ -409,7 +445,7 @@ export class Receivers {
    * Finishes an upload whose bytes all arrived but which was not published (a crash between the two).
    * A publication already under way is waited for, so the caller sees where it ended.
    */
-  async settle(id: string) {
+  async settle(id: string, authorize: () => void = () => {}) {
     await this.receivers.get(id)?.publishing?.catch(() => {});
     const upload = uploadRow(this.ctx, id);
     if (!upload || !isActive(upload)) return;
@@ -426,7 +462,7 @@ export class Receivers {
       current.offset === current.size &&
       this.receivers.get(id) === receiver
     )
-      await this.publishOnce(id, receiver);
+      await this.publishOnce(id, receiver, authorize);
   }
 
   /** Forgets an upload that will receive no more bytes: stops its PATCH and removes its part file. */

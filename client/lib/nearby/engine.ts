@@ -81,6 +81,13 @@ const UNREACHABLE_RETRY_MS = 30_000;
 const WATCH_MAX = 16;
 /** Most files in one offer. */
 const FILES_MAX = 100_000;
+/** Bound unsolicited offers and transfer history without discarding completed receipts. */
+const RECEIVES_PER_PEER = 8;
+const ACTIVE_MAX = 32;
+const RECORDS_MAX = 128;
+const HELD_MAX = 32;
+const DECLINED_MAX = 256;
+const METADATA_CHARS = 16 * 1024 * 1024;
 /**
  * How long an offer from a peer missing from the directory waits for it. Relay introduced them, so
  * the directory is only behind (a device that just signed in); after this, it's asked about as unknown.
@@ -125,12 +132,22 @@ type Record_ = Out | In;
 
 let host: Host | null = null;
 let directory = new Map<string, NearbyPeer>();
+/** Explicitly removed peers cannot return through an older signal or a delayed offer. */
+const revoked = new Set<string>();
 /** Offers from peers the directory doesn't list yet, taken up once it does. */
-const waiting = new Map<Link, { messages: Extract<Control, { t: "offer" }>[]; timer: ReturnType<typeof setTimeout> }>();
+const waiting = new Map<
+  Link,
+  {
+    messages: Extract<Control, { t: "offer" }>[];
+    chars: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 const links = new Map<string, Link>();
 /** When each peer last couldn't be reached. */
 const unreachable = new Map<string, number>();
 const records = new Map<string, Record_>();
+const metadataChars = new Map<string, number>();
 /**
  * Cancels and declines made here while no connection to the other side was open, by peer: it hears
  * once one is.
@@ -232,12 +249,33 @@ export function clearEngine() {
   stopEngine("Nearby stopped on this device.");
   declined.clear();
   for (const id of [...order]) dismiss(id);
+  directory.clear();
+  revoked.clear();
 }
 
 /** Who this endpoint can see, for names and trust. */
 export function setDirectory(peers: NearbyPeer[]) {
   const before = directory;
   directory = new Map(peers.map((p) => [p.id, p]));
+  for (const peer of before.keys()) {
+    if (directory.has(peer)) continue;
+    revoked.add(peer);
+    // End transfers before the link: closing it must not schedule another connection attempt.
+    for (const r of records.values())
+      if (r.t.peer === peer && (isActive(r.t) || r.t.state === "incoming")) {
+        r.link?.send({ t: "cancel", id: r.t.id });
+        end(r, "cancelled", "That device isn’t in Nearby any more.");
+      }
+    for (const [link, held] of waiting)
+      if (link.peer === peer) {
+        clearTimeout(held.timer);
+        waiting.delete(link);
+      }
+    owed.delete(peer);
+    unreachable.delete(peer);
+    links.get(peer)?.close(false);
+  }
+  for (const peer of peers) revoked.delete(peer.id);
   // Someone who just opened Relay is worth trying again at once.
   for (const peer of peers) if (peer.present && !before.get(peer.id)?.present) unreachable.delete(peer.id);
   for (const link of [...waiting.keys()]) if (directory.has(link.peer)) takeWaiting(link);
@@ -296,7 +334,7 @@ function scheduleIdle() {
 }
 
 function linkTo(peer: string): Link | null {
-  if (!host) return null;
+  if (!host || revoked.has(peer)) return null;
   const current = links.get(peer);
   if (current && current.state !== "ended") return current;
   const h = host;
@@ -308,7 +346,7 @@ function linkTo(peer: string): Link | null {
 
 /** A signal from `from`, as Relay vouched for it. */
 export function receiveSignal(from: string, signal: NearbySignal) {
-  if (!host) return;
+  if (!host || revoked.has(from)) return;
   const current = links.get(from);
   if (signal.kind === "answer") {
     if (current?.session === signal.session) void current.answered(signal.sdp);
@@ -332,7 +370,7 @@ export function receiveSignal(from: string, signal: NearbySignal) {
 
 const events: LinkEvents = {
   open(link) {
-    if (links.get(link.peer) !== link) return link.close(false);
+    if (links.get(link.peer) !== link || revoked.has(link.peer)) return link.close(false);
     unreachable.delete(link.peer);
     for (const message of owed.get(link.peer) ?? []) link.send(message);
     owed.delete(link.peer);
@@ -348,6 +386,11 @@ const events: LinkEvents = {
     if (!watching) scheduleIdle();
   },
   end(link, why: LinkEnd) {
+    const held = waiting.get(link);
+    if (held) {
+      clearTimeout(held.timer);
+      waiting.delete(link);
+    }
     const current = links.get(link.peer) === link;
     if (current) {
       links.delete(link.peer);
@@ -367,6 +410,7 @@ const events: LinkEvents = {
     publish();
   },
   control(link, message) {
+    if (!host || revoked.has(link.peer) || links.get(link.peer) !== link || link.state !== "open") return;
     const r = records.get(message.id);
     if (message.t === "offer") return offered(link, message);
     if (!r || r.t.peer !== link.peer) return;
@@ -433,10 +477,16 @@ export function send(
     tries: 0,
     lostAt: 0,
   };
-  add(r);
+  if (!add(r)) {
+    end(r, "failed", "There are too many Nearby transfers. Dismiss finished transfers and try again.");
+    notify("failed", r);
+    publish(true);
+    return t.id;
+  }
   unreachable.delete(peer.id);
   const link = linkTo(peer.id);
   if (link?.state === "open") offer(r, link);
+  if (revoked.has(peer.id)) end(r, "cancelled", "That device isn’t in Nearby any more.");
   publish(true);
   return t.id;
 }
@@ -472,8 +522,10 @@ function outControl(r: Out, link: Link, message: Control) {
     case "accept": {
       if (!Number.isSafeInteger(message.stream) || message.stream < 0 || message.stream + entryCount(r.t) > 2 ** 32)
         return failOut(r, `${r.t.peerName} answered in a way this device doesn’t understand.`);
+      const have = checkedHave(r, message.have);
+      if (!have) return failOut(r, `${r.t.peerName} answered in a way this device doesn’t understand.`);
       r.accepted = true;
-      r.have = sane(message.have);
+      r.have = have;
       r.stream = message.stream;
       r.t.state = "running";
       r.lostAt = 0;
@@ -502,11 +554,13 @@ function outControl(r: Out, link: Link, message: Control) {
   publish();
 }
 
-function sane(have: unknown): Record<string, number> {
+function checkedHave(r: Out, have: Record<string, number>): Record<string, number> | null {
   const result: Record<string, number> = {};
-  if (have && typeof have === "object")
-    for (const [key, value] of Object.entries(have))
-      if (Number.isSafeInteger(value) && (value as number) >= 0) result[key] = value as number;
+  for (const [entry, value] of Object.entries(have)) {
+    const size = entry === TEXT ? r.text?.size : r.files[Number(entry)]?.size;
+    if (size === undefined || !Number.isSafeInteger(value) || value < 0 || value > size) return null;
+    result[entry] = value;
+  }
   return result;
 }
 
@@ -569,6 +623,7 @@ function sendEntry(r: Out, link: Link, entry: string) {
 }
 
 function progress(r: Record_) {
+  if (!isActive(r.t)) return;
   const moved =
     r.kind === "out"
       ? Object.entries(r.have).reduce((n, [e, v]) => n + Math.min(v, sizeOf(r, e)), 0)
@@ -640,15 +695,29 @@ function takeWaiting(link: Link) {
   if (!held) return;
   waiting.delete(link);
   clearTimeout(held.timer);
-  if (link.state === "open" && links.get(link.peer) === link)
+  if (!revoked.has(link.peer) && link.state === "open" && links.get(link.peer) === link)
     for (const message of held.messages) offered(link, message, true);
 }
 
 function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = false) {
+  if (revoked.has(link.peer)) return;
   if (!late && !directory.has(link.peer)) {
     const held = waiting.get(link);
-    if (held) held.messages.push(message);
-    else waiting.set(link, { messages: [message], timer: setTimeout(() => takeWaiting(link), UNKNOWN_MS) });
+    if (held?.messages.some((offer) => offer.id === message.id)) return;
+    const all = [...waiting.values()];
+    const chars = metadataOf(message);
+    if (
+      (held?.messages.length ?? 0) >= RECEIVES_PER_PEER ||
+      all.reduce((count, held) => count + held.messages.length, 0) >= HELD_MAX ||
+      all.reduce((count, held) => count + held.chars, 0) + chars > METADATA_CHARS
+    ) {
+      link.send({ t: "decline", id: message.id, reason: "space" });
+      return;
+    }
+    if (held) {
+      held.messages.push(message);
+      held.chars += chars;
+    } else waiting.set(link, { messages: [message], chars, timer: setTimeout(() => takeWaiting(link), UNKNOWN_MS) });
     return;
   }
   if (declined.has(message.id)) {
@@ -728,7 +797,10 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     work: Promise.resolve(),
     finishing: false,
   };
-  add(r);
+  if (!add(r)) {
+    link.send({ t: "decline", id: message.id, reason: "space" });
+    return;
+  }
   // What the member's own devices send starts without asking.
   if (peer?.kind === "device") {
     notify("receiving", r);
@@ -800,14 +872,15 @@ async function acceptOn(r: In, link: Link) {
 export async function accept(id: string) {
   const r = records.get(id);
   if (!r || r.kind !== "in" || r.t.state !== "incoming") return;
-  if (!(await roomFor(r.t.bytes))) {
+  const room = await roomFor(r.t.bytes);
+  if (r.t.state !== "incoming") return;
+  if (!room) {
     tell(r, { t: "decline", id, reason: "space" });
     end(r, "failed", "There isn’t room on this device for it.");
     notify("failed", r);
     publish();
     return;
   }
-  if (r.t.state !== "incoming") return;
   r.t.state = r.link ? "running" : "reconnecting";
   if (r.link) void acceptOn(r, r.link);
   if (!entriesOf(r).length) void finishIn(r);
@@ -818,6 +891,7 @@ export function decline(id: string) {
   const r = records.get(id);
   if (!r || r.kind !== "in" || r.t.state !== "incoming") return;
   declined.add(id);
+  if (declined.size > DECLINED_MAX) declined.delete(declined.values().next().value!);
   tell(r, { t: "decline", id, reason: "declined" });
   remove(r);
   publish(true);
@@ -857,6 +931,7 @@ function receiveEntry(r: In, link: Link, index: number) {
       } catch {
         throw new StoreError();
       }
+      if (!isActive(r.t)) return void sink.discard();
       progress(r);
     });
     r.work = stored.catch(() => {});
@@ -869,6 +944,7 @@ function receiveEntry(r: In, link: Link, index: number) {
     write: store,
     done: () => {
       r.streams.delete(into);
+      if (!isActive(r.t) || r.link !== link) return;
       r.done.add(entry);
       if (entriesOf(r).every((e) => r.done.has(e))) void finishIn(r);
     },
@@ -891,7 +967,7 @@ function receiveEntry(r: In, link: Link, index: number) {
 }
 
 async function finishIn(r: In) {
-  if (r.finishing) return;
+  if (r.finishing || !isActive(r.t)) return;
   r.finishing = true;
   try {
     const received: File[] = [];
@@ -904,14 +980,18 @@ async function finishIn(r: In) {
           ? await sink.finish(f.type, name, f.modified)
           : new File([], name, { type: f.type, lastModified: f.modified }),
       );
+      if (!isActive(r.t)) return;
       crcs.push(sink?.crc ?? 0);
     }
     const text = r.sinks.get(TEXT);
-    r.t.text = text ? await (await text.finish("text/plain", "text.txt", Date.now())).text() : null;
+    const content = text ? await (await text.finish("text/plain", "text.txt", Date.now())).text() : null;
+    if (!isActive(r.t)) return;
     if (text) {
       await text.discard();
       r.sinks.delete(TEXT);
     }
+    if (!isActive(r.t)) return;
+    r.t.text = content;
     r.t.received = received;
     r.t.crcs = crcs;
     r.t.moved = r.t.bytes;
@@ -919,6 +999,7 @@ async function finishIn(r: In) {
     end(r, "done");
     notify("received", r);
   } catch {
+    if (!isActive(r.t)) return;
     r.link?.send({ t: "cancel", id: r.t.id });
     end(r, "failed", "What arrived couldn’t be put together on this device.");
     notify("failed", r);
@@ -965,9 +1046,39 @@ export function dismiss(id: string) {
   publish(true);
 }
 
+function metadataOf(t: Pick<NearbyTransfer, "files" | "folders" | "preview">) {
+  return (
+    t.files.reduce((chars, file) => chars + file.path.length + file.type.length + 32, 64 + t.preview.length) +
+    t.folders.reduce((chars, folder) => chars + folder.length + 4, 0)
+  );
+}
+
 function add(r: Record_) {
+  const active = [...records.values()].filter((record) => isActive(record.t) || record.t.state === "incoming");
+  if (
+    active.length >= ACTIVE_MAX ||
+    (r.kind === "in" &&
+      active.filter((record) => record.kind === "in" && record.t.peer === r.t.peer).length >= RECEIVES_PER_PEER)
+  )
+    return false;
+  const chars = metadataOf(r.t);
+  if (chars > METADATA_CHARS) return false;
+  const disposable = [...order]
+    .reverse()
+    .map((id) => records.get(id)!)
+    .filter((record) => isOver(record.t) && !(record.kind === "in" && record.t.state === "done"));
+  while (
+    records.size >= RECORDS_MAX ||
+    [...metadataChars.values()].reduce((total, chars) => total + chars, 0) + chars > METADATA_CHARS
+  ) {
+    const old = disposable.shift();
+    if (!old) return false;
+    remove(old);
+  }
   records.set(r.t.id, r);
+  metadataChars.set(r.t.id, chars);
   order = [r.t.id, ...order];
+  return true;
 }
 
 function remove(r: Record_) {
@@ -977,6 +1088,8 @@ function remove(r: Record_) {
     r.sinks.clear();
   }
   records.delete(r.t.id);
+  metadataChars.delete(r.t.id);
+  lastMoved.delete(r.t.id);
   order = order.filter((id) => id !== r.t.id);
 }
 

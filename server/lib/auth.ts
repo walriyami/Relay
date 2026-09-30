@@ -154,10 +154,8 @@ export function currentMember(ctx: Context, req: FastifyRequest): Member | null 
   return memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]);
 }
 
-/** Everything the request's credentials authenticate. Computed once per request. */
-export function authOf(ctx: Context, req: FastifyRequest): Auth {
-  let auth = cache.get(req);
-  if (auth) return auth;
+/** Read credentials afresh after asynchronous work: revocation can happen during an await. */
+export function currentAuth(ctx: Context, req: FastifyRequest): Auth {
   const grants: Grant[] = [];
   const prefix = guestCookiePrefix(ctx, req);
   // The helper forwards no cookies; a local request is its session alone.
@@ -166,7 +164,14 @@ export function authOf(ctx: Context, req: FastifyRequest): Auth {
     const grant = grantFromToken(ctx, name.slice(prefix.length), value);
     if (grant) grants.push(grant);
   }
-  auth = { member: currentMember(ctx, req), grants };
+  return { member: currentMember(ctx, req), grants };
+}
+
+/** Everything the request's credentials authenticate. Computed once per request. */
+export function authOf(ctx: Context, req: FastifyRequest): Auth {
+  let auth = cache.get(req);
+  if (auth) return auth;
+  auth = currentAuth(ctx, req);
   cache.set(req, auth);
   return auth;
 }
@@ -185,6 +190,13 @@ export function grantFor(ctx: Context, req: FastifyRequest, requestId: string): 
 /** The principal that owns a tab or transfer, if this request authenticates as it. */
 export function principalFor(ctx: Context, req: FastifyRequest, key: string): Member | Grant | null {
   const auth = authOf(ctx, req);
+  if (auth.member && key === `user:${auth.member.userId}`) return auth.member;
+  return auth.grants.find((g) => key === `grant:${g.tokenHash}`) ?? null;
+}
+
+/** The same ownership check, without the request's initial authentication cache. */
+export function currentPrincipalFor(ctx: Context, req: FastifyRequest, key: string): Member | Grant | null {
+  const auth = currentAuth(ctx, req);
   if (auth.member && key === `user:${auth.member.userId}`) return auth.member;
   return auth.grants.find((g) => key === `grant:${g.tokenHash}`) ?? null;
 }

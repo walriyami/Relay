@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
 import { fail } from "../../lib/errors.ts";
+import { currentMember } from "../../lib/auth.ts";
 import { route } from "../../lib/http.ts";
 import { hashPassword } from "../../lib/secrets.ts";
 import { checkPassword } from "./passwords.ts";
@@ -67,7 +68,7 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
     return { prefs: readPrefs(user.prefs), user: toUser(user) };
   });
 
-  route(app, ctx, api.account.password, async ({ member, body }) => {
+  route(app, ctx, api.account.password, async ({ member, body, req }) => {
     const before = ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", member.userId)!;
     if (!(await checkPassword(ctx, member.username, body.current, before))) fail(403, "Current password is incorrect.");
     const next = await hashPassword(body.password);
@@ -75,8 +76,7 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
     ctx.db.tx(() => {
       if (ctx.db.value("SELECT password_hash FROM users WHERE id = ?", member.userId) !== before)
         fail(409, "Your password was changed meanwhile. Sign in again and retry.");
-      if (!ctx.db.get("SELECT 1 FROM sessions WHERE token_hash = ?", member.sessionHash))
-        fail(401, "Sign in to continue.");
+      if (currentMember(ctx, req)?.sessionHash !== member.sessionHash) fail(401, "Sign in to continue.");
       ctx.db.run("UPDATE users SET password_hash = ? WHERE id = ?", next, member.userId);
       ctx.db.run("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", member.userId, member.sessionHash);
       ctx.db.run(
