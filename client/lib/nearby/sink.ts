@@ -107,7 +107,8 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
       return crc;
     },
     async write(bytes) {
-      await stream.write(bytes as Uint8Array<ArrayBuffer>);
+      // Own exactly the view: some OPFS writers consume its whole backing buffer.
+      await stream.write(new Uint8Array(bytes));
       written += bytes.byteLength;
       crc = crc32(bytes, crc);
     },
