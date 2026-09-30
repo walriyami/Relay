@@ -107,7 +107,10 @@ export type ItemRow = {
   request_id: string | null;
 };
 
-/** The library: items and their node trees. Owns every write to items and nodes. */
+/**
+ * The library exposes uploaded-file publication and item lifecycle policy. Transfers still create
+ * item/node trees and remove pending nodes; account policy callers still tighten deadlines.
+ */
 export interface Library {
   /** The owner's item, or 404. With `live`, also 410 when trashed or expired. */
   owned(owner: string, itemId: string, options?: { live?: boolean }): ItemRow;
@@ -117,6 +120,8 @@ export interface Library {
   summaries(itemIds: string[]): Map<string, M.ItemSummary>;
   /** All nodes of an item with their paths, texts included, ordered by path. */
   nodes(itemId: string): M.Node[];
+  /** Publishes an adopted upload and anchors first-save retention atomically. Joins the caller's transaction. */
+  publishFile(itemId: string, nodeId: string, blob: string, now: number): void;
   /** Moves an item to Trash and revokes its links. Idempotent. */
   trash(owner: string, itemId: string): void;
   /** Removes an item permanently and collects its blobs. Synchronous. */

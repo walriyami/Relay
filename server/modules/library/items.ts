@@ -10,7 +10,7 @@ import type { Context, ItemRow } from "../../context.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { cleanName } from "../../lib/names.ts";
 import { DAY_MS } from "../../lib/time.ts";
-import { earlier, hardDeadline, setRetention } from "./retention.ts";
+import { earlier, hardDeadline, setRetention, startRetention } from "./retention.ts";
 import { EXCERPT_CHARS, summarize, type StoredSummary, type SummaryNode } from "./summary.ts";
 
 const ITEM_COLUMNS =
@@ -41,6 +41,20 @@ export function ownedReadable(ctx: Context, owner: string, itemId: string): Item
   const item = owned(ctx, owner, itemId);
   if (!readable(ctx, item, Date.now())) fail(410, "This item's recovery period has ended.");
   return item;
+}
+
+/** The caller adopts proven bytes first; publication and the content's retention clock belong together. */
+export function publishFile(ctx: Context, itemId: string, nodeId: string, blob: string, now: number) {
+  ctx.db.tx(() => {
+    const { changes } = ctx.db.run(
+      "UPDATE nodes SET state = 'ready', blob = ? WHERE id = ? AND item = ? AND kind = 'file' AND state = 'pending'",
+      blob,
+      nodeId,
+      itemId,
+    );
+    if (changes !== 1) throw new Error("A saved upload must publish exactly one pending file in its item.");
+    startRetention(ctx, itemId, now);
+  });
 }
 
 /** Recomputes the cached summaries of the given items that are marked dirty. */

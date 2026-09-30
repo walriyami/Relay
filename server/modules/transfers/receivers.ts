@@ -13,7 +13,6 @@ import { fail } from "../../lib/errors.ts";
 import { fsyncDirectory, unlinkIfPresent } from "../../storage/files.ts";
 import { sameBytes, sameFile } from "../../storage/blobs.ts";
 import { publishItemChange } from "./publish.ts";
-import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
@@ -427,13 +426,8 @@ export class Receivers {
       const now = Date.now();
       assertTransferAvailability(this.ctx, upload, now);
       this.ctx.blobs.adopt(file, sha256, upload.size, crc);
-      this.ctx.db.run(
-        "UPDATE nodes SET state = 'ready', blob = ? WHERE id = ? AND state = 'pending'",
-        sha256,
-        upload.node,
-      );
+      this.ctx.library.publishFile(upload.item, upload.node!, sha256, now);
       this.ctx.db.run("UPDATE uploads SET offset = size, completed = ?, touched = ? WHERE id = ?", now, now, upload.id);
-      startRetention(this.ctx, upload.item, now);
     });
     this.receivers.delete(upload.id);
     unlinkIfPresent(file);
