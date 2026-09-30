@@ -1,0 +1,43 @@
+{
+  "sourceCommit": "427ac58f32fb1b90be4320ec582b5b141779d7b0",
+  "candidateImage": "sha256:c4a1f4a2bb04db5cbf9bf2f10f4ce664e71b259dbf9f5d00800c9cb0aaf3eaaa",
+  "previousImage": "sha256:7f95d478c2e04ee98e2046967c037521ee84f306f4f60e552646159aa877d660",
+  "backupVolume": "relay_relay-data-audit-backup-20260930T103925Z",
+  "rollbackImage": "relay:security-audit-rollback-20260930",
+  "startedAt": "2026-09-30T10:39:25.973344+00:00",
+  "status": "deployed",
+  "configSha256": "cafa84ec9486e5b67b51109eb447b8e6a2fcf3960a4c2ac0b4e0106043843399",
+  "backupVerified": {
+    "sha256": "2cc11aba74183074a5fd60ef62c836d261b5c39eec3011e8aca3826f065d2557",
+    "files": 2,
+    "bytes": 663145
+  },
+  "loopbackChecks": [
+    {
+      "path": "/api/health",
+      "status": 200
+    },
+    {
+      "path": "/api/setup",
+      "status": 200
+    },
+    {
+      "path": "/api/session",
+      "status": 401
+    },
+    {
+      "path": "/api/admin",
+      "status": 401
+    },
+    {
+      "path": "/api/items",
+      "status": 401
+    },
+    {
+      "path": "/api/s/audit-invalid-token",
+      "status": 404
+    }
+  ],
+  "containerHealth": "healthy",
+  "finishedAt": "2026-09-30T10:39:32.495337+00:00"
+}

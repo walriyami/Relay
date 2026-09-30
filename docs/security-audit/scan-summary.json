@@ -1,0 +1,110 @@
+{
+  "candidateApplicationCommit": "427ac58f32fb1b90be4320ec582b5b141779d7b0",
+  "imageId": "sha256:c4a1f4a2bb04db5cbf9bf2f10f4ce664e71b259dbf9f5d00800c9cb0aaf3eaaa",
+  "imageScan": [
+    {
+      "target": "relay-security-audit:20260930-final (debian 12.15)",
+      "type": "debian",
+      "advisoryEntries": 229,
+      "uniqueCVEs": 104,
+      "severity": {
+        "LOW": 74,
+        "HIGH": 52,
+        "MEDIUM": 97,
+        "UNKNOWN": 2,
+        "CRITICAL": 4
+      },
+      "entriesWithVendorFix": 0,
+      "critical": [
+        {
+          "id": "CVE-2026-13221",
+          "package": "perl-base",
+          "installed": "5.36.0-7+deb12u3",
+          "fixed": null,
+          "title": "perl: Perl: Incorrect regular expression processing via large regular expressions"
+        },
+        {
+          "id": "CVE-2026-42496",
+          "package": "perl-base",
+          "installed": "5.36.0-7+deb12u3",
+          "fixed": null,
+          "title": "perl-archive-tar: perl-archive-tar: Path traversal via crafted symlinks allows arbitrary file access"
+        },
+        {
+          "id": "CVE-2026-8376",
+          "package": "perl-base",
+          "installed": "5.36.0-7+deb12u3",
+          "fixed": null,
+          "title": "perl: Perl: Heap buffer overflow when compiling regular expressions on 32-bit builds"
+        },
+        {
+          "id": "CVE-2023-45853",
+          "package": "zlib1g",
+          "installed": "1:1.2.13.dfsg-1",
+          "fixed": null,
+          "title": "zlib: integer overflow and resultant heap-based buffer overflow in zipOpenNewFileInZip4_6"
+        }
+      ]
+    },
+    {
+      "target": "Node.js",
+      "type": "node-pkg",
+      "advisoryEntries": 0,
+      "uniqueCVEs": 0,
+      "severity": {},
+      "entriesWithVendorFix": 0,
+      "critical": []
+    }
+  ],
+  "semgrep": {
+    "version": "1.177.0",
+    "rules": 270,
+    "targets": 1521,
+    "findings": [
+      {
+        "rule": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+        "path": ".github/dependabot.yml",
+        "line": 3,
+        "triage": "optional Dependabot cooldown recommendation; no confirmed application vulnerability"
+      },
+      {
+        "rule": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+        "path": ".github/dependabot.yml",
+        "line": 16,
+        "triage": "optional Dependabot cooldown recommendation; no confirmed application vulnerability"
+      },
+      {
+        "rule": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+        "path": ".github/dependabot.yml",
+        "line": 24,
+        "triage": "optional Dependabot cooldown recommendation; no confirmed application vulnerability"
+      }
+    ],
+    "errors": [
+      {
+        "path": "client/api.ts",
+        "type": "PartialParsing",
+        "triage": "type-only export syntax manually reviewed"
+      }
+    ]
+  },
+  "npmAudit": {
+    "all": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "production": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "limits": "No vendor fixes does not mean harmless; native decoders/WebRTC/kernel not exhaustively fuzzed. Final hosted CodeQL not run; baseline job passed."
+}

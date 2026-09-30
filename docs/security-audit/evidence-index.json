@@ -1,0 +1,153 @@
+{
+  "baseline": "76044ebd57fd92b037ddc11defe4fe2d1331eb87",
+  "candidateApplicationCommit": "427ac58f32fb1b90be4320ec582b5b141779d7b0",
+  "candidateImage": "sha256:c4a1f4a2bb04db5cbf9bf2f10f4ce664e71b259dbf9f5d00800c9cb0aaf3eaaa",
+  "scopeSha256": "31a33b49a42228aef6d45dc1f7e00b8b91236b6c76859b437e5e7ae9549d4be4",
+  "recordSha256": "2db896d91473db6d95847566dff9559f6b72029904d6c8b2472146021e5589f5",
+  "rawEvidenceRoot": "/Users/riyami/Desktop/Projects/Transfer Projects/Relay/work/security-audit-2026-09-30",
+  "structuredRecord": "record.json",
+  "scope": "scope.json",
+  "artifacts": [
+    {
+      "path": "account-lifecycle-final.log",
+      "sha256": "ca84585e8ede4f6732eb323738b40db42ba7ca9ddd3428a5bdde89a4298b618b"
+    },
+    {
+      "path": "account-lifecycle-followup.log",
+      "sha256": "665d3113985eed1787f64b67addcbce51c9581182b9d8149be552dacf34667fa"
+    },
+    {
+      "path": "account-lifecycle-initial.log",
+      "sha256": "45505ab36dfd9cc1b284568af4e10882c4abbb95154cab09441d18bac01c6b1c"
+    },
+    {
+      "path": "account-verification-final-runtime.json",
+      "sha256": "8f00429d0a652ff0c123653f16cad7715b66adbbca53f5044c8d248a720d9c20"
+    },
+    {
+      "path": "account-verification.md",
+      "sha256": "90ef52817d911b2e5992f4f3fc1e3383fda56d648200d97f9c4886c0b578ee91"
+    },
+    {
+      "path": "codeql-ci-jobs.json",
+      "sha256": "9437113e9ef4f7e66c6530eaeda740d395ad650a48468a0244d67116136df697"
+    },
+    {
+      "path": "content-test-baseline.log",
+      "sha256": "eeb35600f0ab353b9a2d5875a43ea7a22ff473508abedd9dded2a994996e9a4f"
+    },
+    {
+      "path": "deployment.json",
+      "sha256": "ab026228227e3012e7be8df364ab82e908ecc64e41c119974c5204ed49dc3a9c"
+    },
+    {
+      "path": "final-artifact-checks.log",
+      "sha256": "2670a16c244fa94e8f5873b7d65ccffb444451c8e360a72540070eb49af4c5ad"
+    },
+    {
+      "path": "final-browser.log",
+      "sha256": "55a4d511df95788690305722451428130b26b7bd1b45a6841891a7537f01f85c"
+    },
+    {
+      "path": "final-build.log",
+      "sha256": "6723a007424ce832366685ed292a3fe9ec3fd6abbab80093bb2b514c3ccd0833"
+    },
+    {
+      "path": "final-check.log",
+      "sha256": "79a1d36ef88b8f333c68f7b962ce1df18a8d619f1fdebc489d2f6a11940a831f"
+    },
+    {
+      "path": "final-evidence/coverage-summary.md",
+      "sha256": "6cf3b17e60eb2b19472ef3a6935150f8674b4c239a6f892db8a066f6a56329fb"
+    },
+    {
+      "path": "final-evidence/coverage.json",
+      "sha256": "20d906abfb7deb95a4c6444759fd86c3d66a5f6e66e7ca2854fa9c226e048f99"
+    },
+    {
+      "path": "final-evidence/endpoint-actor-coverage.csv",
+      "sha256": "deda50a3c5279bcbf056493688b0951a15f7af3512518df32b4dfbd5ca5b6bbf"
+    },
+    {
+      "path": "final-evidence/route-matrix.json",
+      "sha256": "8eb6f1b18e617049c081aa9022b37f8e12a168dab369f7a386a6bd959766c24d"
+    },
+    {
+      "path": "final-evidence/scan-summary.json",
+      "sha256": "7fa141e3431a39649dbe23b14da942ce790849eded0be944202606ee64c4a35a"
+    },
+    {
+      "path": "final-image-id.txt",
+      "sha256": "55bd183e752a55f4c2f781e18602cb820ad48e2b05b3733af1cdbc88d2fd033b"
+    },
+    {
+      "path": "final-resources.log",
+      "sha256": "16b329c44fda190c413cc86021ac0fd92420ad2b87fd2564b502a56a398d8cbf"
+    },
+    {
+      "path": "final-semgrep.json",
+      "sha256": "79d60517c52e7afe101443deb0ac79aa0198362ccfb8c1c3d5bd017c1a247b31"
+    },
+    {
+      "path": "final-verify-compose.log",
+      "sha256": "42728ea523dbeab07b88011e3b4b5725e9d852172ae5200db2836bb325db0942"
+    },
+    {
+      "path": "final-verify-container.log",
+      "sha256": "0fdc55899084ad62c4366bd09987ebdd1d16de8743db4f9dcad396c5830fab91"
+    },
+    {
+      "path": "gitleaks-final-mapped.json",
+      "sha256": "0017bf86cf9a6871b469b720c3bee1822fb6ca348be5205a00c908d869ad8485"
+    },
+    {
+      "path": "live-container-final.json",
+      "sha256": "0c59e3dd086b213524630af3b7659361debb4841bb50ca88ee516e46d5cc85c0"
+    },
+    {
+      "path": "nearby-independent-final.log",
+      "sha256": "28694df254f38e54b0710f1fa224fc6cf5a6b9ef9c2ddac8cd514351ccbf9795"
+    },
+    {
+      "path": "nearby-independent-runtime.json",
+      "sha256": "7fc19e643dd25b2437a92c1c13ce0b178c7f159f4fffa16cc09713459bf51137"
+    },
+    {
+      "path": "nearby-independent.md",
+      "sha256": "5483079795d470be957e25c85aa8df29c9c2edfd03d84d57e7c6ab35f439fcfe"
+    },
+    {
+      "path": "nearby-regression-baseline.log",
+      "sha256": "35f25e2324f2201a667dccd0f212700cce411d1b895313ea06b62e4b58a7acb4"
+    },
+    {
+      "path": "nearby-regression-fixed.log",
+      "sha256": "8732779eae49caa7c669d15763a4c8ce00416fdb6d88803d5f1d84218c8ba894"
+    },
+    {
+      "path": "nearby-resource-baseline.log",
+      "sha256": "b71c2b08f39539f3e26c3f4b85e3e2435bb9cadcf35d3b6538875c2ee74ad941"
+    },
+    {
+      "path": "npm-audit-production.json",
+      "sha256": "b5be815cd84e4c305d192cabdb6e9577288f146cb0d9d6ab2fb3439703acf4be"
+    },
+    {
+      "path": "npm-audit.json",
+      "sha256": "b5be815cd84e4c305d192cabdb6e9577288f146cb0d9d6ab2fb3439703acf4be"
+    },
+    {
+      "path": "public-final.json",
+      "sha256": "774a38800d8b0648dd28d1883e4174f1dda435065d00fbe3c3e9eccbc5b5f07e"
+    },
+    {
+      "path": "public-head-final.log",
+      "sha256": "7959e4131588dd27e54a031c264e7cea3502b3c891903cee19f564cee1173e03"
+    },
+    {
+      "path": "trivy-final-image.json",
+      "sha256": "bc6e294bdd606b2d7e7eee288f6ca4751274a2e1f69306f402a37c9013b6dcda"
+    }
+  ],
+  "limits": "Local evidence accounting; hashes do not authenticate test provenance or certify security. Read full report and explicit coverage categories/gaps."
+}

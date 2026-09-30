@@ -1,0 +1,5339 @@
+{
+  "baseline": "76044ebd57fd92b037ddc11defe4fe2d1331eb87",
+  "generatedAt": "2026-09-30T09:47:21.137Z",
+  "contractEndpoints": 88,
+  "registeredOperations": 136,
+  "observations": [
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "contract": "api.health",
+      "auth": "public",
+      "evidence": []
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/health",
+      "contract": "api.health",
+      "auth": "public",
+      "evidence": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/session",
+      "contract": "api.session.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/session",
+      "contract": "api.session.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session",
+      "contract": "api.session.signOut",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/password",
+      "contract": "api.session.password",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/passkey",
+      "contract": "api.session.passkey",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/passkey/options",
+      "contract": "api.session.passkeyOptions",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/join",
+      "contract": "api.session.join",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/code",
+      "contract": "api.session.code",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/device-link",
+      "contract": "api.session.deviceLink",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/device-link/:token",
+      "contract": "api.session.deviceLinkCheck",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/session/device-link/:token",
+      "contract": "api.session.deviceLinkCheck",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/setup",
+      "contract": "api.setup.status",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/setup",
+      "contract": "api.setup.status",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/setup/account",
+      "contract": "api.setup.account",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/setup/finish",
+      "contract": "api.setup.finish",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/s/:token",
+      "contract": "api.links.open",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/s/:token",
+      "contract": "api.links.open",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/s/:token/nodes/:node/content",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/s/:token/nodes/:node/content",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/s/:token/nodes/:node/thumbnail",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/s/:token/nodes/:node/thumbnail",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/s/:token/zip",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/s/:token/zip",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/s/:token/unlock",
+      "contract": "api.links.unlock",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/invitations/:token",
+      "contract": "api.session.invitation",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/invitations/:token",
+      "contract": "api.session.invitation",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/items",
+      "contract": "api.items.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/items",
+      "contract": "api.items.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/items/bulk",
+      "contract": "api.items.bulk",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/items/:id",
+      "contract": "api.items.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/items/:id",
+      "contract": "api.items.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/items/:id",
+      "contract": "api.items.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/items/:id",
+      "contract": "api.items.remove",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/items/:id/trash",
+      "contract": "api.items.trash",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/items/:id/restore",
+      "contract": "api.items.restore",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/items/:id/zip",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/items/:id/zip",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/account",
+      "contract": "api.account.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/account/password",
+      "contract": "api.account.password",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/account/passkeys",
+      "contract": "api.account.passkeys",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/account/passkeys",
+      "contract": "api.account.passkeys",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/account/passkeys",
+      "contract": "api.account.addPasskey",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/account/passkeys/options",
+      "contract": "api.account.passkeyOptions",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/account/passkeys/:id",
+      "contract": "api.account.removePasskey",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/activity",
+      "contract": "api.activity.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/activity",
+      "contract": "api.activity.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/activity/seen",
+      "contract": "api.activity.seen",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin",
+      "contract": "api.admin.overview",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/admin",
+      "contract": "api.admin.overview",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/integrity",
+      "contract": "api.admin.integrity",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "contract": "api.admin.invite",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/invites",
+      "contract": "api.admin.invites",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/admin/invites",
+      "contract": "api.admin.invites",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/admin/invites/:id",
+      "contract": "api.admin.updateInvite",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/admin/invites/:id",
+      "contract": "api.admin.revokeInvite",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/admin/members/:id",
+      "contract": "api.admin.updateMember",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/members/:id/password",
+      "contract": "api.admin.resetPassword",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/admin/settings",
+      "contract": "api.admin.settings",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/usage",
+      "contract": "api.admin.usage",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/admin/usage",
+      "contract": "api.admin.usage",
+      "auth": "admin",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "ordinary-member",
+          "check": "administrator boundary",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/login-codes",
+      "contract": "api.loginCodes.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/login-codes",
+      "contract": "api.loginCodes.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/login-codes",
+      "contract": "api.loginCodes.create",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/login-codes/:id",
+      "contract": "api.loginCodes.revoke",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/login-codes/:id/status",
+      "contract": "api.loginCodes.status",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/login-codes/:id/status",
+      "contract": "api.loginCodes.status",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/local/connect",
+      "contract": "api.local.connect",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/local/check",
+      "contract": "api.local.check",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/local/check",
+      "contract": "api.local.check",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/links",
+      "contract": "api.links.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/links",
+      "contract": "api.links.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/links",
+      "contract": "api.links.create",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/links/:id",
+      "contract": "api.links.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/links/:id",
+      "contract": "api.links.revoke",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/links/:id/visits",
+      "contract": "api.links.visits",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/links/:id/visits",
+      "contract": "api.links.visits",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices",
+      "contract": "api.devices.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/devices",
+      "contract": "api.devices.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/sign-out-others",
+      "contract": "api.devices.signOutOthers",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/devices/:id",
+      "contract": "api.devices.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/devices/:id",
+      "contract": "api.devices.signOut",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/deliveries",
+      "contract": "api.deliveries.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/deliveries",
+      "contract": "api.deliveries.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/deliveries",
+      "contract": "api.deliveries.create",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/deliveries/:id",
+      "contract": "api.deliveries.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/events",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/events",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/r/:token",
+      "contract": "api.requests.open",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/r/:token",
+      "contract": "api.requests.open",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/r/:token/events",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/r/:token/events",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/r/:token/start",
+      "contract": "api.requests.start",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/r/:token/transfers",
+      "contract": "api.requests.transfer",
+      "auth": "any",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/requests",
+      "contract": "api.requests.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/requests",
+      "contract": "api.requests.list",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/requests",
+      "contract": "api.requests.create",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/requests/:id",
+      "contract": "api.requests.update",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/requests/:id",
+      "contract": "api.requests.close",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/requests/:id/submissions",
+      "contract": "api.requests.submissions",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/requests/:id/submissions",
+      "contract": "api.requests.submissions",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/trash/empty",
+      "contract": "api.items.emptyTrash",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/transfers",
+      "contract": "api.transfers.create",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/transfers/:id/complete",
+      "contract": "api.transfers.complete",
+      "auth": "any",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/transfers/:id/cancel",
+      "contract": "api.transfers.cancel",
+      "auth": "any",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/tabs/:id/close",
+      "contract": "api.transfers.closeTab",
+      "auth": "any",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/uploads/:id",
+      "contract": "api.transfers.removeUpload",
+      "auth": "any",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/usage",
+      "contract": "api.usage",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/usage",
+      "contract": "api.usage",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/nodes/:id/content",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/nodes/:id/content",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/nodes/:id/thumbnail",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/nodes/:id/thumbnail",
+      "contract": null,
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/nearby",
+      "contract": "api.nearby.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/nearby",
+      "contract": "api.nearby.get",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/nearby/presence",
+      "contract": "api.nearby.present",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/nearby/signal",
+      "contract": "api.nearby.signal",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/nearby/invite",
+      "contract": "api.nearby.invite",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/nearby/invite",
+      "contract": "api.nearby.extendInvite",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/nearby/invite",
+      "contract": "api.nearby.endInvite",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/nearby/guests/:id",
+      "contract": "api.nearby.removeGuest",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/n/:token",
+      "contract": "api.nearby.guest",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/n/:token",
+      "contract": "api.nearby.guest",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/n/:token/join",
+      "contract": "api.nearby.join",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/n/:token/join",
+      "contract": "api.nearby.leave",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/n/:token/signal",
+      "contract": "api.nearby.guestSignal",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/n/:token/events",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/n/:token/events",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/pickup",
+      "contract": "api.pickup.resolve",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/pickup/config",
+      "contract": "api.pickup.config",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/pickup/config",
+      "contract": "api.pickup.config",
+      "auth": "public",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/pickup/current",
+      "contract": "api.pickup.current",
+      "auth": "member",
+      "evidence": [
+        {
+          "actor": "anonymous",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "forged-session",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "request-guest",
+          "check": "authentication boundary",
+          "status": 403
+        },
+        {
+          "actor": "share-holder",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "nearby-guest",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "same-network-stranger",
+          "check": "authentication boundary",
+          "status": 401
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "session-without-csrf",
+          "check": "CSRF token",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "OPTIONS",
+      "path": "/uploads/:id",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/uploads/:id",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/uploads/:id",
+      "contract": null,
+      "auth": "raw",
+      "evidence": [
+        {
+          "actor": "cross-site-browser",
+          "check": "origin",
+          "status": 403
+        },
+        {
+          "actor": "cross-site-browser",
+          "check": "sec-fetch-site",
+          "status": 403
+        },
+        {
+          "actor": "rebound-host",
+          "check": "Host validation",
+          "status": 403
+        }
+      ]
+    }
+  ]
+}

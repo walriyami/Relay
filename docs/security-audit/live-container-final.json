@@ -1,0 +1,29 @@
+{
+  "image": "sha256:c4a1f4a2bb04db5cbf9bf2f10f4ce664e71b259dbf9f5d00800c9cb0aaf3eaaa",
+  "env": {
+    "RELAY_DIRECT_PORT": "3090",
+    "RELAY_ORIGIN": "https://relay.walriyami.com",
+    "RELAY_SETUP_KEY": "",
+    "RELAY_TRUST_PROXY": "cloudflared",
+    "RELAY_DIRECT": "",
+    "NODE_ENV": "production",
+    "HOST": "0.0.0.0",
+    "PORT": "3090"
+  },
+  "user": "node",
+  "readOnlyRootfs": true,
+  "capDrop": ["ALL"],
+  "securityOpt": ["no-new-privileges:true"],
+  "memory": 1073741824,
+  "pidsLimit": 128,
+  "portBindings": {
+    "3090/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "3090"
+      }
+    ]
+  },
+  "networks": ["relay_default", "streaming_lab_private"],
+  "health": "healthy"
+}
