@@ -137,6 +137,9 @@ function ImagePreview({ entry, source }: { entry: NodeRef; source: ContentSource
       <div
         ref={frame}
         className="preview-image-frame"
+        role={zoomed ? "region" : undefined}
+        aria-label={zoomed ? `Full-size image: ${entry.name}` : undefined}
+        tabIndex={zoomed ? 0 : -1}
         onPointerDown={(event) => {
           // Touch and pens scroll the frame natively.
           if (!zoomed || event.button !== 0 || event.pointerType !== "mouse") return;
