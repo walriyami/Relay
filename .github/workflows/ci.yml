@@ -28,8 +28,8 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  e2e:
-    name: Browser tests
+  journeys:
+    name: Browser journeys
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -41,7 +41,6 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps
       - run: npm run test:e2e
-      - run: npm run test:resources
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure()
         with:
@@ -50,6 +49,45 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 14
+
+  resources:
+    name: Browser resources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      # This fixture uses Vite directly; it does not need the production build or API server.
+      - run: npm run test:resources
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: playwright-resources
+          path: test-results/resources/
+          retention-days: 14
+
+  # Preserve the original named check: incomplete resources must also block Browser tests.
+  e2e:
+    name: Browser tests
+    needs: [journeys, resources]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require both browser suites to succeed
+        env:
+          JOURNEYS_RESULT: ${{ needs.journeys.result }}
+          RESOURCES_RESULT: ${{ needs.resources.result }}
+        run: |
+          if [[ "$JOURNEYS_RESULT" != success || "$RESOURCES_RESULT" != success ]]; then
+            echo "Browser checks incomplete: journeys=$JOURNEYS_RESULT resources=$RESOURCES_RESULT"
+            exit 1
+          fi
 
   docker:
     name: Container and Compose
