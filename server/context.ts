@@ -119,7 +119,7 @@ export interface Library {
   nodes(itemId: string): M.Node[];
   /** Moves an item to Trash and revokes its links. Idempotent. */
   trash(owner: string, itemId: string): void;
-  /** Removes an item permanently and collects its blobs. Synchronous. */
+  /** Removes an item permanently; collects its blobs after the outer transaction commits. Synchronous. */
   purge(itemId: string): void;
   sweep(now: number): Promise<void>;
 }
