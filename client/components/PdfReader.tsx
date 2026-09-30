@@ -7,6 +7,8 @@ import "pdfjs-dist/web/pdf_viewer.css";
 import "../styles/pdf-reader.css";
 import { Button, IconButton, Spinner } from "./ui";
 
+declare const __PDFJS_ASSET_BASE__: string;
+
 type Reader = { viewer: PDFSinglePageViewer; find: PDFFindController; events: EventBus };
 
 /** PDF.js owns page layout, selectable text, document structure, rendering and search. */
@@ -20,6 +22,7 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
   const pages = useRef<HTMLDivElement>(null);
   const reader = useRef<Reader | null>(null);
   const search = useRef<HTMLInputElement>(null);
+  const currentQuery = useRef("");
   const [status, setStatus] = useState("Loading PDF");
   const [error, setError] = useState("");
   const [count, setCount] = useState(0);
@@ -101,12 +104,36 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
         enableAutoLinking: false,
       };
       viewer = new components.PDFSinglePageViewer(options);
+      // Chromium omits tagged semantics beneath a presentation canvas. Keep PDF.js's
+      // own structure tree beside that canvas (with its text ownership intact).
+      const structure = new MutationObserver(() => {
+        for (const tree of pages.current?.querySelectorAll("canvas > .structTree") ?? [])
+          tree.parentElement?.after(tree);
+      });
+      structure.observe(pages.current, { childList: true, subtree: true });
+      eventsLifetime.signal.addEventListener("abort", () => structure.disconnect(), { once: true });
+      let visiblePage = 0;
+      let refitting = false;
+      function refit() {
+        const fitted = viewer?.currentScaleValue;
+        // Wait until the viewer's location is on this page, rather than restoring
+        // the previous scroll anchor while page navigation is still in progress.
+        if (refitting || !viewer || visiblePage !== viewer.currentPageNumber || !fitted?.startsWith("page-")) return;
+        const view = viewer.getPageView(visiblePage - 1) as PDFPageView | undefined;
+        if (!view?.pdfPage) return;
+        // Setting a fit dispatches updateviewarea synchronously in WebKit.
+        refitting = true;
+        try {
+          viewer.currentScaleValue = fitted;
+        } finally {
+          refitting = false;
+        }
+      }
       let resizing = 0;
       const resize = new ResizeObserver(() => {
         cancelAnimationFrame(resizing);
         resizing = requestAnimationFrame(() => {
-          const fitted = viewer?.currentScaleValue;
-          if (!disposed && fitted?.startsWith("page-") && viewer) viewer.currentScaleValue = fitted;
+          if (!disposed) refit();
         });
       });
       resize.observe(container.current);
@@ -127,6 +154,15 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
           if (disposed || !viewer) return;
           setCount(viewer.pagesCount);
           viewer.currentScaleValue = "page-width";
+        },
+        { signal },
+      );
+      events.on(
+        "updateviewarea",
+        ({ location }: { location: { pageNumber: number } }) => {
+          if (disposed) return;
+          visiblePage = location.pageNumber;
+          refit();
         },
         { signal },
       );
@@ -157,23 +193,37 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
           if (disposed || pageNumber !== viewer?.currentPageNumber) return;
           if (error) fail();
           else {
+            // A new page initially inherits page one's size. Refit after its real
+            // viewport is known; numeric/custom zoom deliberately stays unchanged.
+            refit();
             clearTimeout(deadline);
-            setStatus("");
+            const pending =
+              (viewer?.getPageView(pageNumber - 1) as PDFPageView | undefined)?.renderingState !==
+              components.RenderingStates.FINISHED;
+            setStatus(pending ? `Loading page ${pageNumber}` : "");
+            if (pending) deadline = setTimeout(fail, 60_000);
           }
+        },
+        { signal },
+      );
+      events.on(
+        "textlayerrendered",
+        ({ error }: { error?: Error }) => {
+          if (error) fail();
         },
         { signal },
       );
       events.on(
         "updatefindmatchescount",
         ({ matchesCount }: { matchesCount: { current: number; total: number } }) => {
-          if (!disposed) setMatches(`${matchesCount.current} of ${matchesCount.total} matches`);
+          if (!disposed && currentQuery.current) setMatches(`${matchesCount.current} of ${matchesCount.total} matches`);
         },
         { signal },
       );
       events.on(
         "updatefindcontrolstate",
         ({ state, matchesCount }: { state: number; matchesCount: { current: number; total: number } }) => {
-          if (disposed) return;
+          if (disposed || !currentQuery.current) return;
           if (state === components.FindState.PENDING) setMatches("Searching PDF…");
           else if (state === components.FindState.NOT_FOUND) setMatches("No matches");
           else setMatches(`${matchesCount.current} of ${matchesCount.total} matches`);
@@ -183,8 +233,29 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
       native = new Worker(pdfWorker, { type: "module" });
       native.addEventListener("error", fail);
       native.addEventListener("messageerror", fail);
+      // PDF.js 6.3.289 reports failed font/image delivery on its worker channel,
+      // but can finish a blank/partial page without rejecting render(), even with
+      // stopAtErrors. Observe those failure notifications without changing them.
+      // Keep the missing CMap/decoder regressions when updating PDF.js: this small
+      // guard depends on the installed version's obj/commonobj message format.
+      native.addEventListener(
+        "message",
+        ({ data }: MessageEvent<{ action?: string; data?: unknown[] }>) => {
+          if (!Array.isArray(data?.data)) return;
+          const object = data.data;
+          const font = object[2] as { error?: unknown } | null;
+          if (
+            (data.action === "commonobj" && object[1] === "Font" && font?.error) ||
+            (data.action === "commonobj" && object[1] === "Image" && object[2] === null) ||
+            (data.action === "obj" && object[2] === "Image" && object[3] === null)
+          )
+            fail();
+        },
+        { signal },
+      );
       worker = pdf.PDFWorker.create({ port: native });
       deadline = setTimeout(fail, 60_000);
+      const assets = new URL(__PDFJS_ASSET_BASE__, window.location.href).href;
       task = pdf.getDocument({
         url,
         worker,
@@ -192,7 +263,13 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
         rangeChunkSize: 256 * 1024,
         disableAutoFetch: true,
         disableStream: true,
+        cMapUrl: `${assets}cmaps/`,
+        cMapPacked: true,
+        standardFontDataUrl: `${assets}standard_fonts/`,
+        wasmUrl: `${assets}wasm/`,
+        iccUrl: `${assets}iccs/`,
         useWasm: false,
+        stopAtErrors: true,
         useSystemFonts: true,
         canvasMaxAreaInBytes: 32_000_000,
       });
@@ -218,6 +295,7 @@ function ReaderDocument({ url, name, retry }: { url: string; name: string; retry
     setNumber(String(viewer.currentPageNumber));
   }
   function find(value: string, again = false, previous = false) {
+    currentQuery.current = value;
     if (!value) {
       reader.current?.events.dispatch("findbarclose", {});
       setMatches("");

@@ -1,14 +1,4 @@
-import {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-  type ComponentType,
-} from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   ChartColumn,
   Compass,
@@ -73,50 +63,12 @@ import { ConnectionBar, ConnectionScreen } from "../components/ConnectionStatus"
 import { connection, onConnectivity } from "../lib/connection";
 import { Brand } from "./Brand";
 import { storageOf } from "../components/StorageMeter";
-import { PageBoundary, pageRetries } from "./PageBoundary";
+import { PageBoundary } from "./PageBoundary";
+import { lazyComponent as lazyPage } from "../lib/lazy";
 import type { SettingsPage as SettingsPageComponent } from "../features/settings/SettingsPage";
 
 // Settings and Admin are visited rarely (Admin by one person), so they load on first visit.
 // A load that failed (offline, a deploy replaced the chunk) is forgotten, so the next visit tries again.
-/**
- * The address of a page chunk that failed to load. Browsers remember a failed module import for
- * good, so trying again means asking for the same file under a fresh address.
- */
-function failedChunk(error: unknown, name: string) {
-  const named = /(https?:\/\/\S+?\.js)\b/.exec(error instanceof Error ? error.message : "")?.[1];
-  if (named) return named;
-  return performance
-    .getEntriesByType("resource")
-    .map((entry) => entry.name)
-    .reverse()
-    .find((url) => new URL(url).pathname.startsWith(`/assets/${name}-`));
-}
-
-/** A lazily loaded page whose "Try again" really fetches its chunk again after a failure. */
-function lazyPage<P extends object>(name: string, load: () => Promise<Record<string, unknown>>) {
-  let retry: string | undefined;
-  let failedAt: number | undefined;
-  const make = () =>
-    lazy(() =>
-      (retry ? import(/* @vite-ignore */ `${retry.split("?")[0]}?retry=${Date.now()}`) : load()).then(
-        (module: Record<string, unknown>) => ({ default: module[name] as ComponentType<P> }),
-        (error: unknown) => {
-          retry = failedChunk(error, name) ?? retry;
-          failedAt = pageRetries();
-          throw error;
-        },
-      ),
-    );
-  let Loaded = make();
-  return (props: P) => {
-    // A failed load stays failed until the person asks to try again; only then fetch anew.
-    if (failedAt !== undefined && failedAt !== pageRetries()) {
-      failedAt = undefined;
-      Loaded = make();
-    }
-    return <Loaded {...props} />;
-  };
-}
 const SettingsPage = lazyPage<ComponentProps<typeof SettingsPageComponent>>(
   "SettingsPage",
   () => import("../features/settings/SettingsPage"),
