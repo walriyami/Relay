@@ -28,8 +28,8 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  e2e:
-    name: Browser tests
+  journeys:
+    name: Browser journeys
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -70,6 +70,24 @@ jobs:
           name: playwright-resources
           path: test-results/resources/
           retention-days: 14
+
+  # Preserve the original named check: incomplete resources must also block Browser tests.
+  e2e:
+    name: Browser tests
+    needs: [journeys, resources]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require both browser suites to succeed
+        env:
+          JOURNEYS_RESULT: ${{ needs.journeys.result }}
+          RESOURCES_RESULT: ${{ needs.resources.result }}
+        run: |
+          if [[ "$JOURNEYS_RESULT" != success || "$RESOURCES_RESULT" != success ]]; then
+            echo "Browser checks incomplete: journeys=$JOURNEYS_RESULT resources=$RESOURCES_RESULT"
+            exit 1
+          fi
 
   docker:
     name: Container and Compose
