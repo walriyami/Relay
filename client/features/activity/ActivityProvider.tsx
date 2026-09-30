@@ -26,8 +26,8 @@ type Activity = {
   feedError: string;
   reloadDeliveries: () => void;
   reloadFeed: () => void;
-  /** Marks everything shown as seen, on every device of the account. */
-  markSeen: () => void;
+  /** Explicitly marks all account activity through the current feed's newest timestamp as read. */
+  markSeen: () => Promise<void>;
   /** Opens something received in the receive popup. */
   open: (received: Received) => void;
 };
@@ -188,9 +188,12 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   }, [entries, feed.loading, feed.error]);
 
   const newest = entries[0]?.created ?? 0;
-  const markSeen = useCallback(() => {
-    if (newest > seen) void call(api.activity.seen, { body: { until: newest } }).catch(() => {});
-  }, [newest, seen]);
+  const reloadFeed = feed.reload;
+  const markSeen = useCallback(async () => {
+    if (newest <= seen) return;
+    await call(api.activity.seen, { body: { until: newest } });
+    reloadFeed();
+  }, [newest, seen, reloadFeed]);
 
   // The popup follows the delivery live: accepted in the footer, or answered on another tab.
   const shown =

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Bell, Settings } from "lucide-react";
 import type { ActivityEntry, Delivery } from "../../api";
 import { ago } from "../../lib/format";
@@ -14,8 +14,8 @@ import { acceptDelivery, declineDelivery } from "../incoming/answer";
 import { describeAnswered, describeDelivery, describeEntry, type Described } from "./describe";
 import { useActivity } from "./ActivityProvider";
 
-/** The list shows at most this many lines; older ones are still in the feed's own limit. */
-const SHOWN = 50;
+/** A bounded combined history, matching the account feed's 100-event limit. */
+const SHOWN = 100;
 type Line = { key: string; at: number; described: Described; fresh: boolean; onOpen?: () => void };
 
 /** The bell in the top bar: items waiting for this device, then everything that happened. */
@@ -63,9 +63,18 @@ function ActivityPanel({ close }: { close: () => void }) {
     markSeen,
     open,
   } = useActivity();
-  // What was new when the panel opened stays marked while it is open, though it is now seen.
-  const [seenAtOpen] = useState(seen);
-  useEffect(markSeen, [markSeen]);
+  const [marking, setMarking] = useState(false);
+  const unread = entries.some((e) => !e.self && e.created > seen);
+  async function markAll() {
+    setMarking(true);
+    try {
+      await markSeen();
+    } catch (error) {
+      errorToast(error);
+    } finally {
+      setMarking(false);
+    }
+  }
   const go = (to: string) => {
     close();
     navigate(to);
@@ -87,7 +96,7 @@ function ActivityPanel({ close }: { close: () => void }) {
       key: e.id,
       at: e.created,
       described: describeEntry(e),
-      fresh: !e.self && e.created > seenAtOpen,
+      fresh: !e.self && e.created > seen,
       onOpen: entryAction(e),
     })),
     ...(me.prefs.activity.received ? answered : []).map((d) => ({
@@ -98,13 +107,19 @@ function ActivityPanel({ close }: { close: () => void }) {
       onOpen: () => view(d),
     })),
   ]
-    .sort((a, b) => b.at - a.at)
+    .sort((a, b) => b.at - a.at || b.key.localeCompare(a.key))
     .slice(0, SHOWN);
 
   return (
     <>
       <div className="popover-head">
         <strong>Activity</strong>
+        <span className="spacer" />
+        {unread && (
+          <Button size="sm" variant="ghost" busy={marking} onClick={() => void markAll()}>
+            Mark all as read
+          </Button>
+        )}
         <IconButton
           size="sm"
           label="Activity settings"
@@ -144,6 +159,7 @@ function ActivityPanel({ close }: { close: () => void }) {
         {lines.length > 0 ? (
           <section className="activity-section" aria-label="Recent activity">
             <h3 className="activity-heading">Recent</h3>
+            {lines.length === SHOWN && <p className="muted popover-empty">Showing the latest 100 events.</p>}
             <ul className="activity-list">
               {lines.map((line) => (
                 <EntryRow key={line.key} line={line} />
