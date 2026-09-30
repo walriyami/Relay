@@ -2127,6 +2127,9 @@ button.activity-open:focus-visible {
 .preview-image.is-zoomed .preview-image-frame:active {
   cursor: grabbing;
 }
+.preview-image-frame:focus-visible {
+  outline-offset: -2px;
+}
 .preview-image.is-zoomed img {
   max-width: none;
   max-height: none;

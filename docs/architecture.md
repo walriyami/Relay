@@ -1,13 +1,13 @@
 # Architecture
 
-Relay is a single Node.js process that serves a React web app and a JSON API, and keeps everything on one local disk.
+Relay runs one Node.js API process that serves a React web app and keeps its data on one local disk. When direct transfers are enabled, it also runs a helper child process.
 
 ```mermaid
 flowchart LR
   subgraph Browser
     UI[React app]
   end
-  subgraph Relay["Relay (one Node.js process)"]
+  subgraph Relay["Relay API process"]
     API[Fastify API]
     TUS[tus upload receiver]
     DL[Downloads and ZIP64 streaming]
@@ -18,7 +18,7 @@ flowchart LR
     BLOBS[(blobs/ by SHA-256)]
   end
   UI -- JSON --> API
-  UI -- 8 MiB chunks --> TUS
+  UI -- Adaptive tus chunks --> TUS
   UI -- byte ranges --> DL
   SSE -- Server-Sent Events --> UI
   API --> DB
@@ -30,13 +30,15 @@ flowchart LR
 
 - **Saving comes first.** Every completed upload is saved to the owner's library before anything else happens. A link or a delivery to a device only points at saved content, so it never moves or deletes the original.
 - **Honest states.** A file counts as saved only after it's flushed to disk and recorded in the database. An interrupted upload never looks saved, and Relay never claims a download reached someone's disk.
-- **One process, one disk.** Relay makes no attempt at clustering. SQLite holds an exclusive lock on the data directory, so a second process fails immediately instead of corrupting data.
+- **One API writer, one disk.** Relay makes no attempt at clustering. The API holds an exclusive lock on the data directory, so a second API process fails immediately instead of corrupting data. The direct-transfer helper does not open the database.
 - **Bounded transfer buffers.** Uploads, downloads and archives stream instead of buffering whole files. Preview decoding has separate pixel, concurrency and lifecycle limits; source complexity can still affect decoder memory.
 
 ## Transfers
 
+Browser tus chunks start at 1 MiB and adapt to measured throughput between 256 KiB and 32 MiB. These request sizes are separate from Nearby’s 8 MiB stream window, which bounds bytes ahead of the receiver.
+
 1. The browser announces a transfer as one manifest: its files, folders and optional text. The server creates the pending item and one upload per file in a single transaction.
-2. Each file uploads separately over the [tus](https://tus.io) resumable protocol in 8 MiB chunks, several at a time. The server hashes bytes as they arrive, so finishing even a very large file is instant.
+2. Each file uploads separately over the [tus](https://tus.io) resumable protocol with adaptive chunks; several files can upload concurrently. The server hashes bytes as they arrive, so finishing even a very large file is instant.
 3. When every file is in, the browser completes the transfer with a destination: **Save**, **Create link**, or **Send to a device**.
 
 Uploads belong to the browser tab that started them. The tab holds a lease through its event stream or a short authenticated capacity probe. If the network drops or the server restarts, the tab resumes from the server's confirmed offset. When a tab closes or reloads, its unfinished uploads are abandoned on purpose. If a tab disappears without warning, its uploads are released five minutes after it was last heard from.

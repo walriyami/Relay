@@ -17,7 +17,7 @@ Relay needs Node.js 24, which can run TypeScript directly, so there's no compile
 | --------------------------------- | ----------------------------------------------------------------------------------------- |
 | `npm run dev`                     | API and Vite dev server with reload                                                       |
 | `npm run build`                   | Type-checks everything and builds the web app into `dist/`                                |
-| `npm run check`                   | Formatting, type-check, lint and backend tests: the same checks as CI                     |
+| `npm run check`                   | Formatting, type-check, lint and backend tests                                            |
 | `npm run typecheck`               | TypeScript, without building                                                              |
 | `npm run lint` / `lint:fix`       | ESLint                                                                                    |
 | `npm start`                       | Runs the production server, which serves `dist/`                                          |
@@ -34,7 +34,7 @@ npx playwright install --with-deps
 
 ## Tests
 
-- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
+- **Backend** (`tests/*.test.ts`, `node:test`). Most integration tests build an in-process Fastify app on a temporary data directory and call it through Fastify injection with typed API clients; other tests exercise pure helpers. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
 - **Resources** (`npm run test:resources`). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling in Chromium, Firefox and WebKit.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe. The Nearby journeys connect two browsers by their local addresses, which only Chromium can be told to reveal, so they run in Chromium and the mobile viewport only.
 
@@ -43,6 +43,8 @@ Tests never touch real data. Every instance uses a new temporary directory and g
 ## Release verification
 
 These scripts exercise Relay at a scale that's too slow for every commit. Each one uses disposable storage and generated content.
+
+`verify:scale` also requires Python 3 (`python3`) for its independent ZIP archive validation. Browser verification needs the Playwright browser installation, and container verification needs Docker Engine and Docker Compose.
 
 | Command                                                  | What it checks                                                                                                                                                                                                   |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -58,7 +60,7 @@ Each script's header comment lists its options, for example `--size 80MiB --file
 
 - **One API contract.** Add or change endpoints in `shared/api.ts` first. The server routes and client calls pick up its types.
 - **Database changes** go in `server/db/schema.sql`. Incompatible prerelease schemas fail startup. Preserve any wanted data and use a new empty data directory after a schema change.
-- **Formatting and linting.** Prettier formats with a 120-character line width, and ESLint checks types, promises and React Hooks. Run `npm run check` before you open a pull request. It runs everything CI runs except the browser tests.
+- **Formatting and linting.** Prettier formats with a 120-character line width, and ESLint checks types, promises and React Hooks. Run `npm run check` before you open a pull request. It does not run the Vite production build, browser journeys, resource tests or container/Compose verification. CI runs those separately; the CodeQL workflow also runs for public repositories. Run `npm run build` to verify the production web build locally.
 - **Lint exceptions** are rare, and each one says why on the same line: `// eslint-disable-next-line <rule> -- <reason>`.
 - **Authorization** is required on every content and archive route, and every new route needs a test that proves outsiders are refused.
 - **User-facing claims stay honest.** Never show something as saved, sent or delivered before the server has confirmed it.
