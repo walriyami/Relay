@@ -15,19 +15,22 @@ const modalOpen = () => document.body.classList.contains("modal-open");
 export function usePageDrop({
   onFiles,
   onText,
+  getFilesGeneration,
   hint,
 }: {
   onFiles: (files: PickedDraftFile[], folders: PickedFolder[]) => void;
   /** Text pasted outside any input; return false to leave it alone. */
   onText: (text: string) => boolean;
+  /** An owning selection's explicit clears invalidate folder reads already in flight. */
+  getFilesGeneration?: () => number;
   /** Under "Drop to add": what happens next. */
   hint: string;
 }) {
   const [dragging, setDragging] = useState(false);
   // Files found so far while a dropped folder is read; null when not reading.
   const [reading, setReading] = useState<number | null>(null);
-  const handlers = useRef({ onFiles, onText });
-  handlers.current = { onFiles, onText };
+  const handlers = useRef({ onFiles, onText, getFilesGeneration });
+  handlers.current = { onFiles, onText, getFilesGeneration };
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
       if (modalOpen()) return;
@@ -75,8 +78,11 @@ export function usePageDrop({
       depth = 0;
       setDragging(false);
       setReading(0);
+      const generation = handlers.current.getFilesGeneration;
+      const started = generation?.();
       const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
       setReading(null);
+      if (generation && generation() !== started) return;
       handlers.current.onFiles(selection.files, selection.folders);
       if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
     };

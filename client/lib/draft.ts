@@ -31,6 +31,9 @@ function savedText() {
 }
 let draft: Draft = { items: [], text: typeof window === "undefined" ? "" : savedText() };
 const listeners = new Set<() => void>();
+// Explicit clears invalidate folder reads that began against an earlier selection.
+let filesGeneration = 0;
+export const getDraftFilesGeneration = () => filesGeneration;
 let nextIdentity = 0;
 const identity = (kind: string) => `${kind}:${++nextIdentity}`;
 
@@ -62,6 +65,7 @@ export function removeItem(key: string) {
   set({ ...draft, items: draft.items.filter((i) => i.key !== key) });
 }
 export function clearDraft() {
+  filesGeneration++;
   set({ items: [], text: "" });
 }
 /** Puts back a draft taken with getDraft(), for Undo. */
@@ -69,6 +73,7 @@ export function restoreDraft(previous: Draft) {
   set(previous);
 }
 export function clearItems() {
+  filesGeneration++;
   set({ ...draft, items: [] });
 }
 
