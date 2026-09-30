@@ -140,6 +140,14 @@ check_copy_volumes() {
   fi
 }
 
+validate_data_storage() {
+  if [[ $data == restore=* ]]; then
+    check_copy_volumes "${data#restore=}" "$volume" || return 1
+  elif [[ $data != keep ]] && volume_exists "$volume"; then
+    volume_path "$volume" >/dev/null || return 1
+  fi
+}
+
 copy_volume() { # copy_volume <from> <to>: the stack must be stopped.
   check_copy_volumes "$1" "$2" || return 1
   docker volume create "$2" >/dev/null || return 1
@@ -269,11 +277,7 @@ case $data in
 esac
 
 # Validate storage before building an image or stopping the service, including resolved "latest".
-if [[ $data == restore=* ]]; then
-  check_copy_volumes "${data#restore=}" "$volume" || exit 1
-elif [[ $data != keep ]] && volume_exists "$volume"; then
-  volume_path "$volume" >/dev/null || exit 1
-fi
+(validate_data_storage) || exit 1
 
 case $from in
   commit) ref=HEAD ;;
@@ -353,6 +357,13 @@ fi
 # ---------------------------------------------------------------------------------------------
 # Data
 
+# The schema prompt can change keep to save/wipe after the build. Validate that final choice
+# while Relay is still running; on refusal, return the image tag to its original build.
+if ! (validate_data_storage); then
+  if [[ -n $current ]]; then docker tag "$rollback_image" "$image"; fi
+  fail "Data replacement refused. Relay has not been stopped and its data is unchanged."
+fi
+
 if [[ $data != keep ]]; then
   step "Stopping Relay"
   docker compose down
@@ -376,6 +387,8 @@ case $data in
         [[ $answer == delete ]] || fail "Not deleted. Relay is stopped; run docker compose up -d to start it as it was."
       fi
       step "Deleting the data"
+      (volume_path "$volume") >/dev/null \
+        || fail "Data volume was not deleted. Relay is stopped; recover with its original matching image/build."
       docker volume rm "$volume" >/dev/null
     fi
     ;;

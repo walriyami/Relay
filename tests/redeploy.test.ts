@@ -22,7 +22,7 @@ if (args[0] === 'info') process.exit(0);
 if (args[0] === 'compose') {
   if (args[1] === 'config') console.log(args[2] === '--images' ? 'synthetic:fixture' : 'name: synthetic');
   if (args[1] === 'ps') console.log('synthetic-container');
-  if (args[1] === 'down') {state.running = false; save();}
+  if (args[1] === 'down') {state.running = false; if(state.unsafeOnStop) state.volumes['synthetic_relay-data'].options = 3; save();}
   if (args[1] === 'up') {state.running = true; save();}
   process.exit(0);
 }
@@ -47,7 +47,7 @@ if (args[0] === 'inspect') {
   process.exit(0);
 }
 if (args[0] === 'run') {
-  if (args.includes('cat')) {console.log('synthetic schema'); process.exit(0);}
+  if (args.includes('cat')) {console.log(state.schemaMismatch && args.includes('synthetic:fixture') ? 'new schema' : 'synthetic schema'); process.exit(0);}
   const mounts = args.filter((v,i) => args[i-1] === '-v');
   const from = mounts.find(m => m.includes(':/from:')).split(':')[0];
   const to = mounts.find(m => m.endsWith(':/to')).split(':')[0];
@@ -56,12 +56,22 @@ if (args[0] === 'run') {
   if (state.failCopyFrom === from) fail();
   fs.cpSync(src,dst,{recursive:true}); process.exit(0);
 }
-if (['build','tag','image'].includes(args[0])) process.exit(0);
+if (args[0] === 'tag') {state.images ||= {}; state.images[args[2]] = state.images[args[1]] || args[1]; save(); process.exit(0);}
+if (args[0] === 'build') {state.images ||= {}; state.images['synthetic:fixture'] = 'synthetic-new-image'; save(); process.exit(0);}
+if (args[0] === 'image') process.exit(0);
 console.error('Unexpected Docker command', args); fail();
 `;
 
 type Volume = { path: string; driver?: string; options?: number; mountpoint?: string };
-type State = { volumes: Record<string, Volume>; calls: string[][]; running: boolean; failCopyFrom?: string };
+type State = {
+  volumes: Record<string, Volume>;
+  calls: string[][];
+  running: boolean;
+  failCopyFrom?: string;
+  schemaMismatch?: boolean;
+  unsafeOnStop?: boolean;
+  images?: Record<string, string>;
+};
 
 async function fixture(run: (f: Awaited<ReturnType<typeof createFixture>>) => Promise<void>) {
   const f = await createFixture();
@@ -100,19 +110,26 @@ async function createFixture() {
     assert.equal(spawnSync("git", args, { cwd: root }).status, 0);
   }
   const read = async () => JSON.parse(await readFile(statePath, "utf8")) as State;
-  const execute = (args: string[], helper?: string) => {
+  const execute = (args: string[], helper?: string, input?: string) => {
     const env = {
       ...process.env,
       PATH: `${join(root, "bin")}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
       REDEPLOY_FIXTURE: statePath,
       REDEPLOY_FIXTURE_DATE: datePath,
     };
-    return spawnSync("bash", helper ? ["-c", helper] : ["scripts/redeploy.sh", "--from", "working", "-y", ...args], {
-      cwd: root,
-      env,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
+    return spawnSync(
+      "bash",
+      helper
+        ? ["-c", helper]
+        : ["scripts/redeploy.sh", ...(input === undefined ? ["--from", "working", "-y"] : []), ...args],
+      {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        input,
+        timeout: 10_000,
+      },
+    );
   };
   return { root, state, persist, addVolume, read, execute, datePath };
 }
@@ -150,6 +167,79 @@ test("copy_volume rejects self-copy before volume creation", async () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /onto itself/);
     assert.deepEqual((await f.read()).calls, []);
+  });
+});
+
+test("interactive schema changes to save/wipe reject unsupported storage before stop and restore the old image tag", async () => {
+  for (const kind of ["plugin", "options"])
+    for (const choice of [1, 2])
+      await fixture(async (f) => {
+        const active = f.state.volumes["synthetic_relay-data"];
+        if (kind === "plugin") active.driver = "synthetic-plugin";
+        else active.options = 3;
+        f.state.schemaMismatch = true;
+        await f.persist();
+        const original = await readFile(join(active.path, "synthetic.txt"));
+        // Working tree, keep data, confirm build, then save/wipe at the schema prompt.
+        const result = f.execute([], undefined, `2\n1\ny\n${choice}\n`);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /The database schema changed/);
+        assert.match(result.stderr, /not an ordinary Docker-managed local volume/);
+        assert.match(result.stderr, /Relay has not been stopped/);
+        const after = await f.read();
+        assert.equal(after.running, true);
+        assert.equal(after.images?.["synthetic:fixture"], "synthetic-old-image");
+        assert.equal(
+          after.calls.some((a) => a[0] === "build"),
+          true,
+        );
+        assert.deepEqual(
+          after.calls.filter(
+            (a) =>
+              (a[0] === "compose" && ["down", "up"].includes(a[1])) ||
+              (a[0] === "volume" && ["create", "rm"].includes(a[1])) ||
+              (a[0] === "run" && !a.includes("cat")),
+          ),
+          [],
+        );
+        assert.deepEqual(await readFile(join(active.path, "synthetic.txt")), original);
+      });
+});
+
+test("interactive schema choices still permit save/wipe on ordinary managed storage", async () => {
+  for (const choice of [1, 2])
+    await fixture(async (f) => {
+      f.state.schemaMismatch = true;
+      await f.persist();
+      const result = f.execute([], undefined, `2\n1\ny\n${choice}\ndelete\n`);
+      assert.equal(result.status, 0, result.stderr);
+      const after = await f.read();
+      assert.equal(after.running, true);
+      assert.equal(
+        after.calls.some((a) => a[0] === "volume" && a[1] === "rm"),
+        true,
+      );
+      assert.equal(after.images?.["synthetic:fixture"], "synthetic-new-image");
+    });
+});
+
+test("wipe rechecks storage immediately before removal", async () => {
+  await fixture(async (f) => {
+    f.state.unsafeOnStop = true;
+    await f.persist();
+    const result = f.execute(["--data", "wipe"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Data volume was not deleted/);
+    const after = await f.read();
+    assert.equal(after.running, false);
+    assert.equal(
+      after.calls.some((a) => a[0] === "volume" && a[1] === "rm"),
+      false,
+    );
+    assert.equal(
+      await readFile(join(after.volumes["synthetic_relay-data"].path, "synthetic.txt"), "utf8"),
+      "original synthetic data",
+    );
   });
 });
 
