@@ -54,6 +54,8 @@ test("opening a collection's address loads each view once, not again when the li
     .click();
   await expect(page).toHaveURL(/\/files\/[0-9a-f-]{36}$/);
   const address = new URL(page.url());
+  // Finish leaving the old document before observing this address load.
+  await page.goto("about:blank");
   const loads: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
