@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { chromium, devices, type Browser, type Page } from "@playwright/test";
 import sharp from "sharp";
+import { cleanUp } from "./lib/verification.ts";
 import { api } from "../shared/api.ts";
 import { LOCAL_PASSWORD, REPO, Session, freePort, sendFiles, startServer } from "./lib/relay.ts";
 
@@ -247,13 +248,14 @@ try {
   // Each theme gets its own fresh instance, so both show exactly the same library.
   for (const scheme of ["light", "dark"] as const) {
     const work = await mkdtemp(join(tmpdir(), "relay-screenshots-"));
-    await mkdir(join(work, "data"));
-    const server = await startServer({
-      root: join(work, "data"),
-      port: await freePort(),
-      log: join(work, "server.log"),
-    });
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
     try {
+      await mkdir(join(work, "data"));
+      server = await startServer({
+        root: join(work, "data"),
+        port: await freePort(),
+        log: join(work, "server.log"),
+      });
       const owner = new Session(server.origin);
       await owner.signIn("admin", LOCAL_PASSWORD, "Seeder");
       await capture(browser, server.origin, scheme, await seed(owner));
@@ -261,11 +263,16 @@ try {
       // The hero is built from these two; the README doesn't use them on their own.
       for (const part of ["link", "share-mobile"]) await rm(join(out, `${part}-${scheme}.png`));
     } finally {
-      await server.stop();
-      await rm(work, { recursive: true, force: true });
+      if (
+        await cleanUp([
+          { name: "screenshot server", run: () => server?.stop() },
+          { name: "screenshot directory", run: () => rm(work, { recursive: true, force: true }) },
+        ])
+      )
+        process.exitCode = 1;
     }
   }
   console.log(`Screenshots written to ${out}`);
 } finally {
-  await browser.close();
+  if (await cleanUp([{ name: "screenshot browser", run: () => browser.close() }])) process.exitCode = 1;
 }

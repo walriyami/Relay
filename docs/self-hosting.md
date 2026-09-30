@@ -45,7 +45,7 @@ The container runs as an unprivileged user with a read-only root filesystem, no 
 Any reverse proxy works. It must:
 
 1. Set `RELAY_ORIGIN=https://relay.example.com` before exposing a public hostname. Pass the original `Host` header through and serve Relay on exactly that origin. Unconfigured installations accept only localhost and literal IP addresses, preventing DNS rebinding through arbitrary hostnames.
-2. Allow request bodies of at least **32 MiB**. Uploads arrive in 8 MiB chunks.
+2. Allow request bodies of at least **32 MiB**. Browser upload chunks adapt from 256 KiB to 32 MiB, starting at 1 MiB.
 3. Not buffer responses. Live updates use Server-Sent Events, and downloads stream.
 4. Send `X-Forwarded-For` and `X-Forwarded-Proto`, and be listed in `RELAY_TRUST_PROXY`. Relay takes a visitor's address only from the proxies listed there, and gives each visitor their own rate limits by it. A proxy that isn't listed counts as one visitor, and Relay says so once in its log. Never list an address that anyone else can send requests from, or a client could claim any address.
 
