@@ -1,6 +1,6 @@
 import type { Agent, ClientRequest, IncomingMessage } from "node:http";
 import { request } from "node:http";
-import type { DataChannel } from "node-datachannel";
+import type { Inbound, Mux, Outbound } from "../shared/lanes.ts";
 import {
   isLocalRoute,
   LOCAL,
@@ -8,181 +8,186 @@ import {
   pickHeaders,
   REQUEST_HEADERS,
   RESPONSE_HEADERS,
-  type LocalControl,
+  type LocalReply,
   type LocalRequest,
   type LocalResponse,
 } from "../shared/local.ts";
 import { LIMITS } from "../shared/model.ts";
-import { hold } from "./channels.ts";
-
-/** How long a new channel may take to name its request. */
-const HEAD_TIMEOUT_MS = 10_000;
 
 export type Upstream = { socketPath: string; agent: Agent; token: string };
 
 /**
- * Carries one request from a data channel to Relay and its response back (see shared/local.ts).
- * Relay's socket applies its own timeouts; closing the channel cancels the request, and so does the
- * function returned, for a connection that closes without reporting its channels closed.
+ * The requests one connection carries to Relay, and their responses back (see shared/local.ts).
+ * Relay's socket applies its own timeouts; the browser cancelling a request, or the connection
+ * closing, abandons it.
  */
-export function exchange(channel: DataChannel, upstream: Upstream, onDone: () => void): () => void {
-  let req: ClientRequest | null = null;
+export class Exchanges {
+  private readonly mux: Mux;
+  private readonly upstream: Upstream;
+  /** Cancels each request in flight, by number. */
+  private readonly running = new Map<number, () => void>();
+  private last = 0;
+
+  constructor(mux: Mux, upstream: Upstream) {
+    this.mux = mux;
+    this.upstream = upstream;
+  }
+
+  /** A control message from the browser; false when it breaks the protocol. */
+  control(message: Record<string, unknown>) {
+    const { r } = message;
+    if (typeof r !== "number") return false;
+    if (message.cancel === true) {
+      this.running.get(r)?.();
+      return true;
+    }
+    // Numbered in order, so a request is never mistaken for one before it.
+    if (!Number.isSafeInteger(r) || r <= this.last) return false;
+    this.last = r;
+    const head = parseHead(message);
+    if (!head) this.mux.send({ r, error: "That request can't travel on this connection." } satisfies LocalReply);
+    else if (this.running.size >= LOCAL.requests)
+      this.mux.send({ r, error: "Too many requests at once." } satisfies LocalReply);
+    else
+      this.running.set(
+        r,
+        exchange(this.mux, head, this.upstream, () => this.running.delete(r)),
+      );
+    return true;
+  }
+
+  /** The connection is gone: every request on it is abandoned. */
+  close() {
+    for (const cancel of [...this.running.values()]) cancel();
+  }
+}
+
+/** Carries one request to Relay and its response back; the function returned abandons it. */
+function exchange(mux: Mux, head: LocalRequest, upstream: Upstream, onDone: () => void): () => void {
+  const { r, length } = head;
   let res: IncomingMessage | null = null;
-  let length = 0;
-  let received = 0;
-  /** Request body bytes handed to Relay's socket, and how many of them were credited back. */
-  let written = 0;
+  let into: Inbound | null = null;
+  let out: Outbound | null = null;
+  /** Whether Relay has the whole request body. */
+  let taken = !length;
+  /** Response body bytes read from Relay, and credited back by the browser; those not on the lanes yet. */
+  let read = 0;
   let credited = 0;
-  /** Response bytes the browser will still take. */
-  let allowance: number = LOCAL.windowBytes;
   const queue: Buffer[] = [];
   let ended = false;
   let finished = false;
 
+  /** The browser has the whole response. */
+  const complete = () => {
+    if (finished) return;
+    finished = true;
+    out?.close();
+    onDone();
+  };
+  /** Abandons the request, and Relay's connection with it. */
   const finish = () => {
     if (finished) return;
     finished = true;
-    clearTimeout(headTimer);
-    req?.destroy();
+    into?.close();
+    out?.close();
+    req.destroy();
     res?.destroy();
     onDone();
   };
-  /** Ends the exchange with an error the browser can act on: it sends the request the usual way. */
+  /** Ends the request with an error the browser can act on: it sends the request the usual way. */
   const abandon = (error: string) => {
     if (finished) return;
-    send({ error });
+    mux.send({ r, error } satisfies LocalReply);
     finish();
-    channel.close();
   };
-  /** Sends while the channel is open; a closed channel ends the exchange through onClosed. */
-  const deliver = (message: string | Buffer) => {
-    if (!channel.isOpen()) return false;
-    try {
-      // False only means the message was queued behind others.
-      if (typeof message === "string") channel.sendMessage(message);
-      else channel.sendMessageBinary(message);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  const send = (message: LocalControl | LocalResponse) => deliver(JSON.stringify(message));
-  const headTimer = setTimeout(() => abandon("No request arrived."), HEAD_TIMEOUT_MS);
 
   const pump = () => {
-    while (queue.length && allowance >= queue[0].length) {
-      const piece = queue.shift()!;
-      allowance -= piece.length;
-      if (!deliver(piece)) return finish();
+    if (finished || !out || !res) return;
+    while (queue.length && out.room > 0) {
+      const piece = queue[0];
+      const size = Math.min(piece.length, out.room);
+      out.write(piece.subarray(0, size));
+      if (size === piece.length) queue.shift();
+      else queue[0] = piece.subarray(size);
     }
-    if (queue.length) res?.pause();
-    else if (ended) {
-      send({ end: true });
-      // The browser closes the channel once it has read the end.
-      finished = true;
-      onDone();
-    } else res?.resume();
+    if (queue.length) res.pause();
+    else if (!ended) res.resume();
   };
 
-  const start = (head: LocalRequest) => {
-    clearTimeout(headTimer);
-    length = head.length;
-    req = request(
-      {
-        socketPath: upstream.socketPath,
-        agent: upstream.agent,
-        method: head.method,
-        path: head.path,
-        headers: {
-          ...pickHeaders(head.headers, REQUEST_HEADERS),
-          ...(head.method === "PATCH" ? { "content-length": String(length) } : {}),
-          [LOCAL_TOKEN_HEADER]: upstream.token,
-        },
+  const req: ClientRequest = request(
+    {
+      socketPath: upstream.socketPath,
+      agent: upstream.agent,
+      method: head.method,
+      path: head.path,
+      headers: {
+        ...pickHeaders(head.headers, REQUEST_HEADERS),
+        ...(head.method === "PATCH" ? { "content-length": String(length) } : {}),
+        [LOCAL_TOKEN_HEADER]: upstream.token,
       },
-      (response) => {
-        res = response;
-        send({ status: response.statusCode ?? 502, headers: pickHeaders(response.headers, RESPONSE_HEADERS) });
-        response.on("data", (chunk: Buffer) => {
-          for (let at = 0; at < chunk.length; at += LOCAL.messageBytes)
-            queue.push(chunk.subarray(at, at + LOCAL.messageBytes));
-          pump();
-        });
-        response.on("end", () => {
-          ended = true;
-          // Relay answered before taking the whole body (a refused chunk): drop the connection that
-          // still expects it rather than return it to the pool.
-          if (received < length) req?.destroy();
-          pump();
-        });
-        response.on("error", () => abandon("Relay stopped answering."));
-      },
-    );
-    // Relay answered before the whole body arrived (a refused chunk): the rest is not needed.
-    req.on("error", () => {
-      if (!res) abandon("Relay is not answering.");
-    });
-    if (!length) req.end();
-  };
-
-  channel.onMessage((message) => {
-    if (finished) return;
-    if (typeof message === "string") {
-      if (!req) {
-        const head = parseHead(message);
-        return head ? start(head) : abandon("That request can't travel on this connection.");
-      }
-      const control = parseControl(message);
-      if (!control) return abandon("The connection sent something unexpected.");
-      allowance += control.credit;
-      return pump();
-    }
-    const bytes = Buffer.isBuffer(message) ? message : Buffer.from(message);
-    if (!req || res || received + bytes.length > length) {
-      // Bytes after Relay answered belong to a body it refused; any others break the protocol.
-      if (res) return;
-      return abandon("The request sent more than it announced.");
-    }
-    received += bytes.length;
-    const request = req;
-    request.write(bytes, (error) => {
-      if (error || finished) return;
-      written += bytes.length;
-      if (written - credited >= LOCAL.creditBytes || written === length) {
-        send({ credit: written - credited });
-        credited = written;
-      }
-    });
-    if (received === length) request.end();
+    },
+    (response) => {
+      res = response;
+      // Relay answered, perhaps before taking the whole body (a refused chunk): the rest isn't needed.
+      into?.close();
+      mux.send({
+        r,
+        status: response.statusCode ?? 502,
+        headers: pickHeaders(response.headers, RESPONSE_HEADERS),
+      } satisfies LocalResponse);
+      out = mux.outgoing(r, 0, LOCAL.windowBytes);
+      out.onReady = pump;
+      out.onCredit = (bytes) => {
+        credited += bytes;
+        if (ended && credited === read) complete();
+      };
+      response.on("data", (chunk: Buffer) => {
+        read += chunk.length;
+        queue.push(chunk);
+        pump();
+      });
+      response.on("end", () => {
+        ended = true;
+        // A connection that still expects the rest of a refused body isn't returned to the pool.
+        if (!taken) req.destroy();
+        mux.send({ r, end: read } satisfies LocalReply);
+        // Done once the browser has every byte: until then, frames may still wait for lanes.
+        if (credited === read) complete();
+      });
+      response.on("close", () => {
+        if (!ended) abandon("Relay stopped answering.");
+      });
+    },
+  );
+  req.on("error", () => {
+    if (!res) abandon("Relay is not answering.");
   });
-  hold(channel, finish);
-  channel.onError(finish);
+
+  if (length) {
+    into = mux.incoming(r, {
+      to: length,
+      window: LOCAL.windowBytes,
+      // Credit goes back once Relay's socket has taken the bytes, so the browser runs at Relay's pace.
+      write: (bytes) =>
+        new Promise<void>((resolve, reject) => req.write(bytes, (error) => (error ? reject(error) : resolve()))),
+      done: () => {
+        taken = true;
+        req.end();
+      },
+      failed: () => abandon("The request's body arrived out of place."),
+    });
+    mux.send({ r, ready: true } satisfies LocalReply);
+  } else req.end();
+
   return finish;
 }
 
-function parseHead(message: string): LocalRequest | null {
-  if (message.length > LOCAL.headBytes) return null;
-  let head: Partial<LocalRequest>;
-  try {
-    head = JSON.parse(message) as Partial<LocalRequest>;
-  } catch {
-    return null;
-  }
-  const { method, path, headers, length } = head;
-  if (typeof method !== "string" || typeof path !== "string" || !isLocalRoute(method, path)) return null;
+function parseHead(message: Record<string, unknown>): LocalRequest | null {
+  const { r, method, path, headers, length } = message;
+  if (typeof r !== "number" || typeof method !== "string" || typeof path !== "string") return null;
+  if (!isLocalRoute(method, path)) return null;
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) return null;
   const limit = method === "PATCH" ? LIMITS.chunkBytes : 0;
-  if (!Number.isSafeInteger(length) || length! < 0 || length! > limit) return null;
-  return { method, path, headers, length: length! };
-}
-
-function parseControl(message: string): { credit: number } | null {
-  try {
-    const control = JSON.parse(message) as { credit?: unknown };
-    const credit = control.credit;
-    return typeof credit === "number" && Number.isSafeInteger(credit) && credit > 0 && credit <= LOCAL.windowBytes
-      ? { credit }
-      : null;
-  } catch {
-    return null;
-  }
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > limit) return null;
+  return { r, method, path, headers: headers as Record<string, string>, length };
 }

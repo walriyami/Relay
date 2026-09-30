@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { createHash, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, truncate, writeFile } from "node:fs/promises";
 import { copyShareUrl, deviceContext, unique } from "./helpers.ts";
 
 // Nearby connects the two browsers straight to each other, by their local addresses. Chromium hides
@@ -62,6 +62,35 @@ test("sends files and text between your own devices", async ({ browser }) => {
     const zipped = iphone.page.waitForEvent("download");
     await received.getByRole("button", { name: "Download all" }).click();
     expect((await zipped).suggestedFilename()).toMatch(/\.zip$/);
+  } finally {
+    await ipad.context.close();
+    await iphone.context.close();
+  }
+});
+
+test("trying again takes the stopped transfer's place on both devices", async ({ browser }, testInfo) => {
+  const ipad = await nearby(browser, "Nearby iPad");
+  const iphone = await nearby(browser, "Nearby iPhone");
+  try {
+    const row = sendTo(ipad.page).getByRole("button", { name: iphone.name, exact: true });
+    await expect(row).toHaveAccessibleDescription(/Ready/, { timeout: 20_000 });
+    // Large enough to stop on the way.
+    const large = testInfo.outputPath("large.bin");
+    await writeFile(large, "");
+    await truncate(large, 400 * 1024 ** 2);
+    await ipad.page.getByTestId("nearby-file-input").setInputFiles(large);
+    await row.click();
+    const sent = transfers(ipad.page).getByRole("listitem", { name: `To ${iphone.name}` });
+    const received = transfers(iphone.page).getByRole("listitem", { name: `From ${ipad.name}` });
+    await expect(received).toBeVisible();
+    await sent.getByRole("button", { name: "Cancel" }).click();
+    await expect(received).toContainText("stopped sending");
+
+    await sent.getByRole("button", { name: "Try again" }).click();
+    await expect(sent).toContainText("Sent", { timeout: 60_000 });
+    await expect(received).toContainText("Received");
+    await expect(sent).toHaveCount(1);
+    await expect(received).toHaveCount(1);
   } finally {
     await ipad.context.close();
     await iphone.context.close();

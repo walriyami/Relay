@@ -113,6 +113,9 @@ test("on Relay's network, uploads and downloads go direct, and can be switched o
   await signIn(page);
   const on = page.getByRole("button", { name: "Direct transfers on" });
   await expect(on).toBeVisible();
+  // A connection that loses its path is given up on after a few seconds: well past that, with every
+  // lane set up, it's still there.
+  await page.waitForTimeout(8000);
 
   // Several chunks, so the upload takes tus's path, and a download larger than every window.
   const direct = unique("direct");

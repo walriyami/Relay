@@ -1,18 +1,9 @@
 import { useSyncExternalStore } from "react";
 import type { DeviceKind } from "../../../shared/model";
 import type { NearbyPeer, NearbySignal } from "../../../shared/nearby";
+import type { Inbound, Outbound } from "../../../shared/lanes";
 import { Link, type LinkEnd, type LinkEvents } from "./link";
-import {
-  NEARBY_WIRE,
-  TEXT,
-  entryLabel,
-  parse,
-  parseLabel,
-  randomId,
-  type Control,
-  type EntryControl,
-  type WireFile,
-} from "./protocol";
+import { NEARBY_WIRE, TEXT, randomId, type Control, type WireFile } from "./protocol";
 import { openSink, roomFor, type Sink } from "./sink";
 
 // This tab's side of Nearby: the connections to other endpoints, and the transfers on them. It
@@ -102,12 +93,15 @@ type Out = {
   files: File[];
   text: Blob | null;
   link: Link | null;
-  /** Once accepted: what the receiver has stored of each entry. */
+  /** Once accepted: what the receiver has stored of each entry, and the number of the first's stream. */
   have: Record<string, number>;
+  stream: number;
   accepted: boolean;
+  /** The transfer this one tries again. */
+  replaces: string | null;
   queue: string[];
   sending: number;
-  channels: Set<RTCDataChannel>;
+  streams: Set<Outbound>;
   retry?: ReturnType<typeof setTimeout>;
   tries: number;
   lostAt: number;
@@ -118,7 +112,12 @@ type In = {
   link: Link | null;
   sinks: Map<string, Sink>;
   done: Set<string>;
-  channels: Set<RTCDataChannel>;
+  /** As last accepted: where each entry starts again, and the number of the first's stream. */
+  from: Record<string, number>;
+  stream: number;
+  streams: Set<Inbound>;
+  /** Stores what arrived, one piece after another, across entries. */
+  work: Promise<void>;
   deadline?: ReturnType<typeof setTimeout>;
   finishing: boolean;
 };
@@ -132,6 +131,13 @@ const links = new Map<string, Link>();
 /** When each peer last couldn't be reached. */
 const unreachable = new Map<string, number>();
 const records = new Map<string, Record_>();
+/**
+ * Cancels and declines made here while no connection to the other side was open, by peer: it hears
+ * once one is.
+ */
+const owed = new Map<string, Control[]>();
+/** Transfers declined here, so an offer made again is declined again rather than asked about. */
+const declined = new Set<string>();
 /** Newest first. */
 let order: string[] = [];
 let watching = false;
@@ -214,6 +220,7 @@ export function stopEngine(reason: string) {
   for (const link of [...links.values()]) link.close();
   links.clear();
   unreachable.clear();
+  owed.clear();
   for (const { timer } of waiting.values()) clearTimeout(timer);
   waiting.clear();
   host = null;
@@ -223,6 +230,7 @@ export function stopEngine(reason: string) {
 /** Forgets every transfer, finished or not, and what they stored: someone else may sign in next. */
 export function clearEngine() {
   stopEngine("Nearby stopped on this device.");
+  declined.clear();
   for (const id of [...order]) dismiss(id);
 }
 
@@ -326,6 +334,8 @@ const events: LinkEvents = {
   open(link) {
     if (links.get(link.peer) !== link) return link.close(false);
     unreachable.delete(link.peer);
+    for (const message of owed.get(link.peer) ?? []) link.send(message);
+    owed.delete(link.peer);
     for (const r of records.values())
       if (
         r.kind === "out" &&
@@ -361,20 +371,30 @@ const events: LinkEvents = {
     if (message.t === "offer") return offered(link, message);
     if (!r || r.t.peer !== link.peer) return;
     if (r.kind === "out") outControl(r, link, message);
-    else inControl(r, link, message);
+    else inControl(r, message);
   },
-  channel(link, channel) {
-    const label = parseLabel(channel.label);
-    const r = label && records.get(label.transfer);
-    if (!label || !r || r.kind !== "in" || r.link !== link || r.t.state !== "running") return channel.close();
-    receiveEntry(r, channel, label.entry);
+  stream(link, stream) {
+    for (const r of records.values())
+      if (r.kind === "in" && r.link === link && r.t.state === "running") {
+        const index = stream - r.stream;
+        if (index >= 0 && index < entryCount(r.t)) return receiveEntry(r, link, index);
+      }
   },
 };
 
 // Sending.
 
-/** Sends `files` (with their paths) and `text` to `peer`. Returns the transfer's id. */
-export function send(peer: NearbyPeer, files: { file: File; path: string }[], folders: string[], text: string) {
+/**
+ * Sends `files` (with their paths) and `text` to `peer`, trying again transfer `replaces` if given.
+ * Returns the transfer's id.
+ */
+export function send(
+  peer: NearbyPeer,
+  files: { file: File; path: string }[],
+  folders: string[],
+  text: string,
+  replaces: string | null = null,
+) {
   const blob = text ? new Blob([text]) : null;
   const t: NearbyTransfer = {
     id: randomId(),
@@ -404,10 +424,12 @@ export function send(peer: NearbyPeer, files: { file: File; path: string }[], fo
     text: blob,
     link: null,
     have: {},
+    stream: 0,
     accepted: false,
+    replaces,
     queue: [],
     sending: 0,
-    channels: new Set(),
+    streams: new Set(),
     tries: 0,
     lostAt: 0,
   };
@@ -437,16 +459,22 @@ function offer(r: Out, link: Link) {
     folders: r.t.folders,
     text: r.t.textBytes,
     preview: r.t.preview,
+    ...(r.replaces ? { replaces: r.replaces } : {}),
   });
   publish();
 }
 
 function outControl(r: Out, link: Link, message: Control) {
-  if (r.link !== link || !isActive(r.t)) return;
+  if (!isActive(r.t)) return;
+  // A cancel or decline counts on whichever connection brings it: it may have waited for one.
+  if (message.t !== "cancel" && message.t !== "decline" && r.link !== link) return;
   switch (message.t) {
     case "accept": {
+      if (!Number.isSafeInteger(message.stream) || message.stream < 0 || message.stream + entryCount(r.t) > 2 ** 32)
+        return failOut(r, `${r.t.peerName} answered in a way this device doesn’t understand.`);
       r.accepted = true;
       r.have = sane(message.have);
+      r.stream = message.stream;
       r.t.state = "running";
       r.lostAt = 0;
       const entries = [...r.files.keys()].map(String);
@@ -483,6 +511,9 @@ function sane(have: unknown): Record<string, number> {
 }
 
 const sizeOf = (r: Out, entry: string) => (entry === TEXT ? (r.text?.size ?? 0) : r.files[Number(entry)].size);
+/** Entries in a transfer, empty ones included: its files, then its text. */
+const entryCount = (t: NearbyTransfer) => t.files.length + (t.textBytes ? 1 : 0);
+const indexOf = (t: NearbyTransfer, entry: string) => (entry === TEXT ? t.files.length : Number(entry));
 
 function pump(r: Out, link: Link) {
   while (r.sending < NEARBY_WIRE.parallel && r.queue.length && r.link === link && r.t.state === "running") {
@@ -495,81 +526,45 @@ function pump(r: Out, link: Link) {
   }
 }
 
-/** Sends one entry on a channel of its own; resolves once it's stored, or can't be. */
+/** Sends one entry as a stream of its own; resolves once it's stored, or can't be. */
 function sendEntry(r: Out, link: Link, entry: string) {
   const blob = entry === TEXT ? r.text! : r.files[Number(entry)];
-  const from = r.have[entry] ?? 0;
-  const channel = link.channel(entryLabel(r.t.id, entry));
-  const message = Math.min(NEARBY_WIRE.chunkBytes, link.messageBytes);
-  r.channels.add(channel);
-  channel.bufferedAmountLowThreshold = NEARBY_WIRE.creditBytes;
+  const out = link.mux!.outgoing(r.stream + indexOf(r.t, entry), r.have[entry] ?? 0, NEARBY_WIRE.windowBytes);
+  r.streams.add(out);
   return new Promise<void>((resolve) => {
-    let credit: number = NEARBY_WIRE.windowBytes;
-    let sent = from;
     let reading = false;
-    let ended = false;
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      r.channels.delete(channel);
-      channel.onopen = channel.onmessage = channel.onclose = channel.onbufferedamountlow = null;
-      channel.close();
-      resolve();
-    };
     const write = async () => {
       if (reading) return;
       reading = true;
       try {
-        while (
-          channel.readyState === "open" &&
-          sent < blob.size &&
-          credit > 0 &&
-          channel.bufferedAmount < NEARBY_WIRE.windowBytes
-        ) {
-          const size = Math.min(credit, NEARBY_WIRE.creditBytes, blob.size - sent);
-          const bytes = await blob.slice(sent, sent + size).arrayBuffer();
-          if (channel.readyState !== "open" || finished) return;
-          for (let at = 0; at < bytes.byteLength; at += message) channel.send(bytes.slice(at, at + message));
-          sent += bytes.byteLength;
-          credit -= bytes.byteLength;
-        }
-        if (sent === blob.size && !ended && channel.readyState === "open") {
-          ended = true;
-          channel.send(JSON.stringify({ end: true } satisfies EntryControl));
+        while (out.offset < blob.size && out.room > 0) {
+          const at = out.offset;
+          const bytes = await blob
+            .slice(at, at + Math.min(out.room, NEARBY_WIRE.readBytes, blob.size - at))
+            .arrayBuffer();
+          if (out.closed) return;
+          out.write(new Uint8Array(bytes));
         }
       } catch {
-        if (finished) return;
-        finish();
+        if (out.closed) return;
+        out.close();
         failOut(r, "A file couldn’t be read. It may have been moved or changed since you chose it.");
       } finally {
         reading = false;
       }
     };
-    channel.onopen = () => {
-      channel.send(JSON.stringify({ from } satisfies EntryControl));
-      void write();
+    out.onReady = () => void write();
+    out.onCredit = (bytes) => {
+      r.have[entry] = Math.min(blob.size, (r.have[entry] ?? 0) + bytes);
+      progress(r);
+      if (r.have[entry] === blob.size) out.close();
     };
-    channel.onbufferedamountlow = () => void write();
-    channel.onmessage = ({ data }) => {
-      const m = parse<EntryControl>(data);
-      if (!m) return;
-      if ("credit" in m && Number.isSafeInteger(m.credit) && m.credit > 0) {
-        credit += m.credit;
-        r.have[entry] = Math.min(blob.size, (r.have[entry] ?? 0) + m.credit);
-        progress(r);
-        void write();
-      } else if ("ok" in m) {
-        r.have[entry] = blob.size;
-        progress(r);
-        finish();
-      } else if ("error" in m) {
-        finish();
-        failOut(r, `${r.t.peerName} couldn’t store it.`);
-      }
+    // Stored, or closed under it: the connection dropped (the transfer waits for the next), or it was stopped.
+    out.onClose = () => {
+      r.streams.delete(out);
+      resolve();
     };
-    // Closed under it: the connection dropped (the transfer waits for the next), or it was stopped.
-    channel.onclose = finish;
+    void write();
   });
 }
 
@@ -594,8 +589,8 @@ function failOut(r: Out, reason: string) {
 function lost(r: Record_) {
   if (!isActive(r.t) && r.t.state !== "incoming") return;
   r.link = null;
-  for (const channel of r.channels) channel.close();
-  r.channels.clear();
+  for (const stream of [...r.streams]) stream.close();
+  r.streams.clear();
   if (r.kind === "out") {
     if (r.t.state === "connecting") return;
     r.t.state = "reconnecting";
@@ -656,6 +651,10 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     else waiting.set(link, { messages: [message], timer: setTimeout(() => takeWaiting(link), UNKNOWN_MS) });
     return;
   }
+  if (declined.has(message.id)) {
+    link.send({ t: "decline", id: message.id, reason: "declined" });
+    return;
+  }
   const known = records.get(message.id);
   if (known) {
     if (known.kind !== "in" || known.t.peer !== link.peer) return;
@@ -666,7 +665,7 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
       case "reconnecting":
       case "running":
         known.t.state = "running";
-        link.send({ t: "accept", id: known.t.id, have: haveOf(known) });
+        void acceptOn(known, link);
         break;
       case "done":
         link.send({ t: "done", id: known.t.id });
@@ -692,6 +691,9 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     link.send({ t: "cancel", id: String(message.id).slice(0, 64) });
     return;
   }
+  // The sender trying again: the attempt it replaces goes, unless it arrived in full.
+  const old = typeof message.replaces === "string" ? records.get(message.replaces) : undefined;
+  if (old?.kind === "in" && old.t.peer === link.peer && old.t.state !== "done") remove(old);
   const peer = directory.get(link.peer);
   const t: NearbyTransfer = {
     id: message.id,
@@ -714,7 +716,18 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     crcs: null,
     text: null,
   };
-  const r: In = { t, kind: "in", link, sinks: new Map(), done: new Set(), channels: new Set(), finishing: false };
+  const r: In = {
+    t,
+    kind: "in",
+    link,
+    sinks: new Map(),
+    done: new Set(),
+    from: {},
+    stream: 0,
+    streams: new Set(),
+    work: Promise.resolve(),
+    finishing: false,
+  };
   add(r);
   // What the member's own devices send starts without asking.
   if (peer?.kind === "device") {
@@ -767,12 +780,28 @@ function haveOf(r: In) {
   return have;
 }
 
+/** Numbers the streams of connections' transfers, per connection. */
+const streamsUsed = new WeakMap<Link, number>();
+
+/**
+ * Accepts the transfer on `link`, from what's stored: once whatever arrived on an earlier connection
+ * is written, so the sender starts again from exactly there.
+ */
+async function acceptOn(r: In, link: Link) {
+  await r.work;
+  if (r.link !== link || r.t.state !== "running") return;
+  r.from = haveOf(r);
+  r.stream = streamsUsed.get(link) ?? 0;
+  streamsUsed.set(link, r.stream + entryCount(r.t));
+  link.send({ t: "accept", id: r.t.id, have: r.from, stream: r.stream });
+}
+
 /** Takes the transfer: it starts, or, if this device has no room, is declined. */
 export async function accept(id: string) {
   const r = records.get(id);
   if (!r || r.kind !== "in" || r.t.state !== "incoming") return;
   if (!(await roomFor(r.t.bytes))) {
-    r.link?.send({ t: "decline", id, reason: "space" });
+    tell(r, { t: "decline", id, reason: "space" });
     end(r, "failed", "There isn’t room on this device for it.");
     notify("failed", r);
     publish();
@@ -780,7 +809,7 @@ export async function accept(id: string) {
   }
   if (r.t.state !== "incoming") return;
   r.t.state = r.link ? "running" : "reconnecting";
-  r.link?.send({ t: "accept", id, have: haveOf(r) });
+  if (r.link) void acceptOn(r, r.link);
   if (!entriesOf(r).length) void finishIn(r);
   publish(true);
 }
@@ -788,13 +817,14 @@ export async function accept(id: string) {
 export function decline(id: string) {
   const r = records.get(id);
   if (!r || r.kind !== "in" || r.t.state !== "incoming") return;
-  r.link?.send({ t: "decline", id, reason: "declined" });
+  declined.add(id);
+  tell(r, { t: "decline", id, reason: "declined" });
   remove(r);
   publish(true);
 }
 
-function inControl(r: In, link: Link, message: Control) {
-  if (r.link !== link) return;
+function inControl(r: In, message: Control) {
+  // A cancel counts on whichever connection brings it: it may have waited for one.
   if (message.t === "cancel" && (isActive(r.t) || r.t.state === "incoming")) {
     const asked = r.t.state === "incoming";
     end(r, "cancelled", `${r.t.peerName} stopped sending.`);
@@ -804,78 +834,60 @@ function inControl(r: In, link: Link, message: Control) {
   }
 }
 
-function receiveEntry(r: In, channel: RTCDataChannel, entry: string) {
-  const size = entry === TEXT ? r.t.textBytes : r.t.files[Number(entry)]?.size;
-  if (!size || r.done.has(entry) || !/^(\d+|text)$/.test(entry)) return channel.close();
-  channel.binaryType = "arraybuffer";
-  r.channels.add(channel);
-  let started = false;
-  let owed = 0;
-  let broken = false;
-  let work = Promise.resolve();
-  const reply = (m: EntryControl) => {
-    try {
-      channel.send(JSON.stringify(m));
-    } catch {
-      // The channel went; the connection's end says what happens next.
-    }
-  };
-  const refuse = (error: string) => {
-    broken = true;
-    reply({ error });
-    channel.close();
-  };
-  const sink = async () => {
-    let s = r.sinks.get(entry);
-    if (!s) {
-      s = await openSink(entry === TEXT);
-      if (r.sinks.has(entry) || !isActive(r.t)) {
-        await s.discard();
-        s = r.sinks.get(entry);
-      } else r.sinks.set(entry, s);
-    }
-    return s;
-  };
-  const handle = async (data: string | ArrayBuffer) => {
-    if (broken || !isActive(r.t)) return;
-    const s = await sink();
-    if (!s) return;
-    if (typeof data !== "string") {
-      if (!started || s.written + data.byteLength > size) return refuse("More arrived than was offered.");
-      try {
-        await s.write(data);
-      } catch {
-        refuse("This device ran out of room.");
-        r.link?.send({ t: "cancel", id: r.t.id });
-        end(r, "failed", "This device ran out of room for it.");
-        notify("failed", r);
-        publish();
-        return;
+/** Couldn't store what arrived. */
+class StoreError extends Error {}
+
+/** Receives entry `index` of the transfer, which its sender started sending on `link`. */
+function receiveEntry(r: In, link: Link, index: number) {
+  const entry = index < r.t.files.length ? String(index) : TEXT;
+  const size = entry === TEXT ? r.t.textBytes : r.t.files[index].size;
+  if (!size || r.done.has(entry)) return;
+  const store = (bytes: Uint8Array) => {
+    const stored = r.work.then(async () => {
+      if (!isActive(r.t)) return;
+      let sink = r.sinks.get(entry);
+      if (!sink) {
+        sink = await openSink(entry === TEXT);
+        // Ended while it opened: nothing keeps it.
+        if (!isActive(r.t)) return void sink.discard();
+        r.sinks.set(entry, sink);
       }
-      owed += data.byteLength;
-      if (owed >= NEARBY_WIRE.creditBytes || s.written === size) {
-        reply({ credit: owed });
-        owed = 0;
+      try {
+        await sink.write(bytes);
+      } catch {
+        throw new StoreError();
       }
       progress(r);
-      return;
-    }
-    const m = parse<EntryControl>(data);
-    if (m && "from" in m) {
-      if (m.from !== s.written) return refuse("It started in the wrong place.");
-      started = true;
-    } else if (m && "end" in m) {
-      if (s.written !== size) return refuse("Part of it didn’t arrive.");
+    });
+    r.work = stored.catch(() => {});
+    return stored;
+  };
+  const into = link.mux!.incoming(r.stream + index, {
+    from: r.from[entry] ?? 0,
+    to: size,
+    window: NEARBY_WIRE.windowBytes,
+    write: store,
+    done: () => {
+      r.streams.delete(into);
       r.done.add(entry);
-      reply({ ok: true });
-      r.channels.delete(channel);
       if (entriesOf(r).every((e) => r.done.has(e))) void finishIn(r);
-    }
-  };
-  channel.onmessage = ({ data }: MessageEvent<string | ArrayBuffer>) => {
-    work = work.then(() => handle(data));
-  };
-  channel.onclose = () => r.channels.delete(channel);
+    },
+    failed: (error) => {
+      r.streams.delete(into);
+      if (!isActive(r.t)) return;
+      r.link?.send({ t: "cancel", id: r.t.id });
+      end(
+        r,
+        "failed",
+        error instanceof StoreError
+          ? "This device ran out of room for it."
+          : `What ${r.t.peerName} sent didn’t match what it offered.`,
+      );
+      notify("failed", r);
+      publish();
+    },
+  });
+  r.streams.add(into);
 }
 
 async function finishIn(r: In) {
@@ -931,9 +943,17 @@ export function payloadOf(id: string) {
 export function cancel(id: string) {
   const r = records.get(id);
   if (!r || !isActive(r.t)) return;
-  r.link?.send({ t: "cancel", id });
+  // Not offered yet, the other side knows nothing of it; otherwise it hears now, or once it can.
+  if (r.kind === "in" || r.t.state !== "connecting") tell(r, { t: "cancel", id });
   end(r, "cancelled", "You stopped it.");
   publish(true);
+}
+
+/** Sends `message` about `r` to the other side now, or once a connection to it opens. */
+function tell(r: Record_, message: Control) {
+  if (r.link?.send(message)) return;
+  owed.set(r.t.peer, [...(owed.get(r.t.peer) ?? []), message]);
+  linkTo(r.t.peer);
 }
 
 /** Takes a finished transfer off the list, and frees what it stored. */
@@ -967,8 +987,8 @@ function end(r: Record_, state: TransferState, reason = "") {
     r.t.finished = Date.now();
     r.t.speed = 0;
   }
-  for (const channel of r.channels) channel.close();
-  r.channels.clear();
+  for (const stream of [...r.streams]) stream.close();
+  r.streams.clear();
   if (r.kind === "out") {
     clearTimeout(r.retry);
     r.queue = [];

@@ -1,7 +1,7 @@
 import type { HttpRequest, HttpResponse, HttpStack } from "tus-js-client";
 import { isLocalRoute } from "../../../shared/local";
-import { exchange, LocalFailure } from "./channel";
-import { isDirect, openChannel } from "./link";
+import { LocalFailure } from "./exchange";
+import { isDirect, openRequest } from "./link";
 
 // Upload requests, sent straight to Relay while the direct connection is ready and the route may
 // travel on it (see shared/local.ts), and the usual way otherwise. A request that fails on the direct
@@ -19,7 +19,7 @@ export { LocalFailure };
 export const routeFor = (method: string, url: string, member: boolean): Route =>
   member && isDirect() && isLocalRoute(method, pathOf(url)) ? "direct" : "relay";
 
-/** A URL on Relay's origin as a data channel request names it: path and query. */
+/** A URL on Relay's origin as a direct request names it: path and query. */
 export function pathOf(url: string) {
   const parsed = new URL(url, location.origin);
   return parsed.pathname + parsed.search;
@@ -64,10 +64,10 @@ function relay(request: Request): Sending {
 function direct(request: Request): Sending {
   const controller = new AbortController();
   const answer = (async (): Promise<Answer> => {
-    const opened = openChannel();
+    const opened = openRequest();
     if (!opened) throw new LocalFailure("The direct connection isn't ready.");
     try {
-      const res = await exchange(opened.channel, {
+      const res = await opened.send({
         method: request.method,
         path: pathOf(request.url),
         headers: Object.fromEntries(

@@ -4,31 +4,34 @@
 // its own addresses (usually hidden behind .local names), and the helper's answer names the host's.
 // Each side checks the other's, only ever at local network addresses, so the connection comes up
 // only on the server's own networks, whichever side's checks get through. The helper passes each
-// request on to Relay over a private socket, as the session that set up the connection. Every
-// request travels on a data channel of its own:
+// request on to Relay over a private socket, as the session that set up the connection.
 //
-//   browser → helper   text: LocalRequest, then exactly `length` body bytes as binary messages
-//   helper → browser   text: LocalResponse, then the body as binary messages, then {end} or {error}
+// The connection is made of lanes (see shared/lanes.ts): the first is set up through Relay, and the
+// browser offers the others on it, which the helper checks as it did the first. The browser numbers
+// its requests from 1 on each connection. A request travels as control messages, with its body and
+// its response's body as streams numbered the same as the request, one each way:
 //
-// Body bytes are flow controlled in both directions: a sender may have `LOCAL.windowBytes` bytes
-// in flight, and the receiver returns {credit} as it passes them on. Either side closes the channel
-// to abandon the request.
+//   browser → helper   LocalRequest, then (once the helper is ready for it) the body, if any
+//                      {r, cancel: true} to abandon the request
+//   helper → browser   {r, ready: true} once it takes the request's body, which it has a window for
+//                      LocalResponse, then the body, then {r, end} with the body's length
+//                      {r, error} when the request failed on the way; sent the usual way, it may work
 
 export const LOCAL = {
-  /** Largest binary message; every browser accepts 64 KiB, and larger ones are no faster. */
-  messageBytes: 64 * 1024,
-  /** Body bytes a sender may have in flight on one request before it must wait for credit. */
-  windowBytes: 4 * 1024 ** 2,
-  /** A receiver returns credit once this much has been passed on, so credit messages stay rare. */
-  creditBytes: 1024 ** 2,
-  /** Largest offer the browser may send to set up a connection. */
+  /** A browser reads a request body this much at a time. */
+  readBytes: 1024 ** 2,
+  /** Body bytes a sender may have in flight on one request before the receiver has passed them on. */
+  windowBytes: 16 * 1024 ** 2,
+  /** Largest offer the browser may send to set up a connection, or a lane of it. */
   offerBytes: 16 * 1024,
-  /** Largest request or response head. */
-  headBytes: 8 * 1024,
+  /** Largest control message: a request, a response head, or the lanes' offers. */
+  messageChars: 256 * 1024,
+  /** Requests one connection may carry at once. */
+  requests: 16,
 } as const;
 
 const ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-/** What a data channel may carry: a member's bulk requests, and the check that proves the route. */
+/** What the direct connection may carry: a member's bulk requests, and the check that proves the route. */
 const ROUTES: readonly [string, RegExp][] = [
   ["HEAD", new RegExp(`^/uploads/${ID}$`)],
   ["PATCH", new RegExp(`^/uploads/${ID}$`)],
@@ -64,6 +67,7 @@ export const RESPONSE_HEADERS = new Set([
 ]);
 
 export type LocalRequest = {
+  r: number;
   method: string;
   /** Path and query, as in a URL on Relay's origin. */
   path: string;
@@ -71,8 +75,11 @@ export type LocalRequest = {
   /** Body bytes that follow. */
   length: number;
 };
-export type LocalResponse = { status: number; headers: Record<string, string> };
-export type LocalControl = { credit: number } | { end: true } | { error: string };
+export type LocalResponse = { r: number; status: number; headers: Record<string, string> };
+/** The browser's other messages about a request. */
+export type LocalCancel = { r: number; cancel: true };
+/** The helper's other messages about a request. */
+export type LocalReply = { r: number; ready: true } | { r: number; end: number } | { r: number; error: string };
 
 /** Keeps the headers in `allowed`, lowercased, with string values. */
 export function pickHeaders(headers: Record<string, unknown>, allowed: ReadonlySet<string>) {

@@ -287,7 +287,7 @@ export function TransferCard({ t, again, relay }: { t: NearbyTransfer; again?: N
             <Button
               size="sm"
               icon={<RotateCcw size={15} aria-hidden />}
-              onClick={() => redo((p) => send(again, p.files, p.folders, p.text))}
+              onClick={() => redo((p) => send(again, p.files, p.folders, p.text, t.id))}
             >
               Try again
             </Button>

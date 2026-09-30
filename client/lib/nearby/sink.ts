@@ -13,7 +13,7 @@ export interface Sink {
   readonly written: number;
   /** CRC-32 of the bytes stored so far. */
   readonly crc: number;
-  write(bytes: ArrayBuffer): Promise<void>;
+  write(bytes: Uint8Array): Promise<void>;
   /** The whole entry, once every byte is written. */
   finish(type: string, name: string, modified: number): Promise<File>;
   /** Frees what it holds, finished or not. */
@@ -107,10 +107,9 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
       return crc;
     },
     async write(bytes) {
-      const view = new Uint8Array(bytes);
-      await stream.write(view);
-      written += view.byteLength;
-      crc = crc32(view, crc);
+      await stream.write(bytes as Uint8Array<ArrayBuffer>);
+      written += bytes.byteLength;
+      crc = crc32(bytes, crc);
     },
     async finish(type, fileName, modified) {
       closed = true;
@@ -131,7 +130,7 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
 function memorySink(): Sink {
   const JOIN = 16 * 1024 * 1024;
   let blobs: Blob[] = [];
-  let pending: ArrayBuffer[] = [];
+  let pending: Uint8Array<ArrayBuffer>[] = [];
   let pendingBytes = 0;
   let written = 0;
   let crc = 0;
@@ -149,10 +148,10 @@ function memorySink(): Sink {
       return crc;
     },
     write(bytes) {
-      pending.push(bytes);
+      pending.push(bytes as Uint8Array<ArrayBuffer>);
       pendingBytes += bytes.byteLength;
       written += bytes.byteLength;
-      crc = crc32(new Uint8Array(bytes), crc);
+      crc = crc32(bytes, crc);
       if (pendingBytes >= JOIN) join();
       return Promise.resolve();
     },

@@ -1,5 +1,5 @@
-import { exchange, LocalFailure, type ChannelResponse } from "./channel";
-import { linkState, onLink, openChannel, type DirectChannel } from "./link";
+import { LocalFailure, type ChannelResponse } from "./exchange";
+import { linkState, onLink, openRequest, type DirectRequest } from "./link";
 import { pathOf } from "./transport";
 
 // Direct downloads. The file arrives over the direct connection and is handed, piece by piece, to a
@@ -62,11 +62,11 @@ type WorkerMessage =
  */
 export async function downloadDirect(url: string): Promise<boolean> {
   if (!("serviceWorker" in navigator)) return false;
-  const direct = openChannel();
+  const direct = openRequest();
   if (!direct) return false;
   let res: ChannelResponse;
   try {
-    res = await exchange(direct.channel, { method: "GET", path: pathOf(url) });
+    res = await direct.send({ method: "GET", path: pathOf(url) });
   } catch (error) {
     if (error instanceof LocalFailure) direct.failed();
     else direct.done();
@@ -151,7 +151,7 @@ async function feed({
 }: {
   url: string;
   res: ChannelResponse;
-  direct: DirectChannel;
+  direct: DirectRequest;
   port: MessagePort;
   frame: HTMLIFrameElement;
   worker: ServiceWorker;
@@ -194,7 +194,7 @@ async function feed({
   });
 
   let reader = res.body.getReader();
-  let channel: DirectChannel | null = direct;
+  let channel: DirectRequest | null = direct;
   let resumes = 0;
   let outcome: "end" | "error" | "stop" = "end";
   try {

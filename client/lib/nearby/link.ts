@@ -1,35 +1,31 @@
-import type { NearbySignal } from "../../../shared/nearby";
-import { parse, randomId, type Control } from "./protocol";
+import { NEARBY, type NearbySignal } from "../../../shared/nearby";
+import type { Mux } from "../../../shared/lanes";
+import { describe, Lanes } from "../lanes";
+import { randomId, type Control } from "./protocol";
 
-// One WebRTC connection to another Nearby endpoint. There are no STUN or TURN servers: the two
-// browsers only try each other's local addresses, so a connection either stays on the network or
-// never forms. The whole description goes in one offer and one answer, candidates included, which
-// keeps signalling to two messages through Relay.
+// One connection to another Nearby endpoint, made of lanes (see shared/lanes.ts). There are no STUN
+// or TURN servers: the two browsers only try each other's local addresses, so a connection either
+// stays on the network or never forms. The first lane's whole description goes in one offer and one
+// answer, candidates included, which keeps signalling to two messages through Relay; the other lanes
+// are offered and answered on the first.
 
 /** Devices on one network connect in a second or two; a network that isolates them never does. */
 const CONNECT_MS = 12_000;
-/** Finding local addresses takes moments; the description goes with those found by then. */
-const GATHER_MS = 2500;
 /** A connection that lost its path gets this long to find it again before it counts as lost. */
 const RECOVER_MS = 10_000;
-/**
- * Control messages longer than this many characters (an offer of thousands of files) go in pieces:
- * every browser takes a message this long, even written out in UTF-8.
- */
-const PIECE = 16_000;
-/** The longest control message put back together from pieces. */
+/** The longest control message put back together from pieces: an offer of thousands of files. */
 const MESSAGE_CHARS = 16 * 1024 * 1024;
 
 export type LinkEnd = "closed" | "unreachable" | "lost";
 
 export type LinkEvents = {
-  /** The control channel opened: transfers can use this connection. */
+  /** The first lane opened: transfers can use this connection. */
   open(link: Link): void;
   /** It ended; `why` says whether it ever worked. Called once. */
   end(link: Link, why: LinkEnd): void;
   control(link: Link, message: Control): void;
-  /** The other side opened a channel for one entry of a transfer. */
-  channel(link: Link, channel: RTCDataChannel): void;
+  /** Bytes arrived for a stream this side hasn't opened (see Mux). */
+  stream(link: Link, stream: number): void;
 };
 
 export class Link {
@@ -38,15 +34,12 @@ export class Link {
   readonly session: string;
   /** Made by this side's offer, rather than by answering one. */
   readonly offering: boolean;
-  readonly pc: RTCPeerConnection;
-  private readonly control: RTCDataChannel;
+  private readonly pc: RTCPeerConnection;
+  private lanes: Lanes | null = null;
   private readonly events: LinkEvents;
   private readonly signal: (signal: NearbySignal) => Promise<void>;
   state: "connecting" | "open" | "ended" = "connecting";
   private timer: ReturnType<typeof setTimeout> | undefined;
-  /** Pieces of a long control message received so far. */
-  private pieces: string[] = [];
-  private pieceChars = 0;
 
   private constructor(
     peer: string,
@@ -61,28 +54,36 @@ export class Link {
     this.events = events;
     this.signal = signal;
     this.pc = new RTCPeerConnection({ iceServers: [] });
-    // Both sides make the control channel themselves, so neither waits to be told about it.
-    this.control = this.pc.createDataChannel("control", { negotiated: true, id: 0 });
-    this.control.onopen = () => {
+    // Both sides make the first lane's channel themselves, so neither waits to be told about it.
+    const channel = this.pc.createDataChannel("lane", { negotiated: true, id: 0 });
+    channel.onopen = () => {
       if (this.state !== "connecting") return;
       clearTimeout(this.timer);
       this.state = "open";
+      this.lanes = new Lanes(
+        this.pc,
+        channel,
+        {
+          control: (message) => this.events.control(this, message as Control),
+          open: (stream) => this.events.stream(this, stream),
+          state: (state) => {
+            clearTimeout(this.timer);
+            if (state === "failed") this.end("lost");
+            // Wi-Fi roaming or a phone waking can drop the path for a moment; give it time to return.
+            else if (state === "disconnected") this.timer = setTimeout(() => this.end("lost"), RECOVER_MS);
+          },
+        },
+        { maxMessage: MESSAGE_CHARS, sdpBytes: NEARBY.sdpBytes },
+      );
+      if (this.offering) void this.lanes.offer();
       this.events.open(this);
     };
-    this.control.onclose = () => this.end("lost");
-    this.control.onmessage = ({ data }) => this.received(data);
-    this.pc.ondatachannel = ({ channel }) => {
-      if (this.state === "open") this.events.channel(this, channel);
-      else channel.close();
-    };
+    channel.onclose = () => this.end("lost");
+    // Nothing but the lanes' own channels is expected.
+    this.pc.ondatachannel = ({ channel: other }) => other.close();
     this.pc.onconnectionstatechange = () => {
       const now = this.pc.connectionState;
       if (now === "failed" || now === "closed") this.end("lost");
-      else if (now === "disconnected" && this.state === "open") {
-        // Wi-Fi roaming or a phone waking can drop the path for a moment; give it time to return.
-        clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.end("lost"), RECOVER_MS);
-      } else if (now === "connected" && this.state === "open") clearTimeout(this.timer);
     };
     this.timer = setTimeout(() => this.end("unreachable"), CONNECT_MS);
   }
@@ -90,11 +91,7 @@ export class Link {
   /** Starts a connection to `peer` and sends the offer. */
   static offer(peer: string, events: LinkEvents, signal: (signal: NearbySignal) => Promise<void>) {
     const link = new Link(peer, randomId(), true, events, signal);
-    void link.start(async () => {
-      await link.pc.setLocalDescription(await link.pc.createOffer());
-      await gathered(link.pc);
-      return { kind: "offer", session: link.session, sdp: link.pc.localDescription!.sdp };
-    });
+    void link.start(async () => ({ kind: "offer", session: link.session, sdp: await describe(link.pc) }));
     return link;
   }
 
@@ -107,12 +104,7 @@ export class Link {
     signal: (signal: NearbySignal) => Promise<void>,
   ) {
     const link = new Link(peer, session, false, events, signal);
-    void link.start(async () => {
-      await link.pc.setRemoteDescription({ type: "offer", sdp });
-      await link.pc.setLocalDescription(await link.pc.createAnswer());
-      await gathered(link.pc);
-      return { kind: "answer", session: link.session, sdp: link.pc.localDescription!.sdp };
-    });
+    void link.start(async () => ({ kind: "answer", session: link.session, sdp: await describe(link.pc, sdp) }));
     return link;
   }
 
@@ -138,54 +130,12 @@ export class Link {
   }
 
   send(message: Control) {
-    if (this.state !== "open") return false;
-    const text = JSON.stringify(message);
-    try {
-      if (text.length <= PIECE) this.control.send(text);
-      else
-        for (let at = 0; at < text.length;) {
-          let end = Math.min(at + PIECE, text.length);
-          // Never between the two halves of a character outside the basic plane.
-          const last = text.charCodeAt(end - 1);
-          if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--;
-          this.control.send((end < text.length ? "+" : "=") + text.slice(at, end));
-          at = end;
-        }
-      return true;
-    } catch {
-      this.end("lost");
-      return false;
-    }
+    return this.state === "open" && !!this.lanes?.mux.send(message);
   }
 
-  /** A control message, or a piece of one: "+" pieces are followed by the last, "=". */
-  private received(data: unknown) {
-    if (this.state !== "open" || typeof data !== "string") return;
-    let text = data;
-    if (data[0] === "+" || data[0] === "=") {
-      this.pieces.push(data.slice(1));
-      this.pieceChars += data.length - 1;
-      if (this.pieceChars > MESSAGE_CHARS) return this.end("lost");
-      if (data[0] === "+") return;
-      text = this.pieces.join("");
-      this.pieces = [];
-      this.pieceChars = 0;
-    }
-    const message = parse<Control>(text);
-    if (message) this.events.control(this, message);
-  }
-
-  /** A new channel for one entry of a transfer. */
-  channel(label: string) {
-    const channel = this.pc.createDataChannel(label, { ordered: true });
-    channel.binaryType = "arraybuffer";
-    return channel;
-  }
-
-  /** The largest binary message this connection carries. */
-  get messageBytes() {
-    const max = this.pc.sctp?.maxMessageSize;
-    return max && max > 0 ? max : Infinity;
+  /** Streams to and from the other side; null until open. */
+  get mux(): Mux | null {
+    return this.state === "open" ? this.lanes!.mux : null;
   }
 
   /**
@@ -204,27 +154,11 @@ export class Link {
     const was = this.state;
     this.state = "ended";
     clearTimeout(this.timer);
-    this.control.onopen = this.control.onclose = this.control.onmessage = null;
     this.pc.ondatachannel = this.pc.onconnectionstatechange = null;
+    // Closing the lanes closes the first too; one that never opened has only the first.
+    this.lanes?.close();
     this.pc.close();
     // A connection that never opened didn't reach the other side, whatever ended it.
     this.events.end(this, was === "connecting" && why === "lost" ? "unreachable" : why);
   }
-}
-
-/** Resolves once the connection knows its local addresses, or after GATHER_MS with those it has. */
-function gathered(pc: RTCPeerConnection) {
-  return new Promise<void>((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      pc.removeEventListener("icegatheringstatechange", check);
-      resolve();
-    };
-    const check = () => {
-      if (pc.iceGatheringState === "complete") done();
-    };
-    const timer = setTimeout(done, GATHER_MS);
-    pc.addEventListener("icegatheringstatechange", check);
-    check();
-  });
 }

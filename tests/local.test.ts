@@ -5,6 +5,7 @@ import { createSocket, type Socket } from "node:dgram";
 import { request } from "node:http";
 import { join } from "node:path";
 import { api, urls } from "../shared/api.ts";
+import { LANES } from "../shared/lanes.ts";
 import { LOCAL, LOCAL_TOKEN_HEADER, SOCKETS } from "../shared/local.ts";
 import { LIMITS } from "../shared/model.ts";
 import { isLocalAddress, lanAddresses } from "../local/addresses.ts";
@@ -12,7 +13,7 @@ import { heldChannels } from "../local/channels.ts";
 import { announce, localOffer } from "../local/helper.ts";
 import { localStatus } from "../server/modules/local/index.ts";
 import { Client, member, start, type ApiError, type Instance } from "./support/harness.ts";
-import nodeDataChannel, { type DataChannel } from "node-datachannel";
+import nodeDataChannel from "node-datachannel";
 import { LocalPeer } from "../scripts/lib/local-peer.ts";
 
 // The library's threads keep the process alive until it's told to stop.
@@ -95,16 +96,12 @@ const tus = (client: Client, offset: number) => ({
   "x-relay-tab": client.tab,
 });
 
-/** Sends a head the helper must refuse and resolves never: only its error ends the promise. */
-function refuse(channel: DataChannel, head: unknown) {
-  return new Promise<never>((_, reject) => {
-    channel.onMessage((message) => {
-      if (typeof message !== "string") return reject(new Error("unexpected bytes"));
-      const control = JSON.parse(message) as { error?: string };
-      reject(new Error(control.error ?? `unexpected ${message}`));
-    });
-    channel.sendMessage(typeof head === "string" ? head : JSON.stringify(head));
-  });
+/** Sends a request the helper must refuse; rejects with its error. */
+async function refuse(peer: LocalPeer, head: Record<string, unknown>) {
+  const r = peer.number();
+  peer.control({ r, ...head });
+  const reply = await peer.reply(r);
+  throw new Error("error" in reply ? reply.error : `unexpected ${JSON.stringify(reply)}`);
 }
 
 /** A raw request on Relay's local socket, as the helper sends them. */
@@ -125,6 +122,8 @@ test("local: a signed-in browser connects, proves the route and uploads and down
     assert.equal((await client.call(api.session.get)).local, true);
     const peer = await LocalPeer.connect(client);
     try {
+      // Every lane the page offers opened.
+      assert.equal(peer.width, LANES.count);
       const check = await peer.fetch({ path: "/api/local/check" });
       assert.equal(check.status, 200);
       assert.deepEqual(JSON.parse(check.body.toString()), { ok: true });
@@ -160,7 +159,12 @@ test("local: a signed-in browser connects, proves the route and uploads and down
 
       const detail = await client.call(api.items.get, { params: { id: item } });
       const node = detail.nodes.find((n) => n.kind === "file")!;
-      const file = await peer.fetch({ path: urls.nodeContent(node.id) });
+      // Requests share the connection: these run at once, their bytes interleaved on the lanes.
+      const [file, again] = await Promise.all([
+        peer.fetch({ path: urls.nodeContent(node.id) }),
+        peer.fetch({ path: urls.nodeContent(node.id) }),
+      ]);
+      assert.ok(again.body.equals(data));
       assert.equal(file.status, 200);
       assert.equal(file.headers["content-length"], String(data.length));
       assert.match(file.headers["content-disposition"], /^attachment;/);
@@ -177,6 +181,44 @@ test("local: a signed-in browser connects, proves the route and uploads and down
       const zip = await peer.fetch({ path: urls.itemZip(item) });
       assert.equal(zip.status, 200);
       assert.equal(zip.headers["content-type"], "application/zip");
+    } finally {
+      peer.close();
+    }
+  });
+});
+
+test("local: lanes that close mid-transfer take nothing with them", async () => {
+  await withLocal(async ({ client }) => {
+    const peer = await LocalPeer.connect(client);
+    try {
+      const data = randomBytes(LOCAL.windowBytes + 54321);
+      const { transfer, item, id } = await upload(client, data.length);
+      const sent = peer.fetch({ method: "PATCH", path: urls.upload(id), headers: tus(client, 0), body: data });
+      setTimeout(() => peer.dropLane(3), 5);
+      const res = await sent;
+      assert.equal(res.status, 204);
+      assert.equal(res.headers["upload-offset"], String(data.length));
+      await client.call(api.transfers.complete, { params: { id: transfer }, body: { destination: { kind: "save" } } });
+
+      const detail = await client.call(api.items.get, { params: { id: item } });
+      const node = detail.nodes.find((n) => n.kind === "file")!;
+      // Closed while the helper has bytes on it, held back until the browser credits them.
+      let dropped = false;
+      const file = await peer.fetch({
+        path: urls.nodeContent(node.id),
+        creditDelayMs: 5,
+        onCredit: () => {
+          if (dropped) return;
+          dropped = true;
+          peer.dropLane(7);
+        },
+      });
+      assert.ok(dropped);
+      assert.equal(file.status, 200);
+      assert.ok(file.body.equals(data));
+      await until(() => peer.width === LANES.count - 2);
+      // The connection carries on without them.
+      assert.equal((await peer.fetch({ path: "/api/local/check" })).status, 200);
     } finally {
       peer.close();
     }
@@ -201,18 +243,17 @@ test("local: the helper holds back a response until the browser returns credit",
       await client.call(api.transfers.complete, { params: { id: transfer }, body: { destination: { kind: "save" } } });
       const node = (await client.call(api.items.get, { params: { id: item } })).nodes.find((n) => n.kind === "file")!;
       // Every credit is returned late; by then, the helper must not have sent past what it was allowed.
-      const seen: { received: number; allowed: number }[] = [];
+      const seen: { arrived: number; allowed: number }[] = [];
       const file = await peer.fetch({
         path: urls.nodeContent(node.id),
         creditDelayMs: 150,
-        onCredit: (received, allowed) => seen.push({ received, allowed }),
+        onCredit: (arrived, allowed) => seen.push({ arrived, allowed }),
       });
       assert.ok(file.body.equals(data));
       assert.ok(seen.length > 0);
-      for (const { received, allowed } of seen)
-        assert.ok(received <= allowed, `${received - allowed} bytes past credit`);
+      for (const { arrived, allowed } of seen) assert.ok(arrived <= allowed, `${arrived - allowed} bytes past credit`);
       // And it did use the window it had, rather than trickle.
-      assert.ok(seen.some(({ received, allowed }) => allowed - received < LOCAL.messageBytes));
+      assert.ok(seen.some(({ arrived, allowed }) => allowed - arrived < LANES.frameBytes));
     } finally {
       peer.close();
     }
@@ -237,23 +278,25 @@ test("local: requests keep their protections and end with the session", async ()
       await assert.rejects(peer.fetch({ path: "/api/session" }), refused);
       await assert.rejects(peer.fetch({ method: "POST", path: urls.upload(id) }), refused);
       await assert.rejects(
-        refuse(await peer.channel(), {
-          method: "PATCH",
-          path: urls.upload(id),
-          headers: {},
-          length: LIMITS.chunkBytes + 1,
-        }),
+        refuse(peer, { method: "PATCH", path: urls.upload(id), headers: {}, length: LIMITS.chunkBytes + 1 }),
         refused,
       );
       await assert.rejects(
-        refuse(await peer.channel(), { method: "GET", path: urls.nodeContent(id), headers: {}, length: 1 }),
+        refuse(peer, { method: "GET", path: urls.nodeContent(id), headers: {}, length: 1 }),
         refused,
       );
-      await assert.rejects(refuse(await peer.channel(), "not json"), refused);
+      await assert.rejects(
+        refuse(peer, { method: "GET", path: urls.nodeContent(id), headers: [], length: 0 }),
+        refused,
+      );
 
       await client.call(api.session.signOut);
       res = await peer.fetch({ path: "/api/local/check" });
       assert.equal(res.status, 401);
+
+      // A request numbered out of order breaks the protocol: the helper drops the connection.
+      peer.control({ r: 1, method: "GET", path: "/api/local/check", headers: {}, length: 0 });
+      await peer.closed;
     } finally {
       peer.close();
     }
@@ -347,20 +390,20 @@ test("local: connecting needs the feature and a data offer", async () => {
   });
 });
 
-test("local: closing a channel abandons its request, and the upload resumes from what arrived", async () => {
+test("local: cancelling a request abandons it, and the upload resumes from what arrived", async () => {
   await withLocal(async ({ client }) => {
     const data = randomBytes(6 * 1024 ** 2);
     const { id } = await upload(client, data.length);
     const peer = await LocalPeer.connect(client);
     try {
-      const channel = await peer.channel();
-      channel.sendMessage(
-        JSON.stringify({ method: "PATCH", path: urls.upload(id), headers: tus(client, 0), length: data.length }),
-      );
-      for (let at = 0; at < 2 * 1024 ** 2; at += LOCAL.messageBytes)
-        channel.sendMessageBinary(data.subarray(at, at + LOCAL.messageBytes));
+      const r = peer.number();
+      peer.control({ r, method: "PATCH", path: urls.upload(id), headers: tus(client, 0), length: data.length });
+      assert.deepEqual(await peer.reply(r), { r, ready: true });
+      const out = peer.mux.outgoing(r, 0, LOCAL.windowBytes);
+      out.write(data.subarray(0, 2 * 1024 ** 2));
       await new Promise((resolve) => setTimeout(resolve, 300));
-      channel.close();
+      out.close();
+      peer.control({ r, cancel: true });
       await new Promise((resolve) => setTimeout(resolve, 300));
       const head = await peer.fetch({
         method: "HEAD",

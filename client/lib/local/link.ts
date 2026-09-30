@@ -1,13 +1,16 @@
 import { useSyncExternalStore } from "react";
 import { api, call } from "../../api";
 import { getLocalPrefs, setLocalPrefs, subscribeLocalPrefs } from "../local-prefs";
-import { exchange, LocalFailure, opened } from "./channel";
+import { LOCAL } from "../../../shared/local";
+import { describe, Lanes } from "../lanes";
+import { Exchanges, LocalFailure, type ChannelRequest, type ChannelResponse } from "./exchange";
 
 // The direct connection: this tab's WebRTC connection to Relay's direct-transfer helper on Relay's
 // own network, set up through Relay (see shared/local.ts). It is tried whenever Relay offers it and is
 // ready only once a request has made the whole trip, so a browser elsewhere never routes anything
-// to it. Uploads and downloads use it while it is ready and switched on, and fall back the usual
-// way at the first sign of trouble.
+// to it. Once it is, more lanes join it (see shared/lanes.ts), since one carries only so much. Uploads
+// and downloads use it while it is ready and switched on, and fall back the usual way at the first
+// sign of trouble.
 //
 // - `off`: Relay doesn't offer direct transfers, or no one is signed in.
 // - `connecting`: trying now.
@@ -17,8 +20,6 @@ export type LinkState = "off" | "connecting" | "ready" | "unavailable";
 
 /** A browser on Relay's network connects in well under a second; anywhere else, it never does. */
 const CONNECT_TIMEOUT_MS = 8000;
-/** Finding this browser's addresses takes moments; the offer goes with those found by then. */
-const GATHER_MS = 2000;
 /** Waits after tries that failed, or connections that dropped, in a row. */
 const BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 300_000];
 /** A hidden tab lets its connection go after this long, so idle tabs don't hold the helper's. */
@@ -26,7 +27,10 @@ const HIDDEN_MS = 60_000;
 
 let state: LinkState = "off";
 let wanted = false;
-let pc: RTCPeerConnection | null = null;
+/** The connection, once it opened. */
+let link: { lanes: Lanes; exchanges: Exchanges } | null = null;
+/** The first lane's connection while it is being set up. */
+let pending: RTCPeerConnection | null = null;
 /** Each try's number; a newer one (or stopping) makes an older one's results irrelevant. */
 let run = 0;
 /** Tries that failed in a row. */
@@ -83,11 +87,12 @@ export function stopLink() {
 }
 
 function teardown() {
-  const old = pc;
-  pc = null;
-  if (!old) return;
-  old.onconnectionstatechange = null;
-  old.close();
+  pending?.close();
+  pending = null;
+  const old = link;
+  link = null;
+  old?.lanes.close();
+  old?.exchanges.close();
 }
 
 /** Not connected; the next try runs `ms` from now, once the tab is visible. */
@@ -109,29 +114,42 @@ async function connect() {
   if (!wanted || state === "connecting" || state === "ready") return;
   const current = ++run;
   set("connecting");
-  const next = new RTCPeerConnection({ iceServers: [] });
-  pc = next;
+  const pc = new RTCPeerConnection({ iceServers: [] });
+  pending = pc;
   try {
-    const check = next.createDataChannel("relay");
-    await next.setLocalDescription(await next.createOffer());
+    const channel = pc.createDataChannel("lane", { negotiated: true, id: 0 });
     // The offer names this browser's addresses, so the helper can reach it where this browser
     // can't reach the helper first: the helper's own address may be unknown to it.
-    await gathered(next);
+    const offer = await describe(pc);
     if (current !== run) return;
-    const { answer } = await call(api.local.connect, { body: { offer: next.localDescription!.sdp } });
+    const { answer } = await call(api.local.connect, { body: { offer } });
     if (current !== run) return;
-    await next.setRemoteDescription({ type: "answer", sdp: answer });
-    await opened(check, CONNECT_TIMEOUT_MS);
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    await opened(pc, channel);
+    if (current !== run) return;
+    pending = null;
+    let exchanges: Exchanges | null = null;
+    const lanes = new Lanes(
+      pc,
+      channel,
+      {
+        control: (message) => exchanges?.control(message),
+        // Losing it for a moment is losing it: requests fall back, and the next try follows.
+        state: (now) => {
+          if (now === "failed") exchanges?.close();
+          if (now !== "connected" && link?.lanes === lanes) lost();
+        },
+      },
+      { maxMessage: LOCAL.messageChars, sdpBytes: LOCAL.offerBytes },
+    );
+    exchanges = new Exchanges(lanes.mux);
+    link = { lanes, exchanges };
     // The connection is up; one request making the whole trip proves it reaches this Relay as this member.
-    const res = await exchange(check, { method: "GET", path: api.local.check.path });
+    const res = await exchanges.send({ method: "GET", path: api.local.check.path });
     await res.body.cancel();
     if (res.status !== 200) throw new LocalFailure(`The direct connection answered ${res.status}.`);
     if (current !== run) return;
-    next.onconnectionstatechange = () => {
-      const now = next.connectionState;
-      // Losing it for a moment is losing it: requests fall back, and the next try follows.
-      if (pc === next && (now === "disconnected" || now === "failed" || now === "closed")) lost();
-    };
+    void lanes.offer();
     failures = 0;
     set("ready");
     if (document.hidden) scheduleSleep();
@@ -141,20 +159,22 @@ async function connect() {
   }
 }
 
-/** Resolves once the connection knows its addresses, or after GATHER_MS with those it knows. */
-function gathered(connection: RTCPeerConnection) {
-  return new Promise<void>((resolve) => {
-    const done = () => {
+/** Resolves once `channel` opens; rejects if it doesn't in time, or `pc` fails first. */
+function opened(pc: RTCPeerConnection, channel: RTCDataChannel) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new LocalFailure("The direct connection didn't open in time.")),
+      CONNECT_TIMEOUT_MS,
+    );
+    channel.onopen = () => {
       clearTimeout(timer);
-      connection.removeEventListener("icegatheringstatechange", check);
       resolve();
     };
-    const check = () => {
-      if (connection.iceGatheringState === "complete") done();
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState !== "failed" && pc.connectionState !== "closed") return;
+      clearTimeout(timer);
+      reject(new LocalFailure("The direct connection closed."));
     };
-    const timer = setTimeout(done, GATHER_MS);
-    connection.addEventListener("icegatheringstatechange", check);
-    check();
   });
 }
 
@@ -163,34 +183,33 @@ function lost() {
   unavailable(drops++ ? backoff(drops - 2) : 0);
 }
 
-export type DirectChannel = {
-  channel: RTCDataChannel;
+export type DirectRequest = {
+  send: (request: ChannelRequest) => Promise<ChannelResponse>;
   /** The request finished; the connection works. */
   done: () => void;
   /** The request failed on the connection, which is then dropped. */
   failed: () => void;
 };
-/** A new channel on the connection for one request, or null when requests can't go direct. */
-export function openChannel(): DirectChannel | null {
-  if (!isDirect() || !pc) return null;
-  const owner = pc;
-  const channel = owner.createDataChannel("request");
+/** A request on the connection, or null when requests can't go direct. */
+export function openRequest(): DirectRequest | null {
+  if (!isDirect() || !link) return null;
+  const owner = link;
   busy++;
   let finished = false;
   const finish = () => {
     if (finished) return false;
     finished = true;
     busy--;
-    if (document.hidden && pc === owner) scheduleSleep();
+    if (document.hidden && link === owner) scheduleSleep();
     return true;
   };
   return {
-    channel,
+    send: (request) => owner.exchanges.send(request),
     done: () => {
-      if (finish() && pc === owner) drops = 0;
+      if (finish() && link === owner) drops = 0;
     },
     failed: () => {
-      if (finish() && pc === owner) lost();
+      if (finish() && link === owner) lost();
     },
   };
 }
