@@ -146,7 +146,7 @@ async function capture(
     const page = await desktop.newPage();
     await signIn(page, "MacBook Pro");
     await page.goto("/");
-    await sendTo(page).getByRole("button", { name: "Maya's iPhone" }).waitFor();
+    await sendTo(page).getByRole("button", { name: "Maya's iPhone", exact: true }).waitFor();
     await settle(page);
     await page.screenshot({ path: join(out, `send-${scheme}.png`) });
 

@@ -1,13 +1,13 @@
 # Architecture
 
-Relay is a single Node.js process that serves a React web app and a JSON API, and keeps everything on one local disk.
+Relay runs one Node.js API process that serves a React web app and keeps its data on one local disk. When direct transfers are enabled, it also runs a helper child process.
 
 ```mermaid
 flowchart LR
   subgraph Browser
     UI[React app]
   end
-  subgraph Relay["Relay (one Node.js process)"]
+  subgraph Relay["Relay API process"]
     API[Fastify API]
     TUS[tus upload receiver]
     DL[Downloads and ZIP64 streaming]
@@ -30,7 +30,7 @@ flowchart LR
 
 - **Saving comes first.** Every completed upload is saved to the owner's library before anything else happens. A link or a delivery to a device only points at saved content, so it never moves or deletes the original.
 - **Honest states.** A file counts as saved only after it's flushed to disk and recorded in the database. An interrupted upload never looks saved, and Relay never claims a download reached someone's disk.
-- **One process, one disk.** Relay makes no attempt at clustering. SQLite holds an exclusive lock on the data directory, so a second process fails immediately instead of corrupting data.
+- **One API writer, one disk.** Relay makes no attempt at clustering. The API holds an exclusive lock on the data directory, so a second API process fails immediately instead of corrupting data. The direct-transfer helper does not open the database.
 - **Bounded transfer buffers.** Uploads, downloads and archives stream instead of buffering whole files. Preview decoding has separate pixel, concurrency and lifecycle limits; source complexity can still affect decoder memory.
 
 ## Transfers
