@@ -119,9 +119,15 @@ test("the next link's settings open from its row, which says what the link will 
   await button.click();
   const settings = page.getByRole("dialog", { name: "Link settings" });
   // "Add a note" and Done share the last line.
-  const add = await settings.getByRole("button", { name: "Add a note" }).boundingBox();
-  const done = await settings.getByRole("button", { name: "Done" }).boundingBox();
-  expect(Math.abs(add!.y + add!.height / 2 - (done!.y + done!.height / 2))).toBeLessThan(1);
+  await expect
+    .poll(() =>
+      settings.getByRole("button", { name: /^(Add a note|Done)$/ }).evaluateAll((buttons) => {
+        if (buttons.length !== 2) return Infinity;
+        const [add, done] = buttons.map((button) => button.getBoundingClientRect());
+        return Math.abs(add.y + add.height / 2 - (done.y + done.height / 2));
+      }),
+    )
+    .toBeLessThan(1);
   await settings.getByRole("switch", { name: /^Password/ }).click();
   await page.keyboard.press("Escape");
   await expect(settings).toHaveCount(0);
