@@ -260,7 +260,10 @@ export function PreviewViewer({
   const count = entries.length;
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      const tag = (event.target as HTMLElement).tagName;
+      const target = event.target as HTMLElement;
+      const tag = target.tagName;
+      // The focused full-size frame owns arrows for native scrolling.
+      if (target.closest(".preview-image.is-zoomed .preview-image-frame")) return;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "VIDEO" || tag === "AUDIO") return;
       if (event.key === "ArrowRight" && index < count - 1) setIndex(index + 1);
       if (event.key === "ArrowLeft" && index > 0) setIndex(index - 1);
