@@ -17,7 +17,17 @@ declare global {
   }
 }
 
-test.use({ launchOptions: { args: ["--disable-features=WebRtcHideLocalIpsWithMdns"] } });
+test.use({
+  launchOptions: async ({ browserName, launchOptions }, use) => {
+    await use({
+      ...launchOptions,
+      args:
+        browserName === "chromium"
+          ? [...(launchOptions.args ?? []), "--disable-features=WebRtcHideLocalIpsWithMdns"]
+          : launchOptions.args,
+    });
+  },
+});
 
 async function fixture(page: Page) {
   // Load the actual sink implementation, with the project's compiler, under the same origin.
