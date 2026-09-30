@@ -435,6 +435,133 @@ test("a single photo fills the item window and zooms to full size", async ({ pag
   await expect(stage.getByRole("button", { name: "Show at full size" })).toBeVisible();
 });
 
+test("a zoomed image can be panned to every edge from the keyboard without leaving its dialog", async ({ page }) => {
+  const name = unique("keyboard-photo");
+  await fileInput(page).setInputFiles([{ name: `${name}.png`, mimeType: "image/png", buffer: await png(2400, 1600) }]);
+  await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+  await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
+  const opener = page
+    .getByRole("list", { name: "Recent" })
+    .getByRole("button", { name: new RegExp(name) })
+    .first();
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: `${name}.png` });
+  const zoom = dialog.getByRole("button", { name: "Show at full size" });
+  await zoom.focus();
+  await page.keyboard.press("Enter");
+  const frame = dialog.getByRole("region", { name: `Full-size image: ${name}.png` });
+  await expect(frame).toBeVisible();
+  await page.keyboard.press("Shift+Tab");
+  await expect(frame).toBeFocused();
+  await expect.poll(() => frame.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
+  const position = () =>
+    frame.evaluate((el) => ({
+      left: el.scrollLeft,
+      top: el.scrollTop,
+      right: el.scrollWidth - el.clientWidth - el.scrollLeft,
+      bottom: el.scrollHeight - el.clientHeight - el.scrollTop,
+    }));
+  for (let i = 0; i < 100; i++) await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await position()).right).toBeLessThan(1);
+  for (let i = 0; i < 100; i++) await page.keyboard.press("ArrowLeft");
+  await expect.poll(async () => (await position()).left).toBeLessThan(1);
+  await page.keyboard.press("End");
+  await expect.poll(async () => (await position()).bottom).toBeLessThan(1);
+  await page.keyboard.press("Home");
+  await expect.poll(async () => (await position()).top).toBeLessThan(1);
+  await expect(frame).toBeFocused();
+  const focusStyle = await frame.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { visible: el.matches(":focus-visible"), outline: style.outlineStyle, width: style.outlineWidth };
+  });
+  expect(focusStyle.visible).toBe(true);
+  expect(focusStyle.outline).not.toBe("none");
+  expect(parseFloat(focusStyle.width)).toBeGreaterThan(0);
+  for (const key of ["Tab", "Shift+Tab"]) {
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press(key);
+      expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    }
+  }
+  const zoomControl = await dialog.getByRole("button", { name: "Fit to window" }).elementHandle();
+  await dialog.getByRole("button", { name: "Fit to window" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog.locator(".preview-image-frame")).toHaveAttribute("tabindex", "-1");
+  await expect(frame).toHaveCount(0);
+  await expect(zoom).toBeFocused();
+  expect(await zoomControl.evaluate((el) => el.isConnected && el === document.activeElement)).toBe(true);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Shift+Tab");
+  await expect(frame).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});
+
+test("zoom-frame arrows pan the selected image while gallery controls keep navigating", async ({ page }) => {
+  const name = unique("keyboard-gallery");
+  const names = ["a", "b", "c"].map((suffix) => `${name}-${suffix}.png`);
+  await fileInput(page).setInputFiles(
+    await Promise.all(names.map(async (name) => ({ name, mimeType: "image/png", buffer: await png(2400, 1600) }))),
+  );
+  await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+  await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
+  const itemOpener = page
+    .getByRole("list", { name: "Recent" })
+    .getByRole("button", { name: new RegExp(name) })
+    .first();
+  await itemOpener.click();
+  const item = page.getByRole("dialog");
+  const imageOpener = item.locator(".tile-open", { hasText: names[1] });
+  await imageOpener.focus();
+  await page.keyboard.press("Enter");
+  const viewer = page.locator(".preview-modal");
+  await expect(viewer).toHaveAccessibleName(names[1]);
+  const zoom = viewer.getByRole("button", { name: "Show at full size" });
+  await zoom.focus();
+  await page.keyboard.press("Enter");
+  const frame = viewer.getByRole("region", { name: `Full-size image: ${names[1]}` });
+  await page.keyboard.press("Shift+Tab");
+  await expect(frame).toBeFocused();
+  await expect.poll(() => frame.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
+  const position = () =>
+    frame.evaluate((el) => ({ left: el.scrollLeft, right: el.scrollWidth - el.clientWidth - el.scrollLeft }));
+  for (let i = 0; i < 100; i++) await page.keyboard.press("ArrowRight");
+  await expect(viewer).toHaveAccessibleName(names[1]);
+  await expect.poll(async () => (await position()).right).toBeLessThan(1);
+  for (let i = 0; i < 100; i++) await page.keyboard.press("ArrowLeft");
+  await expect(viewer).toHaveAccessibleName(names[1]);
+  await expect.poll(async () => (await position()).left).toBeLessThan(1);
+  await expect(frame).toBeFocused();
+
+  // Fit keeps its control focused; arrows outside the scroll frame still navigate siblings.
+  const fit = viewer.getByRole("button", { name: "Fit to window" });
+  const control = await fit.elementHandle();
+  await fit.focus();
+  await page.keyboard.press("Enter");
+  await expect(frame).toHaveCount(0);
+  await expect(zoom).toBeFocused();
+  expect(await control.evaluate((el) => el.isConnected && el === document.activeElement)).toBe(true);
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer).toHaveAccessibleName(names[2]);
+  await viewer.getByRole("button", { name: "Previous file", exact: true }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(viewer).toHaveAccessibleName(names[1]);
+
+  await zoom.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Shift+Tab");
+  await expect(frame).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(imageOpener).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(itemOpener).toBeFocused();
+});
+
 test("request creation retries an id conflict once with the complete form and a fresh id", async ({ page }) => {
   const name = unique("request-retry");
   const bodies: Array<Record<string, unknown>> = [];

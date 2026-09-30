@@ -125,6 +125,9 @@ function ImagePreview({ entry, source }: { entry: NodeRef; source: ContentSource
       };
     } else anchor.current = { x: 0.5, y: 0.5, px: 0.5, py: 0.5 };
     if (!zoomed && native && src !== original) {
+      // The thumbnail’s fitted measurement does not describe the original.
+      // Keep the control mounted until the original is measured in fit mode.
+      setFits(false);
       setLoaded(false);
       setSrc(original);
     }
@@ -137,6 +140,9 @@ function ImagePreview({ entry, source }: { entry: NodeRef; source: ContentSource
       <div
         ref={frame}
         className="preview-image-frame"
+        role={zoomed ? "region" : undefined}
+        aria-label={zoomed ? `Full-size image: ${entry.name}` : undefined}
+        tabIndex={zoomed ? 0 : -1}
         onPointerDown={(event) => {
           // Touch and pens scroll the frame natively.
           if (!zoomed || event.button !== 0 || event.pointerType !== "mouse") return;
@@ -254,7 +260,10 @@ export function PreviewViewer({
   const count = entries.length;
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      const tag = (event.target as HTMLElement).tagName;
+      const target = event.target as HTMLElement;
+      const tag = target.tagName;
+      // The focused full-size frame owns arrows for native scrolling.
+      if (target.closest(".preview-image.is-zoomed .preview-image-frame")) return;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "VIDEO" || tag === "AUDIO") return;
       if (event.key === "ArrowRight" && index < count - 1) setIndex(index + 1);
       if (event.key === "ArrowLeft" && index > 0) setIndex(index - 1);
