@@ -7,7 +7,7 @@ import type { Submission, UploadRequest } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { sha256 } from "../../lib/secrets.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
+import { getPickupCode, issueUrlPickupCode } from "../../lib/pickup-codes.ts";
 import { bytesLabel } from "../transfers/create.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { registerGuests, remaining, used } from "./guests.ts";
@@ -84,7 +84,7 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
         if (ctx.db.get("SELECT 1 FROM pickup_codes WHERE kind = 'request' AND target_id = ?", body.id))
           fail(409, "That request id has already been used.");
         const now = Date.now();
-        const pickup = issuePickupCode(ctx.db, ctx.secrets, "request", body.id);
+        const pickup = issueUrlPickupCode(ctx.db, ctx.secrets, "request", body.id);
         ctx.db.run(
           `INSERT INTO requests(id, owner, token_hash, name, description, created, expires, max_bytes, code_hash, creation_fingerprint)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -129,7 +129,7 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
       ctx.db.run("UPDATE guest_grants SET expires = ? WHERE request_id = ?", expires, request.id);
       // An open request can recover a missing assignment without changing its public URL.
       if (!getPickupCode(ctx.db, ctx.secrets, "request", request.id)) {
-        const issued = issuePickupCode(ctx.db, ctx.secrets, "request", request.id);
+        const issued = issueUrlPickupCode(ctx.db, ctx.secrets, "request", request.id);
         ctx.db.run("UPDATE requests SET code_hash = ? WHERE id = ?", issued.codeHash, request.id);
       }
       return ownedRequest(ctx, member.userId, request.id);

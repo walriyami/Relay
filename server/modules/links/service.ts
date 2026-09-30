@@ -8,7 +8,7 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
 import { FailureLog } from "../auth/limits.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
+import { getPickupCode, issueUrlPickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
 
 /** A browser keeps its visitor cookie this long; it only tells one person from another. */
@@ -292,7 +292,7 @@ export function createLinks(ctx: Context): Links {
           !ctx.db.get("SELECT 1 FROM nodes WHERE item = ? AND kind IN ('file', 'text', 'folder') LIMIT 1", input.item)
         )
           fail(409, "There is nothing to share yet.");
-        const pickup = issuePickupCode(ctx.db, ctx.secrets, "share", input.id);
+        const pickup = issueUrlPickupCode(ctx.db, ctx.secrets, "share", input.id);
         ctx.db.run(
           `INSERT INTO links(id, owner, item, token_hash, code_hash, created, expires, password_hash, visitor_limit, note)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
