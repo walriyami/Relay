@@ -350,12 +350,14 @@ export function purge(ctx: Context, itemId: string) {
     ctx.transfers.cancelForItem(itemId);
     ctx.db.run("DELETE FROM items WHERE id = ?", itemId);
   });
-  try {
-    ctx.blobs.collect(blobs);
-  } catch (error) {
-    // Unreferenced blob rows are durable cleanup work; maintenance retries after filesystem recovery.
-    ctx.log.error({ err: error, item: itemId }, "Physical deletion pending; blob cleanup will retry");
-  }
+  ctx.db.afterCommit(() => {
+    try {
+      ctx.blobs.collect(blobs);
+    } catch (error) {
+      // Unreferenced blob rows are durable cleanup work; maintenance retries after filesystem recovery.
+      ctx.log.error({ err: error, item: itemId }, "Physical deletion pending; blob cleanup will retry");
+    }
+  });
   ctx.events.publish(owner, "items", "links", "deliveries", "requests");
   ctx.events.broadcast("account");
 }
