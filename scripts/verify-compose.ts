@@ -11,6 +11,7 @@ import { get, type IncomingHttpHeaders } from "node:http";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import nodeDataChannel from "node-datachannel";
 import { api } from "../shared/api.ts";
+import { cleanUp } from "./lib/verification.ts";
 import { LocalPeer } from "./lib/local-peer.ts";
 import { REPO, Session, assert, freePort, holdEvents, sleep, waitForHealth, setUpAdmin } from "./lib/relay.ts";
 
@@ -296,16 +297,16 @@ try {
     }
   throw error;
 } finally {
-  try {
-    for (const compose of projects) compose("down", "--volumes", "--remove-orphans", "--timeout", "30");
-    for (const name of containers) docker("rm", "-f", name);
-    if (network) docker("network", "rm", tunnel);
-  } catch (cleanupError) {
-    console.error("Compose cleanup failed:", cleanupError);
-    process.exitCode = 1;
-  } finally {
-    await rm(temp, { recursive: true, force: true });
+  const failures = await cleanUp([
+    ...projects.map((compose, index) => ({
+      name: `Compose project ${index + 1}`,
+      run: () => compose("down", "--volumes", "--remove-orphans", "--timeout", "30"),
+    })),
+    ...containers.map((name) => ({ name: `container ${name}`, run: () => docker("rm", "-f", name) })),
+    ...(network ? [{ name: `network ${tunnel}`, run: () => docker("network", "rm", tunnel) }] : []),
+    { name: "temporary directory", run: () => rm(temp, { recursive: true, force: true }) },
     // The peer's library threads keep the process alive until it's told to stop.
-    nodeDataChannel.cleanup();
-  }
+    { name: "native peer library", run: () => nodeDataChannel.cleanup() },
+  ]);
+  if (failures) process.exitCode = 1;
 }

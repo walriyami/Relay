@@ -6,12 +6,12 @@
 // Usage: npm run verify:browser-scale -- [--files 10000] [--use-dist] [--headed]
 //   --use-dist serves the existing ./dist instead of building the client into the temp directory.
 // Quick run: npm run verify:browser-scale -- --files 300
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
+import { buildClient, cleanUp } from "./lib/verification.ts";
 import { chromium, expect } from "@playwright/test";
 import { api, urls } from "../shared/api.ts";
 import {
@@ -63,12 +63,7 @@ try {
   const app = flags["use-dist"] ? REPO : join(work, "app");
   if (!flags["use-dist"])
     await step("build the client", () => {
-      const built = spawnSync(
-        join(REPO, "node_modules", ".bin", "vite"),
-        ["build", "--outDir", join(app, "dist"), "--emptyOutDir", "--logLevel", "error"],
-        { cwd: REPO, env: { ...process.env, NODE_ENV: "production" }, stdio: ["ignore", "ignore", "inherit"] },
-      );
-      assert(built.status === 0, "vite build failed.");
+      buildClient(REPO, join(app, "dist"));
     });
   server = await startServer({ root: join(work, "data"), port: await freePort(), cwd: app, log });
 
@@ -162,7 +157,12 @@ try {
     // No log was written.
   }
 } finally {
-  await browser?.close();
-  await server?.stop("SIGTERM");
-  await rm(work, { recursive: true, force: true });
+  if (
+    await cleanUp([
+      { name: "browser-scale browser", run: () => browser?.close() },
+      { name: "browser-scale server", run: () => server?.stop("SIGTERM") },
+      { name: "browser-scale directory", run: () => rm(work, { recursive: true, force: true }) },
+    ])
+  )
+    process.exitCode = 1;
 }
