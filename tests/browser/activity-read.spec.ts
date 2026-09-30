@@ -5,6 +5,7 @@ import { BASE, signedIn, textFile, unique } from "./helpers";
 const events = (count: number, at = Date.now() - 1000): Extract<ActivityEntry, { kind: "upload" }>[] =>
   Array.from({ length: count }, (_, i) => ({
     id: `event-${String(count - i).padStart(3, "0")}`,
+    sequence: count - i,
     created: at - i,
     self: false,
     kind: "upload",
@@ -43,41 +44,46 @@ for (const count of [60, 100]) {
     await page.screenshot({ path: testInfo.outputPath("activity-unread.png"), animations: "disabled" });
     const mark = panel.getByRole("button", { name: "Mark all as read", exact: true });
     await mark.press("Enter");
-    await expect.poll(() => writes).toEqual([entries[0].created]);
+    await expect.poll(() => writes).toEqual([entries[0].sequence]);
     await expect(panel.locator(".is-fresh")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Activity", exact: true })).toBeVisible();
   });
 }
 
-test("interleaved delivery history has an explicit 100-event boundary and opening never marks hidden events", async ({
-  page,
-}) => {
-  const entries = events(100);
-  const deliveries: Delivery[] = Array.from({ length: 20 }, (_, i) => ({
-    id: `delivery-${i}`,
-    itemId: "fixture-item",
-    state: "accepted",
-    created: entries[0].created - i * 4,
-    answered: entries[0].created - i * 4,
-    from: { id: "sender", name: "Other device" },
-    to: null,
-    available: true,
-    item: null,
-  }));
-  const { panel, writes } = await fixture(page, entries, deliveries);
-  await expect(panel.getByRole("region", { name: "Recent activity" }).getByRole("listitem")).toHaveCount(100);
-  await expect(panel.getByText("Showing the latest 100 events.", { exact: true })).toBeVisible();
-  await expect(panel.getByText(/from Other device/)).toHaveCount(20);
-  await expect(panel.getByText(/Documents 99”/)).toHaveCount(0);
-  const rows = await panel.getByRole("listitem").allTextContents();
-  expect(rows[0]).toContain("Documents 0");
-  expect(rows[1]).toContain("Other device");
-  expect(rows.at(-1)).toContain("Documents 79");
-  expect(writes).toEqual([]);
-  await panel.getByRole("button", { name: "Mark all as read" }).click();
-  await expect.poll(() => writes).toEqual([entries[0].created]);
-  await expect(panel.locator(".is-fresh")).toHaveCount(0);
-});
+for (const count of [20, 100]) {
+  test(`${count} answered deliveries cannot displace any of the 100 account events or answer pending deliveries`, async ({
+    page,
+  }) => {
+    const entries = events(100);
+    const deliveries: Delivery[] = Array.from({ length: count }, (_, i) => ({
+      id: `delivery-${i}`,
+      itemId: "fixture-item",
+      state: "accepted",
+      created: entries[0].created + (count === 100 ? 100 - i : -i * 4),
+      answered: entries[0].created + (count === 100 ? 100 - i : -i * 4),
+      from: { id: "sender", name: "Other device" },
+      to: null,
+      available: true,
+      item: null,
+    }));
+    deliveries.push({ ...deliveries[0], id: "pending-fixture", state: "available", answered: null });
+    const { panel, writes } = await fixture(page, entries, deliveries);
+    await expect(panel.getByRole("region", { name: "Recent activity" }).getByRole("listitem")).toHaveCount(100);
+    await panel.getByText(/Documents 99”/).scrollIntoViewIfNeeded();
+    await expect(panel.getByText(/Documents 99”/)).toBeVisible();
+    await expect(panel.getByRole("region", { name: "Received on this device" }).getByRole("listitem")).toHaveCount(
+      count,
+    );
+    await expect(panel.getByRole("region", { name: "Waiting for you" }).getByRole("listitem")).toHaveCount(1);
+    await expect(panel.getByText("Showing the latest 100 account events.", { exact: true })).toBeVisible();
+    expect(writes).toEqual([]);
+    await panel.getByRole("button", { name: "Mark all as read" }).click();
+    await expect.poll(() => writes).toEqual([entries[0].sequence]);
+    await expect(panel.locator(".is-fresh")).toHaveCount(0);
+    await expect(panel.getByRole("region", { name: "Waiting for you" }).getByRole("listitem")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Activity, 1 new", exact: true })).toBeVisible();
+  });
+}
 
 test("new arrivals and tied timestamps stay unread until an explicit acknowledgement; failed marking can retry", async ({
   page,
@@ -101,7 +107,12 @@ test("new arrivals and tied timestamps stay unread until an explicit acknowledge
   const initial = await panel.getByRole("listitem").allTextContents();
   expect(initial[0]).toContain("Documents 0");
   expect(initial[1]).toContain("Documents 1");
-  entries.unshift({ ...events(1, entries[0].created + 1)[0], id: "arrived", request: "New arrival" });
+  entries.unshift({
+    ...events(1, entries[0].created)[0],
+    sequence: entries[0].sequence + 1,
+    id: "arrived",
+    request: "New arrival",
+  });
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(panel.locator(".is-fresh")).toHaveCount(3);
   expect(writes).toEqual([]);
@@ -111,12 +122,21 @@ test("new arrivals and tied timestamps stay unread until an explicit acknowledge
   refuse = false;
   await panel.getByRole("button", { name: "Mark all as read" }).click();
   await expect(panel.locator(".is-fresh")).toHaveCount(0);
-  expect(writes).toEqual([entries[0].created, entries[0].created]);
+  expect(writes).toEqual([entries[0].sequence, entries[0].sequence]);
+  entries.unshift({
+    ...events(1, entries[0].created)[0],
+    sequence: entries[0].sequence + 1,
+    id: "post-ack-tie",
+    request: "Same millisecond after read",
+  });
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(panel.locator(".is-fresh")).toHaveCount(1);
+  await expect(panel.locator(".is-fresh")).toContainText("Same millisecond after read");
 });
 
-test("an arrival newer than an in-flight acknowledgement remains unread", async ({ page }) => {
+test("a same-millisecond arrival during an in-flight acknowledgement remains unread", async ({ page }) => {
   const entries = events(1);
-  const until = entries[0].created;
+  const until = entries[0].sequence;
   let seen = 0;
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -134,7 +154,12 @@ test("an arrival newer than an in-flight acknowledgement remains unread", async 
   try {
     await panel.getByRole("button", { name: "Mark all as read" }).click();
     await expect.poll(() => written).toBe(until);
-    entries.unshift({ ...events(1, until + 1)[0], id: "newer", request: "Arrived during marking" });
+    entries.unshift({
+      ...events(1, entries[0].created)[0],
+      sequence: until + 1,
+      id: "newer",
+      request: "Arrived during marking",
+    });
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect(panel.locator(".is-fresh")).toHaveCount(2);
     release();

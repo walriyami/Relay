@@ -142,10 +142,24 @@ test("a declined delivery keeps its item and can still be accepted later", async
   }
 });
 
-test("incoming deliveries retain every pending arrival and only the latest 100 answered arrivals", async () => {
+test("incoming deliveries retain pending/answered history without displacing the complete bounded account feed", async () => {
   const { instance, laptop, phone, phoneDevice } = await setup();
   try {
     const { result } = await send(laptop, [{ path: "kept.txt", data: "kept" }]);
+    const { user } = await phone.call(api.session.get);
+    for (let index = 0; index < 100; index++)
+      instance.ctx.activity.record(user.id, {
+        kind: "upload",
+        requestId: "fixture-request",
+        request: `Account documents ${index}`,
+        sender: null,
+        itemId: result.itemId,
+        files: 1,
+        bytes: 4,
+        text: false,
+      });
+    const account = await phone.call(api.activity.list);
+    assert.equal(account.entries.length, 100);
     const pending: string[] = [];
     const answered: string[] = [];
     const started = Date.now() - 10_000;
@@ -179,6 +193,15 @@ test("incoming deliveries retain every pending arrival and only the latest 100 a
       false,
     );
     assert.ok(incoming.every((delivery, index) => index === 0 || incoming[index - 1].created >= delivery.created));
+    const stillComplete = await phone.call(api.activity.list);
+    assert.deepEqual(stillComplete.entries, account.entries, "all 100 account events survive 201 incoming rows");
+    await phone.call(api.activity.seen, { body: { until: account.entries[0].sequence } });
+    assert.equal((await phone.call(api.activity.list)).seen, account.entries[0].sequence);
+    assert.deepEqual(
+      await phone.call(api.deliveries.list, { query: { direction: "incoming" } }),
+      incoming,
+      "marking account history does not answer or remove a waiting delivery",
+    );
   } finally {
     await instance.close();
   }

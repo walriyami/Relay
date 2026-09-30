@@ -122,7 +122,7 @@ test("the feed shows only the groups the member wants, and keeps the rest for la
   }
 });
 
-test("seen is shared by the account's devices, only moves forward, and never past now", async () => {
+test("seen is shared by the account's devices, only moves forward, and never past its recorded events", async () => {
   const instance = await start();
   try {
     const laptop = await member(instance, "fay");
@@ -131,15 +131,14 @@ test("seen is shared by the account's devices, only moves forward, and never pas
     const other = await member(instance, "gus");
 
     assert.equal((await feed(laptop)).seen, 0);
-    const newest = (await feed(laptop)).entries[0].created;
+    const newest = (await feed(laptop)).entries[0].sequence;
     await laptop.call(api.activity.seen, { body: { until: newest } });
     assert.equal((await feed(phone)).seen, newest, "seeing it on one device sees it on all");
-    await phone.call(api.activity.seen, { body: { until: newest - 1000 } });
+    await phone.call(api.activity.seen, { body: { until: newest - 1 } });
     assert.equal((await feed(laptop)).seen, newest, "never moves back");
-    const before = Date.now();
-    await laptop.call(api.activity.seen, { body: { until: before + 365 * DAY } });
+    await laptop.call(api.activity.seen, { body: { until: Number.MAX_SAFE_INTEGER } });
     const { seen } = await feed(laptop);
-    assert.ok(seen >= before && seen <= Date.now(), "capped at the server's now");
+    assert.equal(seen, newest, "capped at this account's newest recorded sequence");
     assert.equal((await feed(other)).seen, 0, "another member is unaffected");
     assert.ok((await feed(other)).entries.every((e) => e.kind === "signin" && e.device === "gus browser"));
 

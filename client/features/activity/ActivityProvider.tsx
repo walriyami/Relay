@@ -17,7 +17,7 @@ type Activity = {
   /** Deliveries this device already answered, newest first. */
   answered: Delivery[];
   entries: ActivityEntry[];
-  /** Entries newer than this were not seen on any device. */
+  /** Entries with a greater durable sequence have not been read on any account device. */
   seen: number;
   /** Pending deliveries plus unseen entries: the bell's badge and the tab title's count. */
   waiting: number;
@@ -26,7 +26,7 @@ type Activity = {
   feedError: string;
   reloadDeliveries: () => void;
   reloadFeed: () => void;
-  /** Explicitly marks all account activity through the current feed's newest timestamp as read. */
+  /** Explicitly marks account history through the newest returned insertion sequence as read. */
   markSeen: () => Promise<void>;
   /** Opens something received in the receive popup. */
   open: (received: Received) => void;
@@ -43,7 +43,7 @@ const EMPTY_FEED: ActivityFeed = { entries: [], seen: 0 };
 /** A tab in the background leaves an arrival to a visible tab of the same browser for this long. */
 const BACKGROUND_GRACE = 1500;
 const itemName = (d: Delivery) => d.item?.name || "an item";
-const isNew = (e: ActivityEntry, seen: number) => !e.self && e.created > seen;
+const isNew = (e: ActivityEntry, seen: number) => !e.self && e.sequence > seen;
 
 export function notifySystem(body: string, tag: string, onClick?: () => void) {
   const prefs = getLocalPrefs();
@@ -187,7 +187,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     notifySystem(message, `request:${one?.requestId ?? "many"}`, view);
   }, [entries, feed.loading, feed.error]);
 
-  const newest = entries[0]?.created ?? 0;
+  const newest = entries[0]?.sequence ?? 0;
   const reloadFeed = feed.reload;
   const markSeen = useCallback(async () => {
     if (newest <= seen) return;

@@ -434,6 +434,7 @@ export const api = {
 
   activity: {
     list: endpoint<M.ActivityFeed>()("GET", "/api/activity", { auth: "member" }),
+    /** Acknowledge through a returned event's durable sequence, including timestamp ties before it. */
     seen: ok("POST", "/api/activity/seen", {
       auth: "member",
       body: z.object({ until: int(0, Number.MAX_SAFE_INTEGER) }),

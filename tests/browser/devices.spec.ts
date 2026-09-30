@@ -126,7 +126,9 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     expect((await download).suggestedFilename()).toBe(`${second}.txt`);
     await expect(activity.getByRole("region", { name: "Waiting for you" })).toHaveCount(0);
     await expect(
-      activity.getByRole("region", { name: "Recent activity" }).getByText(endingWith(`“${second}.txt” from ${laptop}`)),
+      activity
+        .getByRole("region", { name: "Received on this device" })
+        .getByText(endingWith(`“${second}.txt” from ${laptop}`)),
     ).toBeVisible();
     await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
     await expect(phone.page).toHaveTitle("Relay");

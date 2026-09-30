@@ -14,8 +14,6 @@ import { acceptDelivery, declineDelivery } from "../incoming/answer";
 import { describeAnswered, describeDelivery, describeEntry, type Described } from "./describe";
 import { useActivity } from "./ActivityProvider";
 
-/** A bounded combined history, matching the account feed's 100-event limit. */
-const SHOWN = 100;
 type Line = { key: string; at: number; described: Described; fresh: boolean; onOpen?: () => void };
 
 /** The bell in the top bar: items waiting for this device, then everything that happened. */
@@ -64,7 +62,7 @@ function ActivityPanel({ close }: { close: () => void }) {
     open,
   } = useActivity();
   const [marking, setMarking] = useState(false);
-  const unread = entries.some((e) => !e.self && e.created > seen);
+  const unread = entries.some((e) => !e.self && e.sequence > seen);
   async function markAll() {
     setMarking(true);
     try {
@@ -91,24 +89,23 @@ function ActivityPanel({ close }: { close: () => void }) {
         : e.kind === "joined" && me.user.admin
           ? () => go("/admin")
           : undefined;
-  const lines: Line[] = [
-    ...entries.map((e) => ({
-      key: e.id,
-      at: e.created,
-      described: describeEntry(e),
-      fresh: !e.self && e.created > seen,
-      onOpen: entryAction(e),
-    })),
-    ...(me.prefs.activity.received ? answered : []).map((d) => ({
+  // The entire bounded account feed stays reachable, independently of this device's deliveries.
+  const lines: Line[] = entries.map((e) => ({
+    key: e.id,
+    at: e.created,
+    described: describeEntry(e),
+    fresh: !e.self && e.sequence > seen,
+    onOpen: entryAction(e),
+  }));
+  const received: Line[] = (me.prefs.activity.received ? answered : [])
+    .map((d) => ({
       key: `delivery:${d.id}`,
       at: d.answered ?? d.created,
       described: describeAnswered(d),
       fresh: false,
       onOpen: () => view(d),
-    })),
-  ]
-    .sort((a, b) => b.at - a.at || b.key.localeCompare(a.key))
-    .slice(0, SHOWN);
+    }))
+    .sort((a, b) => b.at - a.at || b.key.localeCompare(a.key));
 
   return (
     <>
@@ -156,25 +153,39 @@ function ActivityPanel({ close }: { close: () => void }) {
             </ul>
           </section>
         )}
-        {lines.length > 0 ? (
+        {lines.length > 0 && (
           <section className="activity-section" aria-label="Recent activity">
-            <h3 className="activity-heading">Recent</h3>
-            {lines.length === SHOWN && <p className="muted popover-empty">Showing the latest 100 events.</p>}
+            <h3 className="activity-heading">Account activity</h3>
+            {lines.length === 100 && <p className="muted popover-empty">Showing the latest 100 account events.</p>}
             <ul className="activity-list">
               {lines.map((line) => (
                 <EntryRow key={line.key} line={line} />
               ))}
             </ul>
           </section>
-        ) : !pending.length && loading ? (
-          <p className="muted popover-empty waiting">Loading activity…</p>
-        ) : !pending.length && !deliveryError && !feedError ? (
-          <div className="popover-empty">
-            <InlineEmpty icon={<Bell size={20} />} title="No activity yet">
-              Items from your other devices, files sent to your requests and sign-ins appear here.
-            </InlineEmpty>
-          </div>
-        ) : null}
+        )}
+        {received.length > 0 && (
+          <section className="activity-section" aria-label="Received on this device">
+            <h3 className="activity-heading">Received on this device</h3>
+            <ul className="activity-list">
+              {received.map((line) => (
+                <EntryRow key={line.key} line={line} />
+              ))}
+            </ul>
+          </section>
+        )}
+        {!lines.length &&
+          !received.length &&
+          !pending.length &&
+          (loading ? (
+            <p className="muted popover-empty waiting">Loading activity…</p>
+          ) : !deliveryError && !feedError ? (
+            <div className="popover-empty">
+              <InlineEmpty icon={<Bell size={20} />} title="No activity yet">
+                Items from your other devices, files sent to your requests and sign-ins appear here.
+              </InlineEmpty>
+            </div>
+          ) : null)}
       </div>
     </>
   );

@@ -27,7 +27,7 @@ CREATE TABLE users (
   prefs TEXT NOT NULL DEFAULT '{}',
   -- Maintained by triggers on nodes: logical bytes of ready file and text nodes.
   bytes_used INTEGER NOT NULL DEFAULT 0,
-  -- Activity up to this time has been seen on some device of the account.
+  -- Activity through this durable insertion sequence has been read on an account device.
   activity_seen INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL
 ) STRICT;
@@ -367,14 +367,16 @@ CREATE INDEX deliveries_from ON deliveries(from_device, created);
 -- `kind` is repeated for filtering. `by_device` is the member's device that caused it, if one did:
 -- that device already knows.
 CREATE TABLE activity (
-  id TEXT PRIMARY KEY,
+  -- Never reused after retention deletes rows, including when every row has been swept.
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL UNIQUE,
   owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('signin', 'password', 'passkey', 'upload', 'joined', 'link')),
   by_device TEXT REFERENCES devices(id) ON DELETE SET NULL,
   created INTEGER NOT NULL,
   data TEXT NOT NULL
 ) STRICT;
-CREATE INDEX activity_owner ON activity(owner, created);
+CREATE INDEX activity_owner ON activity(owner, sequence);
 CREATE INDEX activity_created ON activity(created);
 
 -- Hourly usage per member, for their Usage page and for Admin. `hour` counts whole hours since the
