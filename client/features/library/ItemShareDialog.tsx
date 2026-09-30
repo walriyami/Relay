@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api, call, type Link } from "../../api";
 import { FileShareDialog } from "../../components/FileShareDialog";
 import { confirmDialog, toast } from "../../components/ui";
-import { notifyChange, useLive } from "../../lib/live";
+import { notifyChange } from "../../lib/live";
+import { useLiveLink } from "../../lib/live-link";
 import { useExpiryClock } from "../../lib/refresh";
 import { linkDeadline, linkUnavailableReason } from "../../lib/link-availability";
 import { errorToast } from "./actions";
@@ -15,13 +16,11 @@ import { LinkSettingsDialog } from "./dialogs";
  * closes and says why, so a dead link or code is never offered for copying.
  */
 export function ItemShareDialog({ share, onClose }: { share: Link; onClose: () => void }) {
-  const { data } = useLive(api.links.list, {}, ["links", "items"], []);
+  const { link: live, removed } = useLiveLink(share);
   const [editing, setEditing] = useState(false);
-  // A link created a moment ago may not be in the list yet; until then, show what we have.
-  const live = data.find((l) => l.id === share.id) ?? share;
   const deadline = linkDeadline(live);
   const now = useExpiryClock([deadline]);
-  const stopped = linkUnavailableReason(live, now);
+  const stopped = removed ? "This link is no longer available." : linkUnavailableReason(live, now);
   const dead = stopped !== null;
   useEffect(() => {
     if (!dead) return;

@@ -170,6 +170,8 @@ const FINAL = new Set([401, 403, 404, 410]);
  * Loads an endpoint and reloads it whenever one of `topics` changes. Pass `null` to load nothing.
  * `data` is the last answer this tab had for the same query, if any, or `initial` until the first
  * response arrives; `loading` is true only while there is nothing to show yet.
+ * `hasLoaded` records a successful fresh response for this subscription; cached starting data does
+ * not establish that an omitted item is gone.
  *
  * Changes reload at most once a second and never while a load is under way, however fast they
  * come (an upload of many files changes items with every file); `reload` loads straight away.
@@ -179,12 +181,20 @@ export function useLive<E extends Endpoint, I = Response<E>>(
   input: Input<E> | null,
   topics: Topic[],
   initial: I,
-): { data: Response<E> | I; loading: boolean; error: string; errorStatus: number | null; reload: () => void } {
+): {
+  data: Response<E> | I;
+  loading: boolean;
+  hasLoaded: boolean;
+  error: string;
+  errorStatus: number | null;
+  reload: () => void;
+} {
   type State = {
     key: string;
     generation: number;
     data: Response<E> | I;
     loading: boolean;
+    hasLoaded: boolean;
     error: string;
     errorStatus: number | null;
   };
@@ -193,6 +203,7 @@ export function useLive<E extends Endpoint, I = Response<E>>(
     generation: 0,
     data: initial,
     loading: !!endpoint,
+    hasLoaded: false,
     error: "",
     errorStatus: null,
   });
@@ -213,6 +224,7 @@ export function useLive<E extends Endpoint, I = Response<E>>(
       generation,
       data: hit ? (hit.data as Response<E>) : initial,
       loading: !!endpoint && !hit,
+      hasLoaded: false,
       error: "",
       errorStatus: null,
     };
@@ -228,7 +240,7 @@ export function useLive<E extends Endpoint, I = Response<E>>(
       .then(({ data, changes }) => {
         remember(owner, key, data);
         if (n !== seq.current || query.current.generation !== generation) return undefined;
-        setState({ key, generation, data, loading: false, error: "", errorStatus: null });
+        setState({ key, generation, data, loading: false, hasLoaded: true, error: "", errorStatus: null });
         return changes;
       })
       .catch((error: Error) => {
@@ -313,6 +325,7 @@ export function useLive<E extends Endpoint, I = Response<E>>(
   return {
     data: visible.data,
     loading: visible.loading,
+    hasLoaded: visible.hasLoaded,
     error: visible.error,
     errorStatus: visible.errorStatus,
     reload,

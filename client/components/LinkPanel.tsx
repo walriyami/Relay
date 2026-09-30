@@ -1,5 +1,5 @@
-import { api, type Link } from "../api";
-import { useLive } from "../lib/live";
+import type { Link } from "../api";
+import { useLiveLink } from "../lib/live-link";
 import { shareUrl } from "../lib/format";
 import { useExpiryClock } from "../lib/refresh";
 import { linkDeadline, linkUnavailableReason } from "../lib/link-availability";
@@ -10,11 +10,9 @@ import { LinkReach } from "./LinkOptions";
 // A link just made from Send, in its transfer card: the same QR, code and copy hierarchy as
 // everywhere else, with how it works and who has opened it so far.
 export function LinkPanel({ share: made }: { share: Link }) {
-  // Follows the link as it is opened or changed elsewhere; until the list has it, shows it as made.
-  const { data } = useLive(api.links.list, {}, ["links", "items"], []);
-  const share = data.find((l) => l.id === made.id) ?? made;
+  const { link: share, removed } = useLiveLink(made);
   const now = useExpiryClock([linkDeadline(share)]);
-  const stopped = linkUnavailableReason(share, now);
+  const stopped = removed ? "This link is no longer available." : linkUnavailableReason(share, now);
   if (stopped)
     return (
       <p className="muted" role="status">
