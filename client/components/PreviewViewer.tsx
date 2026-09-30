@@ -125,6 +125,9 @@ function ImagePreview({ entry, source }: { entry: NodeRef; source: ContentSource
       };
     } else anchor.current = { x: 0.5, y: 0.5, px: 0.5, py: 0.5 };
     if (!zoomed && native && src !== original) {
+      // The thumbnail’s fitted measurement does not describe the original.
+      // Keep the control mounted until the original is measured in fit mode.
+      setFits(false);
       setLoaded(false);
       setSrc(original);
     }

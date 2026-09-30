@@ -484,11 +484,13 @@ test("a zoomed image can be panned to every edge from the keyboard without leavi
       expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
     }
   }
+  const zoomControl = await dialog.getByRole("button", { name: "Fit to window" }).elementHandle();
   await dialog.getByRole("button", { name: "Fit to window" }).focus();
   await page.keyboard.press("Enter");
   await expect(dialog.locator(".preview-image-frame")).toHaveAttribute("tabindex", "-1");
   await expect(frame).toHaveCount(0);
   await expect(zoom).toBeFocused();
+  expect(await zoomControl.evaluate((el) => el.isConnected && el === document.activeElement)).toBe(true);
   await page.keyboard.press("Enter");
   await page.keyboard.press("Shift+Tab");
   await expect(frame).toBeFocused();
