@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
 import type { NodeRef } from "../api";
 import { download } from "../lib/download";
 import { bytes, kindLabel, previewKind } from "../lib/format";
 import type { ContentSource } from "../lib/source";
-import { PdfPreview } from "./PdfPreview";
 import { FileTypeIcon } from "./Thumbnail";
 import { Button, CopyButton, IconButton, Modal, Spinner } from "./ui";
+
+const PdfReader = lazy(() => import("./PdfReader").then((module) => ({ default: module.PdfReader })));
 
 const TEXT_LIMIT = 1024 * 1024;
 const ORIGINAL_IMAGE_LIMIT = 20 * 1024 ** 2;
@@ -214,15 +215,14 @@ function NoPreview({ entry, message }: { entry: NodeRef; message?: string }) {
 
 /** Full, bounded file preview shared by the viewer and a single-file library item. */
 export function FilePreview({ entry, source }: { entry: NodeRef; source: ContentSource }) {
-  const [pdfFailed, setPdfFailed] = useState(false);
   const kind = previewKind(entry.path, entry.mime);
   const inline = source.file(entry.id, true);
   if (kind === "image") return <ImagePreview entry={entry} source={source} />;
   if (kind === "pdf")
-    return pdfFailed ? (
-      <NoPreview entry={entry} message="This PDF can’t be shown here. Open the original or download it." />
-    ) : (
-      <PdfPreview url={inline} name={entry.name} onFailed={() => setPdfFailed(true)} />
+    return (
+      <Suspense fallback={<Spinner label="Loading PDF" />}>
+        <PdfReader url={inline} name={entry.name} />
+      </Suspense>
     );
   if (entry.size === 0) return <NoPreview entry={entry} message="This file is empty." />;
   if (kind === "text") return <TextPreview url={source.file(entry.id)} size={entry.size} />;
@@ -274,7 +274,7 @@ export function PreviewViewer({
       onClose={onClose}
       actions={
         <>
-          {(kind === "image" || kind === "pdf") && (
+          {kind === "image" && (
             <Button
               size="sm"
               variant="ghost"

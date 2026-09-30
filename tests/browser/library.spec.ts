@@ -619,15 +619,19 @@ test("PDFs preview page by page inside the app", async ({ page }) => {
   const dialog = page.getByRole("dialog");
   const viewer = dialog.getByRole("document", { name: `${name}.pdf, 3 pages` });
   await expect(viewer).toBeVisible();
-  await expect(viewer.getByRole("img", { name: "Page 1" })).toBeVisible();
-  // Canvases start with no backing storage until their queued render completes.
-  await expect(viewer.getByRole("img", { name: "Page 1" })).toHaveAttribute("data-rendered", "true");
-  expect(
-    await viewer
-      .locator("canvas")
-      .first()
-      .evaluate((c: HTMLCanvasElement) => c.width),
-  ).toBeGreaterThan(1);
+  await expect(dialog.getByRole("group", { name: "PDF reading controls" })).toBeVisible();
+  await expect(dialog.locator(".pdf-reader-loading")).toHaveCount(0);
+  // The maintained viewer exposes a page region and a text layer; canvas pixels alone
+  // are no longer the PDF's only accessible representation.
+  await expect(viewer.getByRole("region")).toBeVisible();
+  await expect
+    .poll(() =>
+      viewer
+        .locator("canvas")
+        .first()
+        .evaluate((canvas: HTMLCanvasElement) => canvas.width),
+    )
+    .toBeGreaterThan(1);
 });
 
 test("Back closes one popup at a time, the address follows, and a reload adds no dead Back step", async ({ page }) => {

@@ -1,0 +1,97 @@
+.pdf-reader {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  gap: var(--s2);
+}
+.pdf-reader-controls,
+.pdf-reader-search {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.pdf-reader-page {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  white-space: nowrap;
+}
+.pdf-reader-page input {
+  width: 5ch;
+  padding: var(--s1);
+}
+.pdf-reader select {
+  width: auto;
+  max-width: 9rem;
+  padding: var(--s1);
+}
+.pdf-reader-search input {
+  width: min(16rem, 100%);
+  flex: 1;
+  min-width: 8rem;
+  padding: var(--s1) var(--s2);
+}
+.pdf-reader-search [role="status"] {
+  font-size: 0.875rem;
+}
+.pdf-reader-stage {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  background: #e6e6e6;
+  border-radius: var(--r1);
+  overflow: hidden;
+}
+.pdf-reader-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.pdf-reader-scroll .pdfViewer {
+  --page-bg-color: #fff;
+}
+.pdf-reader-scroll .pdfViewer .page {
+  margin: 8px auto;
+}
+.pdf-reader-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.pdf-reader-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: var(--s4);
+  gap: var(--s3);
+  background: var(--surface);
+  text-align: center;
+}
+@media (max-width: 600px) {
+  .pdf-reader-controls,
+  .pdf-reader-search {
+    gap: var(--s1);
+  }
+  .pdf-reader-search [role="status"] {
+    flex-basis: 100%;
+    min-height: 1.3em;
+  }
+}
+/* Standalone share pages need a reading area even without a fixed-height modal. */
+.content-stage:not(.preview-fill) > .pdf-reader {
+  height: min(75dvh, 900px);
+  min-height: 320px;
+}
+.pdf-reader-controls,
+.pdf-reader-search {
+  flex-shrink: 0;
+}
