@@ -1,8 +1,32 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { test as base, expect, type Page } from "@playwright/test";
+import { mkdir, readFile } from "node:fs/promises";
 import { transformWithEsbuild } from "vite";
 import { deviceContext } from "./helpers";
 import type { Sink } from "../../client/lib/nearby/sink";
+
+// Native WebKit OPFS requires a persistent data store, including writable XDG directories.
+const test = base.extend({
+  context: async ({ playwright, browserName, launchOptions, contextOptions }, use, testInfo) => {
+    const env = Object.fromEntries(
+      Object.entries({ ...process.env, ...launchOptions.env }).filter(([, value]) => value !== undefined),
+    ) as Record<string, string>;
+    for (const name of ["cache", "data", "config"]) {
+      const path = testInfo.outputPath(name);
+      await mkdir(path, { recursive: true });
+      env[`XDG_${name.toUpperCase()}_HOME`] = path;
+    }
+    const context = await playwright[browserName].launchPersistentContext(testInfo.outputPath("profile"), {
+      ...launchOptions,
+      ...contextOptions,
+      env,
+    });
+    try {
+      await use(context);
+    } finally {
+      await context.close();
+    }
+  },
+});
 
 declare global {
   interface Window {
@@ -29,7 +53,7 @@ test.use({
   },
 });
 
-async function fixture(page: Page) {
+async function fixture(page: Page, disk = true) {
   // Load the actual sink implementation, with the project's compiler, under the same origin.
   for (const name of ["sink", "zip"]) {
     const source = await readFile(new URL(`../../client/lib/nearby/${name}.ts`, import.meta.url), "utf8");
@@ -39,16 +63,20 @@ async function fixture(page: Page) {
     );
   }
   await page.goto("/");
-  test.skip(
-    !(await page.evaluate(
-      () =>
-        !!navigator.storage?.getDirectory &&
-        !!navigator.locks &&
-        typeof FileSystemFileHandle !== "undefined" &&
-        "createWritable" in FileSystemFileHandle.prototype,
-    )),
-    "Requires OPFS and Web Locks",
-  );
+  if (disk) {
+    // Prove native writable storage works; exposed API names alone are insufficient.
+    const size = await page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle("fixture-probe", { create: true });
+      const stream = await handle.createWritable();
+      await stream.write(new Uint8Array([73]));
+      await stream.close();
+      const size = (await handle.getFile()).size;
+      await root.removeEntry("fixture-probe");
+      return size;
+    });
+    expect(size).toBe(1);
+  }
 }
 
 async function files(page: Page) {
@@ -121,8 +149,8 @@ test("completed OPFS file preserves bytes until idempotent discard", async ({ pa
     const { openSink } = (await import(path)) as { openSink: () => Promise<Sink> };
     const sink = await openSink();
     const expected = new Uint8Array(2 * 1024 * 1024 + 17).fill(83);
-    await sink.write(expected.subarray(0, 1024 * 1024));
-    await sink.write(expected.subarray(1024 * 1024));
+    await sink.write(expected.slice(0, 1024 * 1024));
+    await sink.write(expected.slice(1024 * 1024));
     const file = await sink.finish("application/octet-stream", "synthetic.bin", 1234);
     const digest = async (bytes: BufferSource) =>
       Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).join(",");
@@ -136,6 +164,7 @@ test("completed OPFS file preserves bytes until idempotent discard", async ({ pa
     return result;
   });
   expect(result.name).toBe("synthetic.bin");
+  expect(result.size).toBe(2 * 1024 * 1024 + 17);
   expect(result.hash).toBe(result.expected);
   expect(await files(page)).toEqual([result.size]);
   await page.evaluate(() => Promise.all([window.sinkFixture.sink.discard(), window.sinkFixture.sink.discard()]));
@@ -231,3 +260,44 @@ test("Nearby cancellation during finalization cleans OPFS without a received res
     await receiver.context.close();
   }
 });
+
+for (const completed of [false, true]) {
+  test(`unavailable OPFS falls back and discards ${completed ? "completed" : "pending"} content`, async ({ page }) => {
+    await fixture(page, false);
+    const outcome = await page.evaluate(async (completed) => {
+      let attempts = 0;
+      Object.defineProperty(navigator.storage, "getDirectory", {
+        configurable: true,
+        value: () => {
+          attempts++;
+          return Promise.reject(new DOMException("Injected unavailable storage", "UnknownError"));
+        },
+      });
+      const path = "/__sink-test/sink.js";
+      const { openSink } = (await import(path)) as { openSink: () => Promise<Sink> };
+      const sink = await openSink();
+      const bytes = Uint8Array.from([10, 20, 30, 40, 50]);
+      await sink.write(bytes.subarray(1, 3));
+      const file = completed ? await sink.finish("application/octet-stream", "fallback.bin", 1234) : null;
+      await Promise.all([sink.discard(), sink.discard()]);
+      await sink.discard();
+      const empty = await sink.finish("application/octet-stream", "discarded.bin", 0);
+      return {
+        attempts,
+        written: sink.written,
+        content: file ? Array.from(new Uint8Array(await file.arrayBuffer())) : null,
+        name: file?.name,
+        modified: file?.lastModified,
+        remaining: empty.size,
+      };
+    }, completed);
+    expect(outcome).toEqual({
+      attempts: 1,
+      written: 2,
+      content: completed ? [20, 30] : null,
+      name: completed ? "fallback.bin" : undefined,
+      modified: completed ? 1234 : undefined,
+      remaining: 0,
+    });
+  });
+}
