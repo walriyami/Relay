@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   fileInput,
   png,
   recordWrites,
+  isTransferWrite,
   selected,
   signedIn,
   textFile,
@@ -18,18 +19,15 @@ import {
   writeText,
 } from "./helpers";
 
-// Transfer preparation, payload writes and destination side effects; presence is background work.
-const isTransferWrite = (write: string) =>
-  /^\S+ \/(?:uploads(?:\/|$)|api\/(?:transfers|uploads|links|deliveries)(?:\/|$)|api\/r\/[^/]+\/(?:start|transfers)(?:\/|$))/.test(
-    write,
-  );
+const pageWrites = new WeakMap<Page, string[]>();
 
 test.beforeEach(async ({ page }) => {
+  pageWrites.set(page, recordWrites(page));
   await signedIn(page);
 });
 
 test("choosing files never uploads; picks accumulate until a destination is clicked", async ({ page }) => {
-  const writes = recordWrites(page);
+  const writes = pageWrites.get(page)!;
   expect(isTransferWrite("POST /api/nearby/presence")).toBe(false);
   for (const write of [
     "POST /api/transfers",
