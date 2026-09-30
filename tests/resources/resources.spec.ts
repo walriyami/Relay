@@ -304,12 +304,10 @@ test("extreme short wide PDF allocation progresses, cancels and completes within
       pixels: window.canvasProbe.canvases.reduce((n, canvas) => n + canvas.width * canvas.height, 0),
       workers: window.workersProbe,
     }));
-    await test
-      .info()
-      .attach("extreme-close.json", {
-        body: JSON.stringify({ beforeClose, afterClose }),
-        contentType: "application/json",
-      });
+    await test.info().attach("extreme-close.json", {
+      body: JSON.stringify({ beforeClose, afterClose }),
+      contentType: "application/json",
+    });
     await page.getByRole("button", { name: "Toggle", exact: true }).click();
     await expect.poll(async () => (await snapshot()).visible).toBeGreaterThan(100);
     let previous = await snapshot();
