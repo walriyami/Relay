@@ -217,6 +217,7 @@ export type Link = {
   id: Id;
   itemId: Id;
   token: string;
+  /** Empty when numeric allocation was unavailable; the token URL still works. */
   code: string;
   created: Time;
   /** Null: works until turned off (or until its item leaves Files). */
@@ -269,6 +270,7 @@ export type Delivery = {
 export type UploadRequest = {
   id: Id;
   token: string;
+  /** Empty when numeric allocation was unavailable; the token URL still works. */
   code: string;
   name: string;
   description: string;

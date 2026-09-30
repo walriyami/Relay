@@ -94,7 +94,7 @@ Administrators can run resumable integrity scans that hash stored files sequenti
 - People sign in with a password (hashed with scrypt), a passkey (WebAuthn), or a one-time code shown on another of their signed-in devices.
 - Sessions use `HttpOnly`, `SameSite` cookies (`__Host-` prefixed over HTTPS). Every unsafe request must come from the address it was sent to (exactly `RELAY_ORIGIN`, when set) and carry a CSRF token.
 - Link, request and invitation tokens are derived from their ids with an HMAC key (`RELAY_SECRET`). The database stores only hashes of those tokens.
-- Short numeric codes (four or six digits) are rate-limited per address and across the service. A retired code is never reassigned.
+- Short numeric codes (four or six digits) are rate-limited per address and across the service. A retired code is never reassigned. Links and upload requests remain usable through their full URL and QR code when numeric allocation is unavailable. Their creation and edits try at most 128 candidates; a missing assignment is returned as an empty code. Retired URL-only registry markers preserve recipient id history without reserving any numeric code.
 - Every content and archive route checks authorization. Administrators manage accounts and limits and see how much each member stores and moves, but they can't read members' files or links.
 
 Relay isn't end-to-end encrypted. Whoever operates the server can read what's stored on it.

@@ -1,6 +1,6 @@
 import type { Context } from "../context.ts";
 import type { Database } from "../db/database.ts";
-import { fail } from "./errors.ts";
+import { HttpError } from "./errors.ts";
 import type { Secrets } from "./secrets.ts";
 import { normalizeCode } from "./secrets.ts";
 import { DEFAULT_CODE_LENGTH, type CodeLength } from "../../shared/codes.ts";
@@ -12,6 +12,11 @@ const SETTING = "pickupCodeLength";
 const EFFECTIVE_SETTING = "pickupCodeEffectiveLength";
 const RECOVERY_BLOCKED_SETTING = "pickupCodeRecoveryBlocked";
 const RESOLUTION_UNAVAILABLE_SETTING = "pickupCodeResolutionUnavailable";
+/** A URL must not synchronously scan the million-entry namespace to obtain a convenience code. */
+const URL_CODE_ATTEMPTS = 128;
+
+/** Only numeric availability failures may be bypassed by a bearer-URL operation. */
+class PickupCodeUnavailable extends HttpError {}
 
 /** The code at `nonce` in the target's sequence, checked against the digest it was stored under. */
 function codeAt(secrets: Secrets, kind: PickupCodeKind, targetId: string, row: RegisteredCode, length: CodeLength) {
@@ -43,6 +48,17 @@ export function issuePickupCode(
   targetId: string,
   length: CodeLength = codeLengthOf(db),
 ) {
+  return reservePickupCode(db, secrets, kind, targetId, length, 10 ** length);
+}
+
+function reservePickupCode(
+  db: Database,
+  secrets: Secrets,
+  kind: PickupCodeKind,
+  targetId: string,
+  length: CodeLength,
+  attempts: number,
+) {
   ensurePickupCodeResolutionAvailable(db);
   return db.tx(() => {
     const prior = db.get<RegisteredCode>(
@@ -56,7 +72,7 @@ export function issuePickupCode(
     // Reuse one compiled lookup for the bounded full-cycle scan. Preparing a new SQLite statement
     // for every candidate made a completely reserved namespace hold the single server process.
     const isReserved = db.sqlite.prepare("SELECT 1 FROM pickup_codes WHERE code_hash = ?");
-    for (let nonce = 0; nonce < namespaceSize; nonce++) {
+    for (let nonce = 0; nonce < Math.min(attempts, namespaceSize); nonce++) {
       const code = secrets.pickupCodeFor(kind, targetId, nonce, length);
       const codeHash = secrets.pickupCodeHash(normalizeCode(code, length)!);
       if (isReserved.get(codeHash)) continue;
@@ -70,13 +86,43 @@ export function issuePickupCode(
       );
       return { code, codeHash };
     }
-    return fail(409, `No unused ${length}-digit codes remain. Choose a different code length.`);
+    if (attempts >= namespaceSize)
+      throw new PickupCodeUnavailable(409, `No unused ${length}-digit codes remain. Choose a different code length.`);
+    throw new PickupCodeUnavailable(503, "Numeric pickup code allocation is busy. Use the original link.");
   });
+}
+
+/**
+ * Links and requests work without a numeric code. Preserve their id history even when numeric
+ * allocation is unavailable: the registry also prevents a purged URL from being recreated.
+ * The retired marker cannot match a numeric HMAC digest and never consumes a numeric code.
+ */
+export function issueUrlPickupCode(db: Database, secrets: Secrets, kind: "share" | "request", targetId: string) {
+  try {
+    return reservePickupCode(db, secrets, kind, targetId, codeLengthOf(db), URL_CODE_ATTEMPTS);
+  } catch (error) {
+    if (!(error instanceof PickupCodeUnavailable)) throw error;
+    const codeHash = `url-only:${kind}:${targetId}`;
+    const now = Date.now();
+    db.run(
+      `INSERT INTO pickup_codes(code_hash, kind, target_id, nonce, created, retired) VALUES(?, ?, ?, 0, ?, ?)
+       ON CONFLICT(code_hash) DO NOTHING`,
+      codeHash,
+      kind,
+      targetId,
+      now,
+      now,
+    );
+    return { code: "", codeHash };
+  }
 }
 
 export function ensurePickupCodeResolutionAvailable(db: Database) {
   if (db.setting(RESOLUTION_UNAVAILABLE_SETTING) === "1")
-    fail(503, "Numeric pickup codes are temporarily unavailable. Use the original link or try again later.");
+    throw new PickupCodeUnavailable(
+      503,
+      "Numeric pickup codes are temporarily unavailable. Use the original link or try again later.",
+    );
 }
 
 /** Returns the current active code, or null when this target has no current assignment. */
