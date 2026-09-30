@@ -37,7 +37,7 @@
     "@simplewebauthn/server": "^14.0.2",
     "fastify": "^5.6.0",
     "heic-decode": "^2.1.0",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.48.0",
     "node-datachannel": "^0.33.4",
     "pdfjs-dist": "^6.3.289",
     "qrcode": "^1.5.4",
