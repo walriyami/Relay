@@ -69,5 +69,6 @@ jobs:
           push: false
           load: true
           tags: relay-verify
+      - run: node scripts/verify-restore.ts
       - run: npm run verify:container -- --skip-build
       - run: npm run verify:compose

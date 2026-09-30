@@ -190,6 +190,8 @@ docker compose up -d --build
 
 Or run `npm run redeploy`, which asks what to build and what to do with the data, then waits until Relay is healthy. It builds the latest commit in a clean copy of the checkout, so uncommitted changes stay out unless you choose them. It can keep the data, save a copy and start with none, delete it, or bring back a saved copy. It warns before a build whose schema would refuse the data you have, and goes back to the previous image if the new one doesn't start. `npm run redeploy -- --help` lists the options for running it without questions, such as `npm run redeploy -- -y` to build the latest commit and keep the data, and `npm run redeploy -- --rollback`.
 
+The redeploy script supports the standard Docker-managed local data volume. It refuses data replacement for plugin-backed volumes or local volumes with driver options (including bind, NFS, CIFS and block-device mounts); use your storage provider’s backup and restore tools for those configurations. Restore sources must differ from the active volume. The script checks Docker-reported mountpoints for lexical equality and parent/child overlap; it trusts Docker-managed storage and does not resolve host symlinks or protect against concurrent external storage changes.
+
 Relay checks both the database version and its complete schema before opening existing data. Incompatible prerelease databases are refused with an actionable error; no automatic migration or reset runs. Preserve the original directory and use its matching build to export data, or start the current build with a new empty directory.
 
 ### Backup and restore
