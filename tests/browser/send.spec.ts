@@ -18,12 +18,37 @@ import {
   writeText,
 } from "./helpers";
 
+// Transfer preparation, payload writes and destination side effects; presence is background work.
+const isTransferWrite = (write: string) =>
+  /^\S+ \/(?:uploads(?:\/|$)|api\/(?:transfers|uploads|links|deliveries)(?:\/|$)|api\/r\/[^/]+\/(?:start|transfers)(?:\/|$))/.test(
+    write,
+  );
+
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
 });
 
 test("choosing files never uploads; picks accumulate until a destination is clicked", async ({ page }) => {
   const writes = recordWrites(page);
+  expect(isTransferWrite("POST /api/nearby/presence")).toBe(false);
+  for (const write of [
+    "POST /api/transfers",
+    "PATCH /uploads/test-id",
+    "DELETE /api/uploads/test-id",
+    "POST /api/transfers/test-id/complete",
+    "POST /api/r/token/start",
+    "POST /api/r/token/transfers",
+    "POST /api/links",
+    "POST /api/deliveries",
+  ])
+    expect(isTransferWrite(write), write).toBe(true);
+  const presence = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/nearby/presence" && response.request().method() === "POST",
+  );
+  await page.goto("/nearby");
+  expect((await presence).ok()).toBe(true);
+  await page.goto("/");
+  expect(writes).toContain("POST /api/nearby/presence");
   const a = unique("alpha");
   const b = unique("beta");
   const dir = await mkdtemp(join(tmpdir(), "relay-picks-"));
@@ -46,12 +71,14 @@ test("choosing files never uploads; picks accumulate until a destination is clic
   await expect(page.locator("textarea")).toHaveCount(1);
   await writeText(page, "one message for the whole share");
   await page.waitForTimeout(1500);
-  expect(writes, "nothing is uploaded before a destination is chosen").toEqual([]);
+  expect(writes.filter(isTransferWrite), "nothing is uploaded before a destination is chosen").toEqual([]);
 
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   const card = page.locator(".transfer").first();
   await expect(card).toContainText("Saved to Files");
-  expect(writes).toContain("POST /api/transfers");
+  expect(writes.filter(isTransferWrite)).toContain("POST /api/transfers");
+  expect(writes.some((write) => /^PATCH \/uploads\//.test(write))).toBe(true);
+  expect(writes.some((write) => /^POST \/api\/transfers\/[^/]+\/complete$/.test(write))).toBe(true);
   // The result replaces the picks inside the drop box; the draft is cleared.
   await expect(selected(page)).toHaveCount(0);
   await expect(page.locator("textarea")).toHaveCount(0);
@@ -119,9 +146,15 @@ test("the next link's settings open from its row, which says what the link will 
   await button.click();
   const settings = page.getByRole("dialog", { name: "Link settings" });
   // "Add a note" and Done share the last line.
-  const add = await settings.getByRole("button", { name: "Add a note" }).boundingBox();
-  const done = await settings.getByRole("button", { name: "Done" }).boundingBox();
-  expect(Math.abs(add!.y + add!.height / 2 - (done!.y + done!.height / 2))).toBeLessThan(1);
+  await expect
+    .poll(() =>
+      settings.getByRole("button", { name: /^(Add a note|Done)$/ }).evaluateAll((buttons) => {
+        if (buttons.length !== 2) return Infinity;
+        const [add, done] = buttons.map((button) => button.getBoundingClientRect());
+        return Math.abs(add.y + add.height / 2 - (done.y + done.height / 2));
+      }),
+    )
+    .toBeLessThan(1);
   await settings.getByRole("switch", { name: /^Password/ }).click();
   await page.keyboard.press("Escape");
   await expect(settings).toHaveCount(0);
