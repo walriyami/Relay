@@ -437,13 +437,24 @@ function RequestForm({
 
 function CreateRequest({ onClose, onCreated }: { onClose: () => void; onCreated: (r: UploadRequest) => void }) {
   const [busy, setBusy] = useState(false);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
+  const close = () => {
+    active.current = false;
+    onClose();
+  };
   return (
     <Modal
       title="New request"
-      onClose={onClose}
+      onClose={close}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={close}>Cancel</Button>
           <Button variant="primary" type="submit" form="create-request" busy={busy}>
             Create request
           </Button>
@@ -456,10 +467,14 @@ function CreateRequest({ onClose, onCreated }: { onClose: () => void; onCreated:
           setBusy(true);
           try {
             const request = await createRequest({ ...settings, days: days ?? DEFAULTS.linkDays });
+            // The server result still belongs in Requests after dismissal, but this form's
+            // handoff/error/focus must not return or replace a newly opened creation form.
             notifyChange("requests");
-            onCreated(request);
+            if (active.current) onCreated(request);
+          } catch (error) {
+            if (active.current) throw error;
           } finally {
-            setBusy(false);
+            if (active.current) setBusy(false);
           }
         }}
       />
