@@ -23,6 +23,9 @@ Without options, asks for each choice.
   --rollback         Go back to the image that ran before the last redeploy, keeping the data.
   -y, --yes          Don't ask for confirmation.
   -h, --help         Show this help.
+
+Data replacement supports ordinary Docker-managed local volumes only. Volumes with driver
+options or plugin drivers need their storage provider's backup/restore tools.
 EOF
 }
 
@@ -113,8 +116,35 @@ list_saved() {
   note "Delete one with: docker volume rm <name>"
 }
 
+# Only ordinary Docker-managed local volumes have unambiguous backing for this script.
+# Local driver options can bind/mount the same host directory under different names; plugin
+# drivers can alias storage too. Refuse those rather than guessing about their backing.
+volume_path() {
+  local metadata driver options path
+  metadata=$(docker volume inspect -f '{{.Driver}}|{{len .Options}}|{{.Mountpoint}}' "$1") \
+    || fail "Cannot inspect volume $1. Nothing has been copied."
+  IFS='|' read -r driver options path <<< "$metadata"
+  [[ $driver == local && $options == 0 && $path == /* && $path != / ]] \
+    || fail "Volume $1 is not an ordinary Docker-managed local volume. Use your storage provider's backup/restore tools."
+  printf '%s\n' "${path%/}"
+}
+
+check_copy_volumes() {
+  [[ $1 != "$2" ]] || fail "Cannot copy volume $1 onto itself. Choose a different saved volume."
+  local source_path target_path
+  source_path=$(volume_path "$1") || return 1
+  if volume_exists "$2"; then
+    target_path=$(volume_path "$2") || return 1
+    [[ $source_path != "$target_path" && $source_path != "$target_path/"* && $target_path != "$source_path/"* ]] \
+      || fail "Volumes $1 and $2 have overlapping storage. Use distinct Docker-managed local volumes."
+  fi
+}
+
 copy_volume() { # copy_volume <from> <to>: the stack must be stopped.
-  docker volume create "$2" >/dev/null
+  check_copy_volumes "$1" "$2" || return 1
+  docker volume create "$2" >/dev/null || return 1
+  # Recheck the created destination before running the destructive payload.
+  check_copy_volumes "$1" "$2" || return 1
   docker run --rm --user 0 --network none -v "$1:/from:ro" -v "$2:/to" --entrypoint sh "$image" \
     -c 'find /to -mindepth 1 -delete && cp -a /from/. /to/'
 }
@@ -238,6 +268,13 @@ case $data in
   *) fail "--data must be keep, save, wipe or restore=<volume>." ;;
 esac
 
+# Validate storage before building an image or stopping the service, including resolved "latest".
+if [[ $data == restore=* ]]; then
+  check_copy_volumes "${data#restore=}" "$volume" || exit 1
+elif [[ $data != keep ]] && volume_exists "$volume"; then
+  volume_path "$volume" >/dev/null || exit 1
+fi
+
 case $from in
   commit) ref=HEAD ;;
   working) ref='' ;;
@@ -326,7 +363,9 @@ case $data in
     if volume_exists "$volume"; then
       copy="${saved_prefix}$(date +%Y%m%d-%H%M%S)"
       step "Saving the data to $copy"
-      copy_volume "$volume" "$copy"
+      volume_exists "$copy" && fail "Saved volume $copy already exists; refusing to overwrite it. Relay is stopped."
+      copy_volume "$volume" "$copy" || fail "Backup failed; original data remains in $volume. Relay is stopped. Restart only with the original matching image/build."
+      note "Saved data: $copy. Keep this volume until recovery is verified."
       docker volume rm "$volume" >/dev/null
     fi
     ;;
@@ -345,10 +384,17 @@ case $data in
     if volume_exists "$volume"; then
       copy="${saved_prefix}$(date +%Y%m%d-%H%M%S)"
       step "Saving the current data to $copy first"
-      copy_volume "$volume" "$copy"
+      volume_exists "$copy" && fail "Saved volume $copy already exists; refusing to overwrite it. Relay is stopped."
+      copy_volume "$volume" "$copy" || fail "Backup failed; original data remains in $volume. Relay is stopped. Restart only with the original matching image/build."
+      note "Saved data: $copy. Keep this volume until recovery is verified."
     fi
     step "Restoring $source_volume"
-    copy_volume "$source_volume" "$volume"
+    if ! copy_volume "$source_volume" "$volume"; then
+      warn "Relay is stopped. Do not start it with the partially restored data."
+      warn "Restore again from ${copy:-$source_volume} using its matching build:"
+      warn "  scripts/redeploy.sh --from <matching-ref> --data restore=${copy:-$source_volume}"
+      fail "Restore failed. The source $source_volume and any completed saved copy remain available."
+    fi
     ;;
 esac
 
