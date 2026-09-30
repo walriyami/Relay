@@ -159,6 +159,89 @@ test("real 300-page PDF retains a bounded canvas window through traversal, resiz
 test("all visible short wide PDF pages render within the shared pixel budget", async ({ page }) => {
   await monitorCanvases(page);
   await page.route("**/fixture.pdf", (route) =>
+    route.fulfill({ contentType: "application/pdf", body: longPdf(300, 600, 200) }),
+  );
+  await page.goto(fixture);
+  const visiblePages = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('.preview-pdf[role="document"]');
+      if (!root) return [];
+      const bounds = root.getBoundingClientRect();
+      return Array.from(root.querySelectorAll<HTMLElement>(".preview-pdf-page"))
+        .filter((box) => {
+          const rect = box.getBoundingClientRect();
+          return rect.bottom > bounds.top && rect.top < bounds.bottom;
+        })
+        .map((box) => {
+          const canvas = box.querySelector("canvas")!;
+          const color = canvas.width
+            ? [
+                ...canvas
+                  .getContext("2d")!
+                  .getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data,
+              ]
+            : [];
+          return { number: Number(box.dataset.page), ready: canvas.dataset.rendered === "true", color };
+        });
+    });
+  const checkVisible = async () => {
+    await expect.poll(async () => (await visiblePages()).length).toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await visiblePages()).every((box) => box.ready && box.color.join() === "51,102,204,255"))
+      .toBe(true);
+  };
+  await checkVisible();
+  expect((await visiblePages())[0].number).toBe(1);
+  for (const number of [150, 300, 1]) {
+    await goToPage(page, number);
+    await checkVisible();
+  }
+  await page.setViewportSize({ width: 600, height: 1100 });
+  await checkVisible();
+  // Taller short/wide pages challenge the same allocation with fewer render jobs.
+  // The thin-strip/high-cardinality case remains separate below.
+  await page.setViewportSize({ width: 1200, height: 6000 });
+  const geometry = await page.evaluate(() => {
+    const root = document.querySelector('.preview-pdf[role="document"]')!;
+    const bounds = root.getBoundingClientRect();
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const boxes = Array.from(root.querySelectorAll<HTMLElement>(".preview-pdf-page")).filter((box) => {
+      const rect = box.getBoundingClientRect();
+      return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    });
+    // Independent fixture geometry: each 600x200-point page at CSS width and DPR,
+    // before the renderer shares or caps its output allocation.
+    return {
+      visible: boxes.length,
+      uncappedPixels: boxes.reduce((sum, box) => {
+        const width = Math.floor(box.clientWidth * dpr);
+        return sum + width * Math.floor(box.clientWidth * dpr * (200 / 600));
+      }, 0),
+    };
+  });
+  expect(geometry.visible).toBeGreaterThan(6);
+  expect(geometry.uncappedPixels).toBeGreaterThan(12_000_000);
+  await test
+    .info()
+    .attach("shared-pixel-geometry.json", { body: JSON.stringify(geometry), contentType: "application/json" });
+  await checkVisible();
+  await test.info().attach("allocation-peaks.json", {
+    body: JSON.stringify(
+      await page.evaluate(() => ({ maxCount: window.canvasProbe.maxCount, maxPixels: window.canvasProbe.maxPixels })),
+    ),
+    contentType: "application/json",
+  });
+  expect(await page.evaluate(() => window.canvasProbe.maxCount)).toBeGreaterThan(6);
+  expect(await page.evaluate(() => window.canvasProbe.maxPixels)).toBeGreaterThan(10_000_000);
+  expect(await page.evaluate(() => window.canvasProbe.maxPixels)).toBeLessThanOrEqual(12_000_000);
+  await page.getByRole("button", { name: "Toggle", exact: true }).click();
+  await expect.poll(() => pixels(page)).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.workersProbe.terminated)).toBe(1);
+});
+
+test("extreme short wide PDF allocation progresses, cancels and completes within a bounded run", async ({ page }) => {
+  await monitorCanvases(page);
+  await page.route("**/fixture.pdf", (route) =>
     route.fulfill({ contentType: "application/pdf", body: longPdf(300, 600, 20) }),
   );
   await page.goto(fixture);
@@ -196,13 +279,64 @@ test("all visible short wide PDF pages render within the shared pixel budget", a
   await checkVisible();
   // Enough visible pages at DPR 2 to exceed 12M pixels without the shared allocation.
   await page.setViewportSize({ width: 1200, height: 6000 });
-  await checkVisible();
+  const began = Date.now();
+  const progress: { elapsedMs: number; visible: number; ready: number }[] = [];
+  const snapshot = async () => {
+    const boxes = await visiblePages();
+    const result = {
+      elapsedMs: Date.now() - began,
+      visible: boxes.length,
+      ready: boxes.filter((box) => box.ready).length,
+    };
+    progress.push(result);
+    return result;
+  };
+  try {
+    // Preserve the original extreme geometry; exact count depends on layout/browser.
+    await expect.poll(async () => (await snapshot()).visible).toBeGreaterThan(100);
+    await expect.poll(async () => (await snapshot()).ready).toBeGreaterThan(0);
+    const beforeClose = await snapshot();
+    expect(beforeClose.ready).toBeLessThan(beforeClose.visible);
+    await page.getByRole("button", { name: "Toggle", exact: true }).click();
+    await expect.poll(() => pixels(page)).toBe(0);
+    await expect.poll(() => page.evaluate(() => window.workersProbe.terminated)).toBe(1);
+    const afterClose = await page.evaluate(() => ({
+      pixels: window.canvasProbe.canvases.reduce((n, canvas) => n + canvas.width * canvas.height, 0),
+      workers: window.workersProbe,
+    }));
+    await test.info().attach("extreme-close.json", {
+      body: JSON.stringify({ beforeClose, afterClose }),
+      contentType: "application/json",
+    });
+    await page.getByRole("button", { name: "Toggle", exact: true }).click();
+    await expect.poll(async () => (await snapshot()).visible).toBeGreaterThan(100);
+    let previous = await snapshot();
+    // Each progress wait retains the original 12-second expectation timeout.
+    // Eventual completion is bounded by the unchanged 180-second test timeout,
+    // not asserted to be a 12-second product latency SLA.
+    while (previous.ready < previous.visible) {
+      await expect.poll(async () => (await snapshot()).ready).toBeGreaterThan(previous.ready);
+      previous = await snapshot();
+      expect(await page.evaluate(() => window.canvasProbe.maxPixels)).toBeLessThanOrEqual(12_000_000);
+    }
+    await checkVisible(); // Every visible page still must be ready and exactly colored.
+  } finally {
+    await test
+      .info()
+      .attach("extreme-progress.json", { body: JSON.stringify(progress), contentType: "application/json" });
+  }
+  await test.info().attach("allocation-peaks.json", {
+    body: JSON.stringify(
+      await page.evaluate(() => ({ maxCount: window.canvasProbe.maxCount, maxPixels: window.canvasProbe.maxPixels })),
+    ),
+    contentType: "application/json",
+  });
   expect(await page.evaluate(() => window.canvasProbe.maxCount)).toBeGreaterThan(6);
   expect(await page.evaluate(() => window.canvasProbe.maxPixels)).toBeGreaterThan(10_000_000);
   expect(await page.evaluate(() => window.canvasProbe.maxPixels)).toBeLessThanOrEqual(12_000_000);
   await page.getByRole("button", { name: "Toggle", exact: true }).click();
   await expect.poll(() => pixels(page)).toBe(0);
-  await expect.poll(() => page.evaluate(() => window.workersProbe.terminated)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.workersProbe.terminated)).toBe(2);
 });
 
 test("native PDF workers with a stalled handshake terminate on close and document startup timeout", async ({
