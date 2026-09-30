@@ -80,7 +80,7 @@ test("a single failed request that the health check clears shows nothing", async
     failures++ ? route.continue() : route.fulfill({ status: 502, contentType: "text/html", body: PROXY_PAGE }),
   );
   await page.getByRole("link", { name: "Links" }).click();
-  await expect(page.getByRole("heading", { name: "Links" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("heading", { name: "Links", level: 1, exact: true })).toBeVisible();
   // The check finds Relay fine, so the page loads again by itself and no bar ever appears.
   await expect.poll(() => failures).toBeGreaterThan(1);
   await expect(page.getByText("Links couldn’t be loaded")).toHaveCount(0);
