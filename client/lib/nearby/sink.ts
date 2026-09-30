@@ -99,6 +99,10 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
   let written = 0;
   let crc = 0;
   let closed = false;
+  let closing: Promise<void> | undefined;
+  let discarded = false;
+  let cleanup: Promise<void> | undefined;
+  const stopped = () => new DOMException("The received file was discarded.", "AbortError");
   return {
     get written() {
       return written;
@@ -113,16 +117,41 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
       crc = crc32(bytes, crc);
     },
     async finish(type, fileName, modified) {
+      if (discarded) throw stopped();
+      closing ??= stream.close();
+      await closing;
       closed = true;
-      await stream.close();
+      if (discarded) {
+        await cleanup;
+        throw stopped();
+      }
       const file = await handle.getFile();
+      if (discarded) {
+        await cleanup;
+        throw stopped();
+      }
       // The stored file under the name it was sent with; its bytes stay on disk.
       return new File([file], fileName, { type, lastModified: modified });
     },
-    async discard() {
-      if (!closed) await stream.abort().catch(() => {});
-      closed = true;
-      await dir.removeEntry(name).catch(() => {});
+    discard() {
+      discarded = true;
+      // Own the stream and entry until a close already under way has settled. Removing an entry
+      // while its writable stream still holds it can fail, leaving cancelled content on disk.
+      cleanup ??= (async () => {
+        await closing?.catch(() => {});
+        if (!closed) await stream.abort().catch(() => {});
+        closed = true;
+        try {
+          await dir.removeEntry(name);
+        } catch {
+          // Retry a transient storage failure once. Persistent failures remain retryable by a
+          // later discard, and the next tab's folder sweep remains the final fallback.
+          await dir.removeEntry(name).catch(() => {
+            cleanup = undefined;
+          });
+        }
+      })();
+      return cleanup;
     },
   };
 }
