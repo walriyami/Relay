@@ -551,7 +551,8 @@ function outControl(r: Out, link: Link, message: Control) {
       );
       break;
     case "cancel":
-      end(r, "cancelled", `${r.t.peerName} stopped it.`);
+      if (message.reason === "space") end(r, "failed", `${r.t.peerName} ran out of room for it.`);
+      else end(r, "cancelled", `${r.t.peerName} stopped it.`);
       break;
     case "done":
       r.t.moved = r.t.bytes;
@@ -1011,7 +1012,9 @@ function receiveEntry(r: In, link: Link, index: number) {
     failed: (error) => {
       r.streams.delete(into);
       if (!isActive(r.t)) return;
-      r.link?.send({ t: "cancel", id: r.t.id });
+      r.link?.send(
+        error instanceof StoreError ? { t: "cancel", id: r.t.id, reason: "space" } : { t: "cancel", id: r.t.id },
+      );
       end(
         r,
         "failed",
@@ -1061,10 +1064,17 @@ async function assembleIn(r: In) {
     r.link?.send({ t: "done", id: r.t.id });
     end(r, "done");
     notify("received", r);
-  } catch {
+  } catch (error) {
     if (!isActive(r.t)) return;
-    r.link?.send({ t: "cancel", id: r.t.id });
-    end(r, "failed", "What arrived couldn’t be put together on this device.");
+    // A browser may count a file against its storage only once it's closed, so room it said it
+    // had can run out at the very end; in a private window it's memory, and that runs out too.
+    const room = error instanceof DOMException && error.name === "QuotaExceededError";
+    r.link?.send(room ? { t: "cancel", id: r.t.id, reason: "space" } : { t: "cancel", id: r.t.id });
+    end(
+      r,
+      "failed",
+      room ? "This device ran out of room for it." : "What arrived couldn’t be put together on this device.",
+    );
     notify("failed", r);
   }
   publish(true);

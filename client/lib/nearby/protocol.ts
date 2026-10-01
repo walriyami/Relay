@@ -32,8 +32,8 @@ export type Control =
    */
   | { t: "accept"; id: string; have: Record<string, number>; stream: number }
   | { t: "decline"; id: string; reason: "declined" | "space" }
-  /** Either side stops the transfer. */
-  | { t: "cancel"; id: string }
+  /** Either side stops the transfer; `space` when the receiver ran out of room for it. */
+  | { t: "cancel"; id: string; reason?: "space" }
   /** The receiver stored everything. */
   | { t: "done"; id: string };
 
@@ -92,6 +92,8 @@ export function controlOf(value: unknown): Control | null {
         ? { t: "decline", id: value.id, reason: value.reason }
         : null;
     case "cancel":
+      // A reason this version doesn't know still stops the transfer.
+      return value.reason === "space" ? { t: "cancel", id: value.id, reason: "space" } : { t: "cancel", id: value.id };
     case "done":
       return { t: value.t, id: value.id };
     default:

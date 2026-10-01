@@ -337,6 +337,16 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
     assert.equal(pc.closed, false);
   });
 
+  await t.test("a receiver that ran out of room says so to the sender", (context) => {
+    const { other, channel } = fixture(context);
+    const id = engine.send(other, [], [], "test");
+    channel.control({ t: "cancel", id, reason: "space" });
+    t.mock.timers.tick(250);
+    const sent = engine.nearbySnapshot().transfers.find((transfer) => transfer.id === id);
+    assert.equal(sent?.state, "failed");
+    assert.match(sent?.reason ?? "", /ran out of room/);
+  });
+
   await t.test("an accept stream range must fit every entry of the transfer", async (context) => {
     const { other, channel } = fixture(context);
     const id = engine.send(other, [{ file: new File(["abcd"], "small.txt"), path: "small.txt" }], [], "text");
@@ -565,6 +575,70 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
       assert.equal(transfer.received, null);
     });
 
+  await t.test("storage running out as the file is finished is reported as no room", async (context) => {
+    // As above: an isolated engine whose Sink fails the way a browser does when the file it closes
+    // doesn't fit after all.
+    const variant = "quota";
+    const key = `relay-nearby-audit-sink-${variant}`;
+    const sink = {
+      written: 0,
+      get stored() {
+        return this.written;
+      },
+      crc: 0,
+      write(bytes: Uint8Array) {
+        this.written += bytes.length;
+        return Promise.resolve();
+      },
+      finish(): Promise<File> {
+        return Promise.reject(
+          new DOMException(
+            "The operation failed because it would cause the application to exceed its storage quota.",
+            "QuotaExceededError",
+          ),
+        );
+      },
+      discard: () => Promise.resolve(),
+    };
+    Reflect.set(globalThis, Symbol.for(key), { open: () => Promise.resolve(sink) });
+    context.after(() => Reflect.deleteProperty(globalThis, Symbol.for(key)));
+    const source = `const fixture = Reflect.get(globalThis, Symbol.for(${JSON.stringify(key)}));
+      export const roomFor = async () => true;
+      export const openSink = () => fixture.open();`;
+    const adapter = `data:text/javascript,${encodeURIComponent(source)}`;
+    const sinkHook = registerHooks({
+      resolve(specifier, resolution, nextResolve) {
+        if (specifier === "./sink" && resolution.parentURL?.includes(`?sink=${variant}`))
+          return nextResolve(adapter, resolution);
+        return nextResolve(specifier, resolution);
+      },
+    });
+    context.after(() => sinkHook.deregister());
+    const isolated = (await import(`../client/lib/nearby/engine.ts?sink=${variant}`)) as typeof Engine;
+    context.after(() => isolated.clearEngine());
+    isolated.startEngine({ self: "isolated-self", signal: () => Promise.resolve() });
+    const other = peer("guest");
+    isolated.setDirectory([other]);
+    isolated.receiveSignal(other.id, { kind: "offer", session: "sink-session", sdp: "local fixture" });
+    const pc = LocalPeerConnection.created.at(-1)!;
+    pc.channel.onopen?.();
+    pc.channel.control(offer("quota"));
+    await isolated.accept("quota");
+    await setImmediate();
+    pc.channel.bytes(0, 0, new TextEncoder().encode("test"));
+    for (let i = 0; i < 5; i++) await setImmediate();
+    t.mock.timers.tick(250);
+    const transfer = isolated.nearbySnapshot().transfers[0];
+    assert.equal(transfer.state, "failed");
+    assert.match(transfer.reason, /ran out of room/);
+    assert.ok(
+      pc.channel.sent.some(
+        (frame) => typeof frame === "string" && (JSON.parse(frame) as { reason?: string }).reason === "space",
+      ),
+      "the sender hears why",
+    );
+  });
+
   for (const have of [{ 0: 5 }, { 99: 0 }, { text: 0 }])
     await t.test(`accept offsets must describe this transfer: ${JSON.stringify(have)}`, async (context) => {
       const { other, channel } = fixture(context);
@@ -613,5 +687,12 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
       { t: "done", id: "test" },
     ])
       assert.ok(controlOf(message));
+    assert.deepEqual(controlOf({ t: "cancel", id: "test", reason: "space" }), {
+      t: "cancel",
+      id: "test",
+      reason: "space",
+    });
+    // A newer peer's reason still stops the transfer.
+    assert.deepEqual(controlOf({ t: "cancel", id: "test", reason: "later" }), { t: "cancel", id: "test" });
   });
 });
