@@ -24,6 +24,8 @@ async function save(page: Page, file: { name: string; mimeType: string; buffer: 
   return card;
 }
 
+// Reuse the authorized device cookie to avoid login-rate-limit waits. Every test
+// still receives a fresh browser context, including an independent module registry.
 const reader = (page: Page) => page.locator(".pdf-reader");
 async function ready(page: Page, text: string) {
   await expect(reader(page).locator(".textLayer")).toContainText(text);
@@ -32,7 +34,7 @@ async function ready(page: Page, text: string) {
 
 for (const name of ["cjk-cmap.pdf", "jpx-image.pdf", "ccitt-scan.pdf"]) {
   test(`matching PDF.js resources preserve ${name} content`, async ({ page }) => {
-    await signedIn(page, `PDF content ${name}`);
+    await signedIn(page, "PDF reader review");
     const resources: string[] = [];
     page.on("request", (request) => {
       if (request.url().includes("/assets/pdfjs-")) resources.push(request.url());
@@ -80,7 +82,7 @@ for (const name of ["cjk-cmap.pdf", "jpx-image.pdf", "ccitt-scan.pdf"]) {
 
 for (const name of ["cjk-cmap.pdf", "jpx-image.pdf", "ccitt-scan.pdf"]) {
   test(`failed PDF resources show an error and retry restores ${name}`, async ({ page, context }) => {
-    await signedIn(page, `PDF resource retry ${name}`);
+    await signedIn(page, "PDF reader review");
     const assets = "**/assets/pdfjs-*/**";
     await context.route(assets, (route) => route.fulfill({ status: 503, body: "Synthetic resource unavailable" }));
     await save(page, await fixture(name));
@@ -109,7 +111,7 @@ for (const name of ["cjk-cmap.pdf", "jpx-image.pdf", "ccitt-scan.pdf"]) {
 }
 
 test("Fit width follows the independently reproduced embedded-font rotation", async ({ page }) => {
-  await signedIn(page, "PDF embedded rotation");
+  await signedIn(page, "PDF reader review");
   await save(page, await fixture("embedded-rotated.pdf"));
   await ready(page, "Rotation fixture page 1");
   await reader(page).getByRole("button", { name: "Next page", exact: true }).click();
@@ -129,7 +131,7 @@ test("Fit width follows the independently reproduced embedded-font rotation", as
 });
 
 test("a failed PDF reader chunk retries and reopens without reloading Relay", async ({ page, context }) => {
-  await signedIn(page, "PDF chunk retry");
+  await signedIn(page, "PDF reader review");
   const chunk = /\/assets\/PdfReader-[^/]+\.js(?:\?.*)?$/;
   await page.route(chunk, (route) => route.abort());
   const card = await save(page, readingPdf("reader-chunk.pdf"));
@@ -156,7 +158,7 @@ test("a failed PDF reader chunk retries and reopens without reloading Relay", as
 });
 
 test("fit follows actual rotated and mixed page sizes while custom zoom is preserved", async ({ page }) => {
-  await signedIn(page, "PDF mixed sizes");
+  await signedIn(page, "PDF reader review");
   await save(page, mixedPdf());
   const input = reader(page).getByRole("spinbutton", { name: "PDF page" });
   const stage = reader(page).locator(".pdf-reader-scroll");
@@ -186,20 +188,56 @@ test("fit follows actual rotated and mixed page sizes while custom zoom is prese
   await expect(reader(page).getByRole("combobox", { name: "Fit PDF" })).toHaveValue("");
 });
 
-test("tagged headings and paragraphs remain semantic after rendering and zoom", async ({ page }) => {
-  await signedIn(page, "PDF tagged semantics");
+test("tagged headings and paragraphs remain semantic after rendering and zoom", async ({ page, browserName }) => {
+  await signedIn(page, "PDF reader review");
   await save(page, await fixture("tagged.pdf"));
   await ready(page, "Tagged heading fixture");
   const document = reader(page).getByRole("document");
   await expect.poll(() => document.ariaSnapshot()).toContain('heading "Tagged heading fixture" [level=1]');
   await expect.poll(() => document.ariaSnapshot()).toContain("paragraph: Accessible paragraph in reading order");
+  const line = reader(page).locator(".textLayer").getByText("Tagged heading fixture", { exact: true });
+  const bounds = (await line.boundingBox())!;
+  await page.mouse.move(bounds.x + 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width - 2, bounds.y + bounds.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => getSelection()?.toString())).toContain("Tagged heading fixture");
+  async function nativeSemantics() {
+    if (browserName !== "chromium") return;
+    const session = await page.context().newCDPSession(page);
+    await session.send("Accessibility.enable");
+    type AXNode = { nodeId: string; role?: { value: string }; name?: { value: string }; childIds?: string[] };
+    const tree = (await session.send("Accessibility.getFullAXTree")) as { nodes: AXNode[] };
+    const nodes = new Map(tree.nodes.map((node) => [node.nodeId, node]));
+    const text = (id: string): string => {
+      const node = nodes.get(id);
+      return `${node?.name?.value || ""} ${(node?.childIds || []).map(text).join(" ")}`;
+    };
+    expect(
+      tree.nodes.some((node) => node.role?.value === "heading" && node.name?.value === "Tagged heading fixture"),
+    ).toBe(true);
+    expect(
+      tree.nodes.some(
+        (node) =>
+          node.role?.value === "paragraph" && text(node.nodeId).includes("Accessible paragraph in reading order"),
+      ),
+    ).toBe(true);
+    await test
+      .info()
+      .attach("native-tagged-semantics", { body: JSON.stringify(tree), contentType: "application/json" });
+    await session.detach();
+  }
+  // Playwright's DOM-based ARIA snapshot alone misses Chromium's display:contents
+  // ownership failure: the actual browser AX tree must carry the tagged text too.
+  await nativeSemantics();
   await reader(page).getByRole("button", { name: "Zoom in", exact: true }).click();
   await expect.poll(() => document.ariaSnapshot()).toContain('heading "Tagged heading fixture" [level=1]');
   await expect.poll(() => document.ariaSnapshot()).toContain("paragraph: Accessible paragraph in reading order");
+  await nativeSemantics();
 });
 
 test("clearing PDF search stays clear after PDF.js finishes its close event", async ({ page }) => {
-  await signedIn(page, "PDF cleared search");
+  await signedIn(page, "PDF reader review");
   await save(page, readingPdf("reader-search-clear.pdf"));
   await ready(page, "Invoice page 1 END");
   const search = reader(page).getByRole("searchbox", { name: "Find in PDF" });

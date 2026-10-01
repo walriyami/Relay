@@ -57,6 +57,12 @@
 .pdf-reader-scroll .pdfViewer .page {
   margin: 8px auto;
 }
+/* Chromium cannot aria-own display:contents targets. Static block wrappers give
+   tagged content a layout object while text keeps the textLayer as its containing block. */
+.pdf-reader .textLayer .markedContent {
+  display: block;
+  position: static;
+}
 .pdf-reader-loading {
   position: absolute;
   inset: 0;
