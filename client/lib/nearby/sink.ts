@@ -6,12 +6,20 @@ import { crc32 } from "./zip";
 // and a tab starting up clears the folders no open tab holds.
 
 const ROOT = "relay-nearby";
+/**
+ * Bytes gathered before each write to disk. Every write is a round trip to the browser's storage, so
+ * one per frame (64 KiB) holds the receiver back on a phone; while a run is being written, the next is
+ * gathered.
+ */
+const RUN_BYTES = 1024 * 1024;
 const LOCK = "relay-nearby-files:";
 
 export interface Sink {
-  /** Bytes stored so far. */
+  /** Bytes taken so far: what the sender needn't send again. */
   readonly written: number;
-  /** CRC-32 of the bytes stored so far. */
+  /** Of those, the bytes the browser has on disk, and so counts in its storage usage. */
+  readonly stored: number;
+  /** CRC-32 of the bytes taken so far. */
   readonly crc: number;
   write(bytes: Uint8Array): Promise<void>;
   /** The whole entry, once every byte is written. */
@@ -98,28 +106,58 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
   const handle = await dir.getFileHandle(name, { create: true });
   const stream = await handle.createWritable();
   let written = 0;
+  let stored = 0;
   let crc = 0;
+  let run = new Uint8Array(RUN_BYTES);
+  let filled = 0;
+  /** The run being written; a failure surfaces on the next write, or on finishing. */
+  let writing: Promise<void> = Promise.resolve();
   let closed = false;
   let closing: Promise<void> | undefined;
   let discarded = false;
   let cleanup: Promise<void> | undefined;
   const stopped = () => new DOMException("The received file was discarded.", "AbortError");
+  /** Starts writing the gathered run, once the one before it is written. */
+  const flush = async () => {
+    await writing;
+    if (!filled) return;
+    // Exactly the bytes, in a buffer of their own: some OPFS writers consume a view's whole buffer.
+    const full = filled === RUN_BYTES ? run : run.slice(0, filled);
+    run = new Uint8Array(RUN_BYTES);
+    filled = 0;
+    writing = stream.write(full).then(() => {
+      stored += full.byteLength;
+    });
+    // Seen when next awaited; until then it isn't an unhandled rejection.
+    writing.catch(() => {});
+  };
   return {
     get written() {
       return written;
+    },
+    get stored() {
+      return stored;
     },
     get crc() {
       return crc;
     },
     async write(bytes) {
-      // Own exactly the view: some OPFS writers consume its whole backing buffer.
-      await stream.write(new Uint8Array(bytes));
-      written += bytes.byteLength;
       crc = crc32(bytes, crc);
+      // Copied into the run: the caller's view may share a buffer with other bytes.
+      for (let at = 0; at < bytes.byteLength;) {
+        const take = Math.min(RUN_BYTES - filled, bytes.byteLength - at);
+        run.set(bytes.subarray(at, at + take), filled);
+        filled += take;
+        at += take;
+        if (filled === RUN_BYTES) await flush();
+      }
+      written += bytes.byteLength;
     },
     async finish(type, fileName, modified) {
       if (discarded) throw stopped();
-      closing ??= stream.close();
+      closing ??= flush()
+        .then(() => writing)
+        .then(() => stream.close());
       await closing;
       closed = true;
       if (discarded) {
@@ -167,6 +205,10 @@ function memorySink(): Sink {
   };
   return {
     get written() {
+      return written;
+    },
+    // Only files written to disk claim space ahead, so here everything taken counts as kept.
+    get stored() {
       return written;
     },
     get crc() {

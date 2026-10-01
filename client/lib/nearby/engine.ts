@@ -921,7 +921,10 @@ function diskOwed() {
   let owed = 0;
   for (const r of records.values()) {
     if (r.kind !== "in" || !r.disk || !(isActive(r.t) || r.admitting)) continue;
-    const stored = Object.entries(haveOf(r)).reduce((n, [entry, b]) => (entry === TEXT ? n : n + b), 0);
+    // Bytes taken but not yet on disk aren't in the browser's usage, so they're still owed.
+    let stored = 0;
+    for (const [entry, sink] of r.sinks) if (entry !== TEXT && !r.done.has(entry)) stored += sink.stored;
+    for (const entry of r.done) if (entry !== TEXT) stored += r.t.files[Number(entry)].size;
     owed += Math.max(0, r.disk - stored);
   }
   return owed;

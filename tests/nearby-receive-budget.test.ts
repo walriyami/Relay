@@ -426,6 +426,9 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
       // An adapter holds one storage await; actual admission and transfer framing remain intact.
       const sink = {
         written: 0,
+        get stored() {
+          return this.written;
+        },
         crc: 0,
         async write(bytes: Uint8Array) {
           if (stage === "write") {

@@ -32,6 +32,12 @@ test("crc32 matches zlib's, whole or in pieces", () => {
   assert.equal(crc32(data), zlibCrc32(data));
   assert.equal(crc32(data.subarray(40_000), crc32(data.subarray(0, 40_000))), zlibCrc32(data));
   assert.equal(crc32(new Uint8Array()), 0);
+  // Every length around the sixteen-byte steps, from every alignment.
+  for (let start = 0; start < 17; start++)
+    for (let length = 0; length < 50; length++) {
+      const piece = data.subarray(start, start + length);
+      assert.equal(crc32(piece), zlibCrc32(piece));
+    }
 });
 
 test("an archive of files and folders that unzip checks and reads back", async (t) => {

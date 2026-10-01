@@ -499,6 +499,9 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
         get written() {
           return written;
         },
+        get stored() {
+          return written;
+        },
         crc: 0,
         async write(bytes: Uint8Array) {
           await wait("write");
