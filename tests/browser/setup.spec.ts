@@ -140,6 +140,64 @@ test("a first start goes from welcome to the first invitation, then into Relay",
   await expect(composer(page)).toBeVisible();
 });
 
+test("first-start choices cannot be saved while free space is still being checked", async ({ page }) => {
+  let release = () => {};
+  const checked = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`${relay.url}${api.admin.overview.path}`, async (route) => {
+    await checked;
+    await route.continue();
+  });
+  try {
+    await createAccount(page);
+    const save = page.getByRole("button", { name: "Save and continue" });
+    await expect(page.getByRole("status").filter({ hasText: "Checking free space" })).toBeVisible();
+    await expect(save).toBeDisabled();
+
+    release();
+    await expect(save).toBeEnabled();
+    await save.click();
+    await skipToRelay(page);
+  } finally {
+    release();
+  }
+});
+
+test("a failed free-space check can be retried before saving first-start choices", async ({ page }) => {
+  let attempts = 0;
+  let release = () => {};
+  const checked = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`${relay.url}${api.admin.overview.path}`, async (route) => {
+    if (++attempts === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Free-space check unavailable for this test." }),
+      });
+    } else {
+      await checked;
+      await route.continue();
+    }
+  });
+  try {
+    await createAccount(page);
+    const save = page.getByRole("button", { name: "Save and continue" });
+    const error = page.getByRole("alert").filter({ hasText: "Free space couldn’t be checked" });
+    await expect(error).toBeVisible();
+    await expect(save).toBeDisabled();
+
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Checking free space" })).toBeVisible();
+    await expect(save).toBeDisabled();
+    release();
+    await expect(save).toBeEnabled();
+    await expect(error).toHaveCount(0);
+    await save.click();
+    await skipToRelay(page);
+  } finally {
+    release();
+  }
+});
+
 test("closing the tab after creating the account picks up where it left off", async ({ page, browser }) => {
   await createAccount(page);
   await page.reload();

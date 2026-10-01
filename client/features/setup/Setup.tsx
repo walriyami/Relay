@@ -348,6 +348,7 @@ function ChoicesStep({ me, setMe, resumed, onSaved }: { me: Me; setMe: SetMe; re
       setMe={setMe}
       resumed={resumed}
       storage={storage}
+      ready={disk.state === "ready" && draft !== null}
       check={() => {
         if (disk.state !== "ready") return false;
         if (capacity !== null) return true;

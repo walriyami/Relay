@@ -15,6 +15,7 @@ export function YoursStep({
   setMe,
   resumed,
   storage,
+  ready = true,
   check,
   finish,
   onSaved,
@@ -25,6 +26,8 @@ export function YoursStep({
   resumed: boolean;
   /** The last line of the card: how much space there is. */
   storage: ReactNode;
+  /** Required information is available; keep saving disabled while it loads or needs a retry. */
+  ready?: boolean;
   /** Whether what `storage` asks is ready to save; false once it has said why not. */
   check?: () => boolean;
   /** Runs after the choices are saved, before moving on. */
@@ -42,7 +45,7 @@ export function YoursStep({
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-    if (check && !check()) return;
+    if (!ready || (check && !check())) return;
     // Only what changed is sent; choosing nothing new is fine too.
     const body = {
       ...(name.trim() !== (me.user.name ?? "") && { name: name.trim() || null }),
@@ -141,7 +144,7 @@ export function YoursStep({
             {error}
           </p>
         )}
-        <Button type="submit" variant="primary" className="setup-cta" busy={busy}>
+        <Button type="submit" variant="primary" className="setup-cta" busy={busy} disabled={!ready}>
           Save and continue
         </Button>
       </form>
