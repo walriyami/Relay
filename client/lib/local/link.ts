@@ -22,6 +22,11 @@ export type LinkState = "off" | "connecting" | "ready" | "unavailable";
 const CONNECT_TIMEOUT_MS = 8000;
 /** Waits after tries that failed, or connections that dropped, in a row. */
 const BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 300_000];
+/**
+ * A connection that lost its path gets this long to find it again, as Wi-Fi roaming or a phone
+ * saving power can take it away for a moment; requests on it wait meanwhile, then go the usual way.
+ */
+const RECOVER_MS = 6000;
 /** A hidden tab lets its connection go after this long, so idle tabs don't hold the helper's. */
 const HIDDEN_MS = 60_000;
 
@@ -44,6 +49,7 @@ let drops = 0;
 let due = 0;
 let retry: ReturnType<typeof setTimeout> | undefined;
 let sleep: ReturnType<typeof setTimeout> | undefined;
+let recover: ReturnType<typeof setTimeout> | undefined;
 /** Requests on the connection now; a hidden tab keeps it while any are running. */
 let busy = 0;
 const listeners = new Set<() => void>();
@@ -87,6 +93,7 @@ export function stopLink() {
 }
 
 function teardown() {
+  clearTimeout(recover);
   pending?.close();
   pending = null;
   const old = link;
@@ -134,10 +141,12 @@ async function connect() {
       channel,
       {
         control: (message) => exchanges?.control(message),
-        // Losing it for a moment is losing it: requests fall back, and the next try follows.
         state: (now) => {
+          clearTimeout(recover);
           if (now === "failed") exchanges?.close();
-          if (now !== "connected" && link?.lanes === lanes) lost();
+          if (link?.lanes !== lanes) return;
+          if (now === "failed") lost();
+          else if (now === "disconnected") recover = setTimeout(() => link?.lanes === lanes && lost(), RECOVER_MS);
         },
       },
       { maxMessage: LOCAL.messageChars, sdpBytes: LOCAL.offerBytes },
