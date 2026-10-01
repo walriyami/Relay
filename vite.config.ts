@@ -4,6 +4,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants, gzip } from "node:zlib";
+import { pdfAssets } from "./scripts/pdf-assets.ts";
 
 /**
  * Stores Brotli (.br) and gzip (.gz) copies of the built text files, compressed once at the highest
@@ -50,8 +51,25 @@ function precompress(): Plugin {
   };
 }
 
+/** Recovery needs an import URL even when a browser omits failed Resource Timing entries. */
+function lazyChunks(): Plugin {
+  return {
+    name: "relay-lazy-chunks",
+    generateBundle(_, bundle) {
+      const chunks = Object.values(bundle)
+        .filter((file) => file.type === "chunk" && ["PdfReader", "SettingsPage", "AdminPage"].includes(file.name))
+        .map((file) => [file.name, `/${file.fileName}`]);
+      this.emitFile({
+        type: "asset",
+        fileName: "assets/page-chunks.json",
+        source: JSON.stringify(Object.fromEntries(chunks)),
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), precompress()],
+  plugins: [react(), pdfAssets(), lazyChunks(), precompress()],
   server: {
     port: 5178,
     proxy: {
