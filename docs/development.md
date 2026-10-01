@@ -44,6 +44,8 @@ Tests never touch real data. Every instance uses a new temporary directory and g
 
 These scripts exercise Relay at a scale that's too slow for every commit. Each one uses disposable storage and generated content.
 
+`verify:scale` also requires Python 3 (`python3`) for its independent ZIP archive validation. Browser verification needs the Playwright browser installation, and container verification needs Docker Engine and Docker Compose.
+
 | Command                                                  | What it checks                                                                                                                                                                                                   |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run verify:scale`                                   | Uploads a 2 GiB file with a server restart halfway through, then checks the download's SHA-256. Uploads 10,000 files and checks every ZIP path and hash.                                                         |
