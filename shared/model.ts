@@ -514,9 +514,9 @@ export type ActivityEvent =
   | { kind: "link"; linkId: Id; itemId: Id; item: string; action: "opened" | "downloaded"; device: string };
 export type ActivityKind = ActivityEvent["kind"];
 /** `self`: the device reading the feed caused it, so it is never news there. */
-export type ActivityEntry = ActivityEvent & { id: Id; created: Time; self: boolean };
-/** The newest entries the member wants to see, and until when any device of theirs has seen them. */
-export type ActivityFeed = { entries: ActivityEntry[]; seen: Time };
+export type ActivityEntry = ActivityEvent & { id: Id; sequence: number; created: Time; self: boolean };
+/** Newest by durable insertion sequence; `seen` is the account's acknowledged sequence, not a time. */
+export type ActivityFeed = { entries: ActivityEntry[]; seen: number };
 export const ACTIVITY_GROUPS: Record<ActivityKind, ActivityGroup> = {
   signin: "security",
   password: "security",

@@ -50,9 +50,9 @@ export function registerActivity(app: FastifyInstance, ctx: Context) {
     const kinds = (Object.keys(ACTIVITY_GROUPS) as ActivityKind[]).filter((kind) => wanted[ACTIVITY_GROUPS[kind]]);
     const entries = kinds.length
       ? ctx.db
-          .all<{ id: string; created: number; by_device: string | null; data: string }>(
-            `SELECT id, created, by_device, data FROM activity WHERE owner = ? AND kind IN (${kinds.map(() => "?").join(", ")})
-             ORDER BY created DESC, id DESC LIMIT ?`,
+          .all<{ id: string; sequence: number; created: number; by_device: string | null; data: string }>(
+            `SELECT id, sequence, created, by_device, data FROM activity WHERE owner = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+             ORDER BY sequence DESC LIMIT ?`,
             member.userId,
             ...kinds,
             ACTIVITY_LIMIT,
@@ -60,6 +60,7 @@ export function registerActivity(app: FastifyInstance, ctx: Context) {
           .map((row): ActivityEntry => ({
             ...(JSON.parse(row.data) as ActivityEvent),
             id: row.id,
+            sequence: row.sequence,
             created: row.created,
             self: row.by_device === member.deviceId,
           }))
@@ -67,9 +68,10 @@ export function registerActivity(app: FastifyInstance, ctx: Context) {
     return { entries, seen: user.activity_seen };
   });
 
-  // Seeing the feed on one device marks it seen on all of them. Never moves back, nor past now.
+  // Explicitly read through a returned sequence on every device. Never back or beyond recorded events.
   route(app, ctx, api.activity.seen, ({ member, body }) => {
-    const until = Math.min(body.until, Date.now());
+    const latest = ctx.db.value<number>("SELECT MAX(sequence) FROM activity WHERE owner = ?", member.userId) ?? 0;
+    const until = Math.min(body.until, latest);
     if (
       ctx.db.run("UPDATE users SET activity_seen = ? WHERE id = ? AND activity_seen < ?", until, member.userId, until)
         .changes

@@ -117,12 +117,18 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     await expect(waiting).toHaveCount(1);
     await expect(waiting).toContainText(`${second}.txt`);
     await expect(waiting).toContainText(`From ${laptop} · `);
+    // Reading account history is explicit and never answers a waiting delivery.
+    const markRead = activity.getByRole("button", { name: "Mark all as read" });
+    if (await markRead.isVisible()) await markRead.click();
+    await expect(waiting).toHaveCount(1);
     const download = phone.page.waitForEvent("download");
     await waiting.getByRole("button", { name: "Accept" }).click();
     expect((await download).suggestedFilename()).toBe(`${second}.txt`);
     await expect(activity.getByRole("region", { name: "Waiting for you" })).toHaveCount(0);
     await expect(
-      activity.getByRole("region", { name: "Recent activity" }).getByText(endingWith(`“${second}.txt” from ${laptop}`)),
+      activity
+        .getByRole("region", { name: "Received on this device" })
+        .getByText(endingWith(`“${second}.txt” from ${laptop}`)),
     ).toBeVisible();
     await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
     await expect(phone.page).toHaveTitle("Relay");
@@ -178,8 +184,10 @@ test("the Activity popup sits directly under its bell", async ({ page }) => {
   expect(p.y - (b.y + b.height)).toBeLessThanOrEqual(10);
   expect(p.x).toBeLessThanOrEqual(b.x + b.width);
   expect(p.x + p.width).toBeGreaterThanOrEqual(b.x);
-  // Opening it sees everything in it, on every device of the account.
+  // Opening preserves unread history; the member chooses when to mark it read.
   await expect(popover.getByRole("region", { name: "Recent activity" })).toContainText("signed in");
+  const markRead = popover.getByRole("button", { name: "Mark all as read" });
+  if (await markRead.isVisible()) await markRead.click();
   await expect(button).toHaveAccessibleName("Activity");
   await page.keyboard.press("Escape");
   await expect(popover).toHaveCount(0);
