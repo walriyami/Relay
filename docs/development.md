@@ -54,6 +54,8 @@ These scripts exercise Relay at a scale that's too slow for every commit. Each o
 
 Each script's header comment lists its options, for example `--size 80MiB --files 300` for a quick run.
 
+`npm run bench:transfers` measures Direct transfers, Nearby and plain HTTP the way they run on real devices: each browser and the server in a container of its own, sending over links shaped like good, typical and weak Wi-Fi, with phones given one CPU. Numbers from one computer talking to itself only show the best case, so judge changes to either path with this. It needs Docker; `--source <checkout>` measures another checkout, such as `main`, to compare with, and results also go to `bench-results.jsonl`. A transfer that doesn't finish leaves each page's text, console and a screenshot in `bench-failures/`.
+
 ## Conventions
 
 - **One API contract.** Add or change endpoints in `shared/api.ts` first. The server routes and client calls pick up its types.

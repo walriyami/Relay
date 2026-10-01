@@ -1,0 +1,12 @@
+.git
+node_modules
+dist
+.data
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+.claude
+work
+playwright-report
+test-results

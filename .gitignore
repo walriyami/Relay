@@ -26,3 +26,7 @@ test-results/
 
 # Claude Code session files
 .claude/
+
+# Transfer benchmarks (scripts/bench-transfers.ts)
+bench-results.jsonl
+bench-failures/
