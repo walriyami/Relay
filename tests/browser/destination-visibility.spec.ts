@@ -4,7 +4,7 @@ import {
   destinations,
   fileInput,
   recordWrites,
-  isTransferWrite,
+  isBackgroundWrite,
   signedIn,
   textFile,
   writeText,
@@ -34,7 +34,7 @@ test("empty destinations stay discoverable across mobile and desktop and never s
       await action.press("Space");
     }
   }
-  expect(writes.filter(isTransferWrite)).toEqual([]);
+  expect(writes.filter((write) => !isBackgroundWrite(write))).toEqual([]);
   await expect(page.locator(".transfer")).toHaveCount(0);
 
   await page.setViewportSize({ width: 393, height: 852 });
@@ -58,13 +58,13 @@ test("empty destinations stay discoverable across mobile and desktop and never s
   await expect(save).toBeDisabled();
   await expect(link).toBeVisible();
   await expect(link).toBeDisabled();
-  expect(writes.filter(isTransferWrite)).toEqual([]);
+  expect(writes.filter((write) => !isBackgroundWrite(write))).toEqual([]);
 
   // Positive control: the same observer must detect a real file upload.
   await fileInput(page).setInputFiles(textFile("destination-positive.txt"));
   await save.click();
   await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
-  expect(writes.filter(isTransferWrite)).toContain("POST /api/transfers");
+  expect(writes).toContain("POST /api/transfers");
   expect(writes.some((write) => /^PATCH \/uploads\//.test(write))).toBe(true);
   expect(writes.some((write) => /^POST \/api\/transfers\/[^/]+\/complete$/.test(write))).toBe(true);
 });

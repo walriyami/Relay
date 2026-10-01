@@ -10,7 +10,7 @@ import {
   fileInput,
   png,
   recordWrites,
-  isTransferWrite,
+  isBackgroundWrite,
   selected,
   signedIn,
   textFile,
@@ -28,18 +28,6 @@ test.beforeEach(async ({ page }) => {
 
 test("choosing files never uploads; picks accumulate until a destination is clicked", async ({ page }) => {
   const writes = pageWrites.get(page)!;
-  expect(isTransferWrite("POST /api/nearby/presence")).toBe(false);
-  for (const write of [
-    "POST /api/transfers",
-    "PATCH /uploads/test-id",
-    "DELETE /api/uploads/test-id",
-    "POST /api/transfers/test-id/complete",
-    "POST /api/r/token/start",
-    "POST /api/r/token/transfers",
-    "POST /api/links",
-    "POST /api/deliveries",
-  ])
-    expect(isTransferWrite(write), write).toBe(true);
   const presence = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/nearby/presence" && response.request().method() === "POST",
   );
@@ -69,12 +57,15 @@ test("choosing files never uploads; picks accumulate until a destination is clic
   await expect(page.locator("textarea")).toHaveCount(1);
   await writeText(page, "one message for the whole share");
   await page.waitForTimeout(1500);
-  expect(writes.filter(isTransferWrite), "nothing is uploaded before a destination is chosen").toEqual([]);
+  expect(
+    writes.filter((write) => !isBackgroundWrite(write)),
+    "nothing is uploaded before a destination is chosen",
+  ).toEqual([]);
 
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   const card = page.locator(".transfer").first();
   await expect(card).toContainText("Saved to Files");
-  expect(writes.filter(isTransferWrite)).toContain("POST /api/transfers");
+  expect(writes).toContain("POST /api/transfers");
   expect(writes.some((write) => /^PATCH \/uploads\//.test(write))).toBe(true);
   expect(writes.some((write) => /^POST \/api\/transfers\/[^/]+\/complete$/.test(write))).toBe(true);
   // The result replaces the picks inside the drop box; the draft is cleared.

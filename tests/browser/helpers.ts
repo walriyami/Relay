@@ -116,11 +116,8 @@ export function textFile(name: string, text = "hello from relay\n") {
   return { name, mimeType: "text/plain", buffer: Buffer.from(text) };
 }
 
-// Transfer preparation, payload writes and destination side effects; presence is background work.
-export const isTransferWrite = (write: string) =>
-  /^\S+ \/(?:uploads(?:\/|$)|api\/(?:transfers|uploads|links|deliveries)(?:\/|$)|api\/r\/[^/]+\/(?:start|transfers)(?:\/|$))/.test(
-    write,
-  );
+// Writes the page makes on its own: saying it's present for Nearby. Any other write counts.
+export const isBackgroundWrite = (write: string) => write === "POST /api/nearby/presence";
 
 // Records every write request the page makes, so tests can prove nothing was uploaded.
 export function recordWrites(page: Page) {
