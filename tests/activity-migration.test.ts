@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,7 @@ test("exact v1 upgrades preserve all existing rows, account data and saved bytes
   const seedRoot = join(root, "seed");
   const target = join(root, "existing-v1");
   let instance: Instance | undefined;
+  let originalBlob: number | undefined;
   try {
     // Populate ordinary data using the actual API, then import its rows into an independent v1
     // fixture. The migration never sees the seed directory or replaces an existing database.
@@ -135,7 +136,9 @@ test("exact v1 upgrades preserve all existing rows, account data and saved bytes
     const userSql = beforeDb.prepare("SELECT sql FROM sqlite_schema WHERE name='users'").get()?.sql;
     beforeDb.close();
     const blobPath = join(target, blobRelative);
-    const inode = statSync(blobPath).ino;
+    // Keep the original inode alive; check each later read through its own open descriptor.
+    originalBlob = openSync(blobPath, "r");
+    const originalIdentity = fstatSync(originalBlob);
     let migrated = new Database(path);
     const after = contents(migrated.sqlite);
     for (const [table, rows] of Object.entries(before)) {
@@ -207,14 +210,22 @@ test("exact v1 upgrades preserve all existing rows, account data and saved bytes
           "post-migration same-time unread survives an app restart",
         );
       }
-      assert.deepEqual(readFileSync(blobPath), payload);
-      assert.equal(statSync(blobPath).ino, inode, "saved file was not replaced");
+      const currentBlob = openSync(blobPath, "r");
+      try {
+        const currentIdentity = fstatSync(currentBlob);
+        assert.deepEqual(readFileSync(currentBlob), payload);
+        assert.equal(currentIdentity.dev, originalIdentity.dev, "saved file stayed on the same device");
+        assert.equal(currentIdentity.ino, originalIdentity.ino, "saved file was not replaced");
+      } finally {
+        closeSync(currentBlob);
+      }
       await stop(instance);
       instance = undefined;
     }
   } finally {
     t.mock.restoreAll();
     if (instance) await stop(instance);
+    if (originalBlob !== undefined) closeSync(originalBlob);
     await rm(root, { recursive: true, force: true });
   }
 });

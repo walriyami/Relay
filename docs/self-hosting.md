@@ -183,14 +183,19 @@ Sharing links are bounded by the current content deadline. Renewing content does
 
 ## Updating
 
+Before starting an updated build against existing data, stop Relay and take a complete backup as described in [Backup and restore](#backup-and-restore). Keep the backup with the exact previous image/build and any separately configured `RELAY_SECRET`.
+
 ```sh
 git pull
 docker compose up -d --build
 ```
 
-Or run `npm run redeploy`, which asks what to build and what to do with the data, then waits until Relay is healthy. It builds the latest commit in a clean copy of the checkout, so uncommitted changes stay out unless you choose them. It can keep the data, save a copy and start with none, delete it, or bring back a saved copy. It warns before a build whose schema would refuse the data you have, and goes back to the previous image if the new one doesn't start. `npm run redeploy -- --help` lists the options for running it without questions, such as `npm run redeploy -- -y` to build the latest commit and keep the data, and `npm run redeploy -- --rollback`.
+Or run `npm run redeploy`, which asks what to build and what to do with the data, then waits until Relay is healthy. It builds the latest commit in a clean copy of the checkout, so uncommitted changes stay out unless you choose them. It can keep the data, save a copy and start with none, delete it, or bring back a saved copy. Saving a copy with this option starts an empty instance; it is separate from backing up before an upgrade that keeps existing data. `npm run redeploy -- --help` lists the options for running it without questions, such as `npm run redeploy -- -y` to build the latest commit and keep the data, and `npm run redeploy -- --rollback` to switch images while keeping the current data.
 
-Relay checks both the database version and its complete schema before opening existing data. Incompatible prerelease databases are refused with an actionable error; no automatic migration or reset runs. Preserve the original directory and use its matching build to export data, or start the current build with a new empty directory.
+Relay checks both the database version and its complete schema before opening existing data. The known v1 Activity schema upgrades automatically to v2 in one transaction, preserving existing activity, account data and saved content. Timestamp read markers become insertion-sequence markers. Events exactly at the old timestamp remain unread once because v1 cannot distinguish a later arrival in that millisecond. A failed migration rolls back its database changes. Unknown or partial schemas are refused without resetting or replacing data; preserve the original directory and use its matching build to open it.
+
+> [!WARNING]
+> Once the migration commits, switching back to the previous image alone cannot downgrade the database. The old build cannot open the migrated schema, even if a later startup step fails. To roll back the upgrade, stop Relay and restore the complete pre-upgrade backup with its matching image/build. Changes made after that backup will not be present in the restored copy.
 
 ### Backup and restore
 
