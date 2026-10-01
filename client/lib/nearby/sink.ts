@@ -81,15 +81,16 @@ async function sweep(base: FileSystemDirectoryHandle, mine: string) {
 }
 
 /** A new, empty entry; `small` ones (text) stay in memory. */
-export async function openSink(small = false): Promise<Sink> {
+export async function openSink(small = false, allowMemory = () => true): Promise<Sink> {
   const dir = small ? null : await onDisk();
   if (dir) {
     try {
       return await diskSink(dir, `${++serial}`);
     } catch {
-      // Out of room for even an empty file, or storage went away: memory still works.
+      // Storage went away: fallback must be admitted against the tab's retained payloads.
     }
   }
+  if (!allowMemory()) throw new Error("There isn’t room in this tab for memory fallback.");
   return memorySink();
 }
 
@@ -203,8 +204,8 @@ function memorySink(): Sink {
 const MEMORY_BYTES = 2 * 1024 ** 3;
 
 /** Whether `bytes` more can be stored here, as far as the browser says. */
-export async function roomFor(bytes: number) {
-  if (!(await onDisk())) return bytes <= MEMORY_BYTES;
+export async function roomFor(bytes: number, allowMemory = () => bytes <= MEMORY_BYTES) {
+  if (!(await onDisk())) return allowMemory();
   try {
     const { quota, usage } = await navigator.storage.estimate();
     if (quota === undefined || usage === undefined) return true;

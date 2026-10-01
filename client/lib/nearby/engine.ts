@@ -5,6 +5,7 @@ import type { Inbound, Outbound } from "../../../shared/lanes";
 import { Link, type LinkEnd, type LinkEvents } from "./link";
 import { NEARBY_WIRE, TEXT, randomId, type Control, type WireFile } from "./protocol";
 import { openSink, roomFor, type Sink } from "./sink";
+import { ReceiveBudget, type ReceiveReservation } from "./budget";
 
 // This tab's side of Nearby: the connections to other endpoints, and the transfers on them. It
 // runs while the tab is its device's endpoint (see presence.ts), or while a guest has the Nearby
@@ -126,7 +127,9 @@ type In = {
   /** Stores what arrived, one piece after another, across entries. */
   work: Promise<void>;
   deadline?: ReturnType<typeof setTimeout>;
-  finishing: boolean;
+  finishing?: Promise<void>;
+  admitting: boolean;
+  memory: ReceiveReservation | null;
 };
 type Record_ = Out | In;
 
@@ -147,6 +150,7 @@ const links = new Map<string, Link>();
 /** When each peer last couldn't be reached. */
 const unreachable = new Map<string, number>();
 const records = new Map<string, Record_>();
+const receiveBudget = new ReceiveBudget();
 const metadataChars = new Map<string, number>();
 /**
  * Cancels and declines made here while no connection to the other side was open, by peer: it hears
@@ -795,7 +799,8 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     stream: 0,
     streams: new Set(),
     work: Promise.resolve(),
-    finishing: false,
+    admitting: false,
+    memory: null,
   };
   if (!add(r)) {
     link.send({ t: "decline", id: message.id, reason: "space" });
@@ -871,8 +876,15 @@ async function acceptOn(r: In, link: Link) {
 /** Takes the transfer: it starts, or, if this device has no room, is declined. */
 export async function accept(id: string) {
   const r = records.get(id);
-  if (!r || r.kind !== "in" || r.t.state !== "incoming") return;
-  const room = await roomFor(r.t.bytes);
+  if (!r || r.kind !== "in" || r.t.state !== "incoming" || r.admitting) return;
+  r.admitting = true;
+  // Text always stays in memory, including the completed receipt's string. File entries are
+  // reserved together when disk is unavailable, or individually if a disk sink later fails.
+  const memory = receiveBudget.reserve({ [TEXT]: r.t.textBytes });
+  r.memory = memory;
+  const files = Object.fromEntries(r.t.files.map((file, index) => [String(index), file.size]));
+  const room = memory && (await roomFor(r.t.bytes - r.t.textBytes, () => memory.hold(files)));
+  r.admitting = false;
   if (r.t.state !== "incoming") return;
   if (!room) {
     tell(r, { t: "decline", id, reason: "space" });
@@ -921,9 +933,13 @@ function receiveEntry(r: In, link: Link, index: number) {
       if (!isActive(r.t)) return;
       let sink = r.sinks.get(entry);
       if (!sink) {
-        sink = await openSink(entry === TEXT);
+        try {
+          sink = await openSink(entry === TEXT, () => r.memory?.hold({ [entry]: size }) ?? false);
+        } catch {
+          throw new StoreError();
+        }
         // Ended while it opened: nothing keeps it.
-        if (!isActive(r.t)) return void sink.discard();
+        if (!isActive(r.t)) return sink.discard();
         r.sinks.set(entry, sink);
       }
       try {
@@ -931,7 +947,7 @@ function receiveEntry(r: In, link: Link, index: number) {
       } catch {
         throw new StoreError();
       }
-      if (!isActive(r.t)) return void sink.discard();
+      if (!isActive(r.t)) return sink.discard();
       progress(r);
     });
     r.work = stored.catch(() => {});
@@ -966,9 +982,12 @@ function receiveEntry(r: In, link: Link, index: number) {
   r.streams.add(into);
 }
 
-async function finishIn(r: In) {
+function finishIn(r: In) {
   if (r.finishing || !isActive(r.t)) return;
-  r.finishing = true;
+  r.finishing = assembleIn(r);
+}
+
+async function assembleIn(r: In) {
   try {
     const received: File[] = [];
     const crcs: number[] = [];
@@ -1084,8 +1103,7 @@ function add(r: Record_) {
 function remove(r: Record_) {
   end(r, r.t.state === "incoming" ? "declined" : r.t.state);
   if (r.kind === "in") {
-    for (const sink of r.sinks.values()) void sink.discard();
-    r.sinks.clear();
+    discardIn(r);
   }
   records.delete(r.t.id);
   metadataChars.delete(r.t.id);
@@ -1108,11 +1126,22 @@ function end(r: Record_, state: TransferState, reason = "") {
   } else {
     clearTimeout(r.deadline);
     if (state !== "done") {
-      for (const sink of r.sinks.values()) void sink.discard();
-      r.sinks.clear();
+      discardIn(r);
     }
   }
   if (!watching) scheduleIdle();
+}
+
+/** Keep the claim through in-flight writes/assembly/cleanup; completed receipts own it until dismiss. */
+function discardIn(r: In) {
+  const memory = r.memory;
+  r.memory = null;
+  const cleanup = [...r.sinks.values()].map((sink) => sink.discard().catch(() => {}));
+  r.sinks.clear();
+  r.t.received = null;
+  r.t.crcs = null;
+  r.t.text = null;
+  void Promise.all([r.work, r.finishing, ...cleanup]).then(() => memory?.release());
 }
 
 // Speed, measured over the last few seconds.
