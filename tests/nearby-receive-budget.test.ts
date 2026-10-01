@@ -164,6 +164,7 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
     await Promise.all([engine.accept("a"), engine.accept("a"), engine.accept("b")]);
     assert.equal(transfer("a").state, "running");
     assert.equal(transfer("b").state, "failed");
+    assert.match(transfer("b").reason, /^Other transfers are using this tab’s memory\. Ask Sender to send it again/);
     offer("remainder", 24);
     await engine.accept("remainder");
     assert.equal(transfer("remainder").state, "running");
@@ -181,6 +182,10 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
     offer("blocked", 25);
     await engine.accept("blocked");
     assert.equal(transfer("blocked").state, "failed");
+    assert.match(transfer("blocked").reason, /^Received items are using this tab’s memory\. Clear finished transfers/);
+    offer("huge", 65);
+    await engine.accept("huge");
+    assert.equal(transfer("huge").reason, "This browser can take up to 64 B at a time, and this is 65 B.");
     engine.dismiss("receipt");
     await setImmediate();
     offer("text", 0, 64);
@@ -289,6 +294,8 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
       let failOpen = false;
       let writes = 0;
       let stored = new Uint8Array();
+      let quota = 1024;
+      let usage = 0;
       // Controlled storage failure adapter, not a claim of native disk or physical RAM evidence.
       const dir = {
         getDirectoryHandle: () => Promise.resolve(dir),
@@ -301,6 +308,7 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
               return Promise.resolve({
                 write(bytes: Uint8Array) {
                   writes++;
+                  usage += bytes.length;
                   stored = new Uint8Array(bytes);
                   return Promise.resolve();
                 },
@@ -317,7 +325,7 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
         value: {
           storage: {
             getDirectory: () => Promise.resolve(dir),
-            estimate: () => Promise.resolve({ quota: 1024, usage: 0 }),
+            estimate: () => Promise.resolve({ quota, usage }),
           },
           locks: {
             request: (_name: string, callback: () => Promise<void>) => {
@@ -382,6 +390,30 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
       await isolated.accept("released");
       await deliver("released", new Uint8Array(64).fill(7));
       assert.equal(transfer("released").state, "done");
+
+      // Disk space is claimed when accepted, so two transfers can't both count the same free bytes.
+      failOpen = false;
+      quota = usage + 1024;
+      sendOffer("disk-a", 600);
+      sendOffer("disk-b", 600);
+      await Promise.all([isolated.accept("disk-a"), isolated.accept("disk-b")]);
+      assert.equal(transfer("disk-a").state, "running");
+      assert.equal(transfer("disk-b").state, "failed");
+      assert.equal(transfer("disk-b").reason, "There isn’t room on this device for it.");
+      // What arrived counts in the browser's usage; only the rest stays claimed.
+      await deliver("disk-a", new Uint8Array(300).fill(7));
+      sendOffer("disk-c", 500);
+      await isolated.accept("disk-c");
+      assert.equal(transfer("disk-c").state, "failed");
+      sendOffer("disk-d", 400);
+      await isolated.accept("disk-d");
+      assert.equal(transfer("disk-d").state, "running");
+      isolated.cancel("disk-a");
+      isolated.cancel("disk-d");
+      // Ended transfers claim nothing. (This fixture doesn't take removed files out of its usage.)
+      sendOffer("disk-e", 700);
+      await isolated.accept("disk-e");
+      assert.equal(transfer("disk-e").state, "running");
     },
   );
 
@@ -428,7 +460,7 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
       context.after(() => Reflect.deleteProperty(globalThis, Symbol.for(key)));
       const adapter = `data:text/javascript,${encodeURIComponent(`
         const sink = Reflect.get(globalThis, Symbol.for(${JSON.stringify(key)}));
-        export const roomFor = async (_bytes, memory) => memory();
+        export const roomFor = async (memory) => memory();
         export const openSink = async (_small, memory) => { if (!memory()) throw Error("full"); return sink.open(); };`)} `;
       const replacement = registerHooks({
         resolve(specifier, context, nextResolve) {

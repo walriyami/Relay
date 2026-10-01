@@ -2,6 +2,8 @@
 const MEMORY_BYTES = 2 * 1024 ** 3;
 
 export interface ReceiveReservation {
+  /** Bytes it holds now. */
+  readonly bytes: number;
   /** Reserve these entries together, without charging an entry twice on resume. */
   hold(entries: Record<string, number>): boolean;
   /** Release once, after storage work has settled and receipts are no longer retained. */
@@ -10,10 +12,15 @@ export interface ReceiveReservation {
 
 export class ReceiveBudget {
   private held = 0;
-  private readonly limit: number;
+  readonly limit: number;
 
   constructor(limit = MEMORY_BYTES) {
     this.limit = limit;
+  }
+
+  /** Bytes no reservation holds. */
+  get free() {
+    return this.limit - this.held;
   }
 
   reserve(entries: Record<string, number>): ReceiveReservation | null {
@@ -21,6 +28,9 @@ export class ReceiveBudget {
     let bytes = 0;
     const sizes = new Map<string, number>();
     const reservation: ReceiveReservation = {
+      get bytes() {
+        return bytes;
+      },
       hold: (entries) => {
         if (released) return false;
         let more = 0;

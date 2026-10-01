@@ -6,6 +6,7 @@ import { Link, type LinkEnd, type LinkEvents } from "./link";
 import { NEARBY_WIRE, TEXT, randomId, type Control, type WireFile } from "./protocol";
 import { openSink, roomFor, type Sink } from "./sink";
 import { ReceiveBudget, type ReceiveReservation } from "./budget";
+import { bytes as size } from "../format";
 
 // This tab's side of Nearby: the connections to other endpoints, and the transfers on them. It
 // runs while the tab is its device's endpoint (see presence.ts), or while a guest has the Nearby
@@ -130,6 +131,8 @@ type In = {
   finishing?: Promise<void>;
   admitting: boolean;
   memory: ReceiveReservation | null;
+  /** File bytes claimed on disk when accepted. */
+  disk: number;
 };
 type Record_ = Out | In;
 
@@ -801,6 +804,7 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     work: Promise.resolve(),
     admitting: false,
     memory: null,
+    disk: 0,
   };
   if (!add(r)) {
     link.send({ t: "decline", id: message.id, reason: "space" });
@@ -883,12 +887,25 @@ export async function accept(id: string) {
   const memory = receiveBudget.reserve({ [TEXT]: r.t.textBytes });
   r.memory = memory;
   const files = Object.fromEntries(r.t.files.map((file, index) => [String(index), file.size]));
-  const room = memory && (await roomFor(r.t.bytes - r.t.textBytes, () => memory.hold(files)));
+  const fileBytes = r.t.bytes - r.t.textBytes;
+  /** What had to stay in memory, when that's what didn't fit. */
+  let inMemory = memory ? 0 : r.t.textBytes;
+  const room =
+    memory &&
+    (await roomFor(
+      () => memory.hold(files) || ((inMemory = r.t.bytes), false),
+      (free) => {
+        // Strictly more than asked, as the browser's estimate is rounded.
+        if (free - diskOwed() <= fileBytes) return false;
+        r.disk = fileBytes;
+        return true;
+      },
+    ));
   r.admitting = false;
   if (r.t.state !== "incoming") return;
   if (!room) {
     tell(r, { t: "decline", id, reason: "space" });
-    end(r, "failed", "There isn’t room on this device for it.");
+    end(r, "failed", inMemory ? noMemory(r, inMemory) : "There isn’t room on this device for it.");
     notify("failed", r);
     publish();
     return;
@@ -897,6 +914,30 @@ export async function accept(id: string) {
   if (r.link) void acceptOn(r, r.link);
   if (!entriesOf(r).length) void finishIn(r);
   publish(true);
+}
+
+/** Disk space claimed by transfers being received that their files don't fill yet. */
+function diskOwed() {
+  let owed = 0;
+  for (const r of records.values()) {
+    if (r.kind !== "in" || !r.disk || !(isActive(r.t) || r.admitting)) continue;
+    const stored = Object.entries(haveOf(r)).reduce((n, [entry, b]) => (entry === TEXT ? n : n + b), 0);
+    owed += Math.max(0, r.disk - stored);
+  }
+  return owed;
+}
+
+/** Why `r`, which needed `bytes` of this tab's memory, didn't fit, and what would make it. */
+function noMemory(r: In, bytes: number) {
+  if (bytes > receiveBudget.limit)
+    return `This browser can take up to ${size(receiveBudget.limit)} at a time, and this is ${size(bytes)}.`;
+  let finished = 0;
+  for (const other of records.values())
+    if (other.kind === "in" && other.t.state === "done") finished += other.memory?.bytes ?? 0;
+  // What it holds already counts toward what it needs.
+  return receiveBudget.free + finished >= bytes - (r.memory?.bytes ?? 0)
+    ? `Received items are using this tab’s memory. Clear finished transfers, then ask ${r.t.peerName} to send it again.`
+    : `Other transfers are using this tab’s memory. Ask ${r.t.peerName} to send it again once they finish.`;
 }
 
 export function decline(id: string) {

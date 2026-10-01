@@ -142,15 +142,9 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
         await closing?.catch(() => {});
         if (!closed) await stream.abort().catch(() => {});
         closed = true;
-        try {
-          await dir.removeEntry(name);
-        } catch {
-          // Retry a transient storage failure once. Persistent failures remain retryable by a
-          // later discard, and the next tab's folder sweep remains the final fallback.
-          await dir.removeEntry(name).catch(() => {
-            cleanup = undefined;
-          });
-        }
+        // Once more after a transient failure. A file that still won't go stays until this tab has
+        // gone and the next one sweeps its folder.
+        await dir.removeEntry(name).catch(() => dir.removeEntry(name).catch(() => {}));
       })();
       return cleanup;
     },
@@ -200,17 +194,20 @@ function memorySink(): Sink {
   };
 }
 
-/** Most a browser without the private file system is trusted to hold in memory at once. */
-const MEMORY_BYTES = 2 * 1024 ** 3;
-
-/** Whether `bytes` more can be stored here, as far as the browser says. */
-export async function roomFor(bytes: number, allowMemory = () => bytes <= MEMORY_BYTES) {
+/**
+ * Whether there is room for a transfer here. Without the private file system it is up to
+ * `allowMemory`; with it, `allowDisk` is told how much the browser says is free (Infinity when it
+ * won't say), and claims its share in the same call so transfers accepted together can't both count
+ * the same space.
+ */
+export async function roomFor(allowMemory: () => boolean, allowDisk: (free: number) => boolean) {
   if (!(await onDisk())) return allowMemory();
+  let free = Infinity;
   try {
     const { quota, usage } = await navigator.storage.estimate();
-    if (quota === undefined || usage === undefined) return true;
-    return quota - usage > bytes;
+    if (quota !== undefined && usage !== undefined) free = quota - usage;
   } catch {
-    return true;
+    // Unknown: writing finds out.
   }
+  return allowDisk(free);
 }
