@@ -2,11 +2,12 @@
 // own, on a network shaped like Wi-Fi, with phone-sized CPUs, against Relay built from any checkout.
 // Numbers from one machine talking to itself say nothing about a phone across a room; these come
 // closer. Every device and the server is a container on one Docker network; each shapes what it
-// sends (rate, delay, jitter, loss) with the kernel's netem, and a phone's container gets one CPU in
-// all, network threads included.
+// sends (rate, delay, jitter, loss) with the kernel's netem, and a phone's container gets one or two
+// CPUs in all, network threads included.
 //
 //   node scripts/bench-transfers.ts [--source <checkout>] [--label <name>] [--mb 64] [--runs 1]
-//     [--profiles lan,good,typical,weak] [--cpus laptop,phone] [--browsers chromium,webkit,firefox]
+//     [--profiles lan,fast,wifi6,wifi7,good,typical,weak] [--cpus laptop,phone2,phone]
+//     [--browsers chromium,webkit,firefox]
 //     [--scenarios direct-up,direct-down,http-up,http-down,nearby] [--keep]
 //
 // Needs Docker, with the kernel's netem (Docker Desktop has it). Results go to stdout and, one JSON
@@ -26,7 +27,7 @@ const { values: args } = parseArgs({
     label: { type: "string", default: "current" },
     mb: { type: "string", default: "64" },
     runs: { type: "string", default: "1" },
-    profiles: { type: "string", default: "good,typical,weak" },
+    profiles: { type: "string", default: "fast,typical,weak" },
     cpus: { type: "string", default: "laptop,phone" },
     browsers: { type: "string", default: "chromium" },
     scenarios: { type: "string", default: "direct-up,direct-down,http-up,http-down,nearby" },
@@ -39,9 +40,16 @@ const { values: args } = parseArgs({
  * and loss that link-layer retries didn't hide, in percent. Wi-Fi retries most losses itself, so what
  * reaches the transport is mostly delay; netem's loss is random, which is harsher than real loss.
  * `lan` is the unshaped Docker network: the most this machine can do, nothing like a real network.
+ * netem's jitter sends packets out of order, which Wi-Fi hardly ever does (it puts its own retries
+ * back in order), and transports take reordering for loss; the fast profiles leave it out.
  */
 const PROFILES: Record<string, { rate: number; delay: number; jitter: number; loss: number }> = {
   lan: { rate: 0, delay: 0, jitter: 0, loss: 0 },
+  // Wi-Fi 6 close to the access point: about what a torrent gets on a 400 Mbit/s connection; a wide
+  // channel; and Wi-Fi 7, past what any of these browsers can carry.
+  fast: { rate: 400, delay: 1, jitter: 0, loss: 0.01 },
+  wifi6: { rate: 800, delay: 1, jitter: 0, loss: 0.01 },
+  wifi7: { rate: 2400, delay: 1, jitter: 0, loss: 0.01 },
   good: { rate: 300, delay: 2, jitter: 1, loss: 0.01 },
   typical: { rate: 150, delay: 5, jitter: 3, loss: 0.05 },
   weak: { rate: 40, delay: 15, jitter: 8, loss: 0.3 },
@@ -50,8 +58,8 @@ const PROFILES: Record<string, { rate: number; delay: number; jitter: number; lo
   "good-nojitter": { rate: 300, delay: 2, jitter: 0, loss: 0.01 },
   "good-rateonly": { rate: 300, delay: 0, jitter: 0, loss: 0 },
 };
-/** CPUs a device's whole browser gets: a laptop's all, or one, about a mid-range phone's worth. */
-const CPUS: Record<string, number> = { laptop: 0, phone: 1 };
+/** CPUs a device's whole browser gets: a laptop's all; two, about a recent phone's; or one, an older one's. */
+const CPUS: Record<string, number> = { laptop: 0, phone2: 2, phone: 1 };
 const BROWSERS: Record<string, BrowserType> = { chromium, webkit, firefox };
 /** Pages are told their own local addresses, as the network checks need them here. */
 const LAUNCH: Record<string, object> = {
@@ -399,13 +407,16 @@ try {
             await pick(from.page, "nearby-file-input", name, MB);
             const started = performance.now();
             await row.click();
+            // The newest; the ones before were dismissed. A failed one no longer names its files.
             const item = transfers(to.page)
               .getByRole("listitem", { name: `From ${from.name}` })
-              .filter({ hasText: name });
+              .first();
             try {
               // Received, or ended any other way; even the weakest profile moves a megabyte a second.
               await item
-                .getByText(/^Received$|ran out|isn’t room|didn’t match|Lost the connection|stopped/)
+                .getByText(
+                  /^Received$|ran out|isn’t room|didn’t match|couldn’t be put together|Lost the connection|stopped/,
+                )
                 .first()
                 .waitFor({ timeout: 60_000 + MB * 1000 });
               if (!(await item.getByText("Received", { exact: true }).count()))
@@ -415,11 +426,11 @@ try {
               throw error;
             }
             const seconds = (performance.now() - started) / 1000;
-            // Received files stay in the browser's storage until they're cleared, and a fresh
-            // context's quota holds only two or so. The button shows once two transfers are over.
+            // Received files stay in the browser's storage, which in a private context is memory,
+            // until they're dismissed. A notice may cover the button; the click needn't land there.
             for (const side of [from, to]) {
-              const clear = transfers(side.page).getByRole("button", { name: "Clear finished" });
-              if (await clear.isVisible()) await clear.click();
+              const dismiss = transfers(side.page).getByRole("button", { name: "Dismiss" });
+              while (await dismiss.count()) await dismiss.first().dispatchEvent("click");
             }
             return { seconds, http: 0 };
           });
