@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -136,7 +136,8 @@ test("exact v1 upgrades preserve all existing rows, account data and saved bytes
     const userSql = beforeDb.prepare("SELECT sql FROM sqlite_schema WHERE name='users'").get()?.sql;
     beforeDb.close();
     const blobPath = join(target, blobRelative);
-    // Keep the original inode alive; check each later read through its own open descriptor.
+    // Keep the original file open across migration/restarts. Read through that descriptor;
+    // pathname metadata is only an observation of whether the saved file was replaced.
     originalBlob = openSync(blobPath, "r");
     const originalIdentity = fstatSync(originalBlob);
     let migrated = new Database(path);
@@ -210,18 +211,13 @@ test("exact v1 upgrades preserve all existing rows, account data and saved bytes
           "post-migration same-time unread survives an app restart",
         );
       }
-      const currentBlob = openSync(blobPath, "r");
-      try {
-        const currentIdentity = fstatSync(currentBlob);
-        assert.deepEqual(readFileSync(currentBlob), payload);
-        assert.equal(currentIdentity.dev, originalIdentity.dev, "saved file stayed on the same device");
-        assert.equal(currentIdentity.ino, originalIdentity.ino, "saved file was not replaced");
-      } finally {
-        closeSync(currentBlob);
-      }
+      const currentIdentity = statSync(blobPath);
+      assert.equal(currentIdentity.dev, originalIdentity.dev, "saved file stayed on the same device");
+      assert.equal(currentIdentity.ino, originalIdentity.ino, "saved file was not replaced");
       await stop(instance);
       instance = undefined;
     }
+    assert.deepEqual(readFileSync(originalBlob), payload);
   } finally {
     t.mock.restoreAll();
     if (instance) await stop(instance);
