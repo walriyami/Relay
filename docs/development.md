@@ -62,3 +62,4 @@ Each script's header comment lists its options, for example `--size 80MiB --file
 - **Lint exceptions** are rare, and each one says why on the same line: `// eslint-disable-next-line <rule> -- <reason>`.
 - **Authorization** is required on every content and archive route, and every new route needs a test that proves outsiders are refused.
 - **User-facing claims stay honest.** Never show something as saved, sent or delivered before the server has confirmed it.
+- **Commit messages say why.** Write a short subject in the imperative, then a body: what went wrong, where it showed up (which browser, which steps), and why this is the fix. A test-only change says what was flaky or missing. The history is the only record of these reasons.
