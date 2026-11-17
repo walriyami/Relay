@@ -1161,12 +1161,15 @@ button.card:focus-visible,
   -webkit-line-clamp: 2;
   line-clamp: 2;
   margin-bottom: auto;
-  padding-bottom: var(--s1);
   overflow: hidden;
   overflow-wrap: anywhere;
   font-size: 0.9rem;
   font-weight: 600;
   line-height: 1.3;
+}
+/* The gap under the title lives outside its clipped box, so no sliver of a third line shows. */
+.card-title + .card-meta {
+  margin-top: var(--s1);
 }
 .card-meta {
   font-size: 0.78rem;
