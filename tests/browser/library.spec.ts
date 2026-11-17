@@ -312,8 +312,7 @@ test("a preview the server is too busy for is asked for again, not left as an ic
   const name = unique("busy");
   let turnedAway = 0;
   await page.route("**/thumbnail*", async (route) => {
-    if (turnedAway++ === 0)
-      return route.fulfill({ status: 503, headers: { "retry-after": "1" }, body: "busy" });
+    if (turnedAway++ === 0) return route.fulfill({ status: 503, headers: { "retry-after": "1" }, body: "busy" });
     return route.continue();
   });
   // A 2×2 red PNG.

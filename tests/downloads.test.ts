@@ -236,7 +236,12 @@ const photos = (count: number, offset = 0) =>
       path: `images/${offset + i}.png`,
       mime: "image/png",
       data: await sharp({
-        create: { width: 64, height: 64, channels: 3, background: { r: (offset + i) % 256, g: (offset + i) >> 8, b: 9 } },
+        create: {
+          width: 64,
+          height: 64,
+          channels: 3,
+          background: { r: (offset + i) % 256, g: (offset + i) >> 8, b: 9 },
+        },
       })
         .png()
         .toBuffer(),
@@ -269,10 +274,15 @@ function heldWorkers() {
       return Promise.resolve(0);
     }
   }
+  let rendition: Buffer | undefined;
   const release = async () => {
     const next = pending.shift();
     if (!next) return false;
-    await sharp(next.job.source).resize({ width: next.job.width, fit: "inside" }).webp().toFile(next.job.target);
+    // Any small picture will do: what's tested is the order jobs start in, not the rendering.
+    rendition ??= await sharp({ create: { width: 8, height: 8, channels: 3, background: "#123" } })
+      .webp()
+      .toBuffer();
+    writeFileSync(next.job.target, rendition);
     next.worker.emit("message", { id: next.job.id, ok: true });
     return true;
   };
@@ -312,8 +322,11 @@ test("thumbnails: one person's backlog is bounded with a retry hint, and others 
     const asking = get(other, urls.nodeThumbnail(mine.id));
     await new Promise((resolve) => setTimeout(resolve, 100));
     // The other person's photo is next in turn, not behind the whole backlog.
-    while (await held.release()) await new Promise((resolve) => setImmediate(resolve));
-    const responses = await Promise.all(flooding);
+    // Release jobs until every request is answered; the next job may start a moment after one ends.
+    let answered = false;
+    const all = Promise.all([...flooding, asking]).finally(() => (answered = true));
+    while (!answered) if (!(await held.release())) await new Promise((resolve) => setTimeout(resolve, 5));
+    const responses = (await all).slice(0, -1);
     assert.equal((await asking).statusCode, 200);
     const order = held.started.map((s) => s.job.source);
     const theirs = order.findIndex((source) => source.endsWith(mine.blob));

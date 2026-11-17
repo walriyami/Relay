@@ -151,7 +151,10 @@ test("paused uploads are removed only after pausedUploadMs, and are then honestl
     assert.deepEqual(await listPaused(page), []);
     // The text and the finished file were kept; the unfinished one is gone.
     const item = await page.call(api.items.get, { params: { id: created.itemId } });
-    assert.deepEqual(item.nodes.filter((n) => n.kind === "file").map((n) => n.name), ["done.txt"]);
+    assert.deepEqual(
+      item.nodes.filter((n) => n.kind === "file").map((n) => n.name),
+      ["done.txt"],
+    );
     let message = "";
     try {
       await page.call(api.transfers.resume, { params: { id: created.id }, body: { tab: page.tab } });
@@ -211,7 +214,13 @@ test("a finished transfer cannot be resumed", async () => {
   try {
     const client = await member(instance, "tia");
     const created = await client.call(api.transfers.create, {
-      body: { id: crypto.randomUUID(), tab: client.tab, name: null, folders: [], files: [{ path: "a.txt", size: 1, mime: "" }] },
+      body: {
+        id: crypto.randomUUID(),
+        tab: client.tab,
+        name: null,
+        folders: [],
+        files: [{ path: "a.txt", size: 1, mime: "" }],
+      },
     });
     await patchUpload(client, created.uploads[0].id, 0, Buffer.from("a"));
     await client.call(api.transfers.complete, { params: { id: created.id }, body: { destination: { kind: "save" } } });

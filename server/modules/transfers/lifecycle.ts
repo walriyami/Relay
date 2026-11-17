@@ -347,10 +347,13 @@ export async function paused(ctx: Context, receivers: Receivers, owner: string, 
   );
   const result: PausedTransfer[] = [];
   for (const row of rows) {
-    const uploads = ctx.db.all<{ id: string; node: string | null; size: number; offset: number; completed: number | null }>(
-      "SELECT id, node, size, offset, completed FROM uploads WHERE transfer = ? ORDER BY rowid",
-      row.id,
-    );
+    const uploads = ctx.db.all<{
+      id: string;
+      node: string | null;
+      size: number;
+      offset: number;
+      completed: number | null;
+    }>("SELECT id, node, size, offset, completed FROM uploads WHERE transfer = ? ORDER BY rowid", row.id);
     const paths = nodePaths(ctx, row.item);
     const files: PausedTransfer["files"] = [];
     for (const upload of uploads) {

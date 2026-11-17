@@ -114,7 +114,9 @@ test("after a reload the paused upload is offered back and the same file finishe
   await page.unrouteAll({ behavior: "ignoreErrors" });
   await page.reload();
 
-  const notice = composer(page).getByRole("status").filter({ hasText: `${name}.bin is paused` });
+  const notice = composer(page)
+    .getByRole("status")
+    .filter({ hasText: `${name}.bin is paused` });
   await expect(notice).toContainText("1 MB of 3 MB uploaded.");
   await expect(notice).toContainText("what’s uploaded won’t be sent again");
 
@@ -153,11 +155,11 @@ test("waking after the phone slept restarts a stuck upload, and the screen is ke
     w.wakeReleases = 0;
     Object.defineProperty(navigator, "wakeLock", {
       value: {
-        request: async () => {
+        request: () => {
           w.wakeRequests++;
           const sentinel = new EventTarget() as EventTarget & { release: () => Promise<void> };
-          sentinel.release = async () => void w.wakeReleases++;
-          return sentinel;
+          sentinel.release = () => Promise.resolve(void w.wakeReleases++);
+          return Promise.resolve(sentinel);
         },
       },
     });
@@ -205,7 +207,9 @@ test("a paused upload can be stopped from the notice", async ({ page }) => {
   page.on("dialog", (d) => void d.accept());
   await page.unrouteAll({ behavior: "ignoreErrors" });
   await page.reload();
-  const notice = composer(page).getByRole("status").filter({ hasText: `${name}.bin is paused` });
+  const notice = composer(page)
+    .getByRole("status")
+    .filter({ hasText: `${name}.bin is paused` });
   await expect(notice).toBeVisible();
   // Nothing finished, so nothing is claimed to be in Files.
   await expect(notice.getByRole("button", { name: "View in Files" })).toHaveCount(0);
