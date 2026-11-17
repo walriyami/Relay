@@ -429,7 +429,6 @@ test("Nearby aggregates receive admission across the tab", async (t) => {
         get stored() {
           return this.written;
         },
-        crc: 0,
         async write(bytes: Uint8Array) {
           if (stage === "write") {
             entered = true;

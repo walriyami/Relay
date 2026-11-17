@@ -1,4 +1,5 @@
-import { zip, type ZipEntry } from "./zip";
+import { crcsOf } from "./crc";
+import { zip } from "./zip";
 
 // Saving what arrived. Phones and tablets hand the files to the share sheet, where photos can go
 // straight to the photo library; computers download them, several at once as one ZIP.
@@ -42,8 +43,19 @@ export function downloadFile(file: Blob, name: string) {
 }
 
 /** Downloads every entry as one archive named `name`.zip, folders and all. */
-export function downloadZip(entries: ZipEntry[], folders: string[], name: string) {
-  downloadFile(zip(entries, folders), `${safeName(name)}.zip`);
+export async function downloadZip(
+  entries: { path: string; file: File; modified: number }[],
+  folders: string[],
+  name: string,
+) {
+  const crcs = await crcsOf(entries.map((e) => e.file));
+  downloadFile(
+    zip(
+      entries.map((e, i) => ({ ...e, crc: crcs[i] })),
+      folders,
+    ),
+    `${safeName(name)}.zip`,
+  );
 }
 
 /** A name every file system takes. */

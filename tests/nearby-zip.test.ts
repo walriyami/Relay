@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { crc32 as zlibCrc32 } from "node:zlib";
 import { crc32, zip, type ZipEntry } from "../client/lib/nearby/zip.ts";
@@ -77,5 +78,22 @@ test("an archive of files and folders that unzip checks and reads back", async (
       if (/^[\x20-\x7e]+$/.test(name)) assert.deepEqual(execFileSync("unzip", ["-p", path, name]), data);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an archive's CRC-32s are worked out from the files as it's made", async () => {
+  const hooks = registerHooks({
+    resolve: (specifier, context, next) =>
+      next(specifier.startsWith(".") && !/\.[a-z]+$/i.test(specifier) ? `${specifier}.ts` : specifier, context),
+  });
+  try {
+    const { crcsOf } = await import("../client/lib/nearby/crc.ts");
+    const pieces = [randomBytes(3 * 1024 * 1024 + 7), Buffer.alloc(0), Buffer.from("text")];
+    assert.deepEqual(
+      await crcsOf(pieces.map((piece) => new Blob([piece]))),
+      pieces.map((piece) => zlibCrc32(piece)),
+    );
+  } finally {
+    hooks.deregister();
   }
 });

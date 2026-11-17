@@ -1,5 +1,3 @@
-import { crc32 } from "./zip";
-
 // Where received bytes go until they are saved. Browsers with the origin private file system write
 // them to disk as they arrive, so a large transfer never has to fit in memory; others keep them in
 // memory. Either way they belong to this tab: each tab writes in its own folder, held with a lock,
@@ -19,8 +17,6 @@ export interface Sink {
   readonly written: number;
   /** Of those, the bytes the browser has on disk, and so counts in its storage usage. */
   readonly stored: number;
-  /** CRC-32 of the bytes taken so far. */
-  readonly crc: number;
   write(bytes: Uint8Array): Promise<void>;
   /** The whole entry, once every byte is written. */
   finish(type: string, name: string, modified: number): Promise<File>;
@@ -107,7 +103,6 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
   const stream = await handle.createWritable();
   let written = 0;
   let stored = 0;
-  let crc = 0;
   let run = new Uint8Array(RUN_BYTES);
   let filled = 0;
   /** The run being written; a failure surfaces on the next write, or on finishing. */
@@ -138,11 +133,7 @@ async function diskSink(dir: FileSystemDirectoryHandle, name: string): Promise<S
     get stored() {
       return stored;
     },
-    get crc() {
-      return crc;
-    },
     async write(bytes) {
-      crc = crc32(bytes, crc);
       // Copied into the run: the caller's view may share a buffer with other bytes.
       for (let at = 0; at < bytes.byteLength;) {
         const take = Math.min(RUN_BYTES - filled, bytes.byteLength - at);
@@ -196,7 +187,6 @@ function memorySink(): Sink {
   let pending: Uint8Array<ArrayBuffer>[] = [];
   let pendingBytes = 0;
   let written = 0;
-  let crc = 0;
   const join = () => {
     if (!pending.length) return;
     blobs.push(new Blob(pending));
@@ -211,14 +201,10 @@ function memorySink(): Sink {
     get stored() {
       return written;
     },
-    get crc() {
-      return crc;
-    },
     write(bytes) {
       pending.push(bytes as Uint8Array<ArrayBuffer>);
       pendingBytes += bytes.byteLength;
       written += bytes.byteLength;
-      crc = crc32(bytes, crc);
       if (pendingBytes >= JOIN) join();
       return Promise.resolve();
     },

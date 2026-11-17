@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, truncate, writeFile } from "node:fs/promises";
 import { copyShareUrl, deviceContext, unique } from "./helpers.ts";
@@ -61,7 +62,10 @@ test("sends files and text between your own devices", async ({ browser }) => {
 
     const zipped = iphone.page.waitForEvent("download");
     await received.getByRole("button", { name: "Download all" }).click();
-    expect((await zipped).suggestedFilename()).toMatch(/\.zip$/);
+    const archive = await zipped;
+    expect(archive.suggestedFilename()).toMatch(/\.zip$/);
+    // Each file's CRC-32 is worked out as the archive is made; unzip checks them.
+    execFileSync("unzip", ["-tq", await archive.path()]);
   } finally {
     await ipad.context.close();
     await iphone.context.close();

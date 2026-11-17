@@ -514,7 +514,6 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
         get stored() {
           return written;
         },
-        crc: 0,
         async write(bytes: Uint8Array) {
           await wait("write");
           written += bytes.length;
@@ -587,7 +586,6 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
       get stored() {
         return this.written;
       },
-      crc: 0,
       write(bytes: Uint8Array) {
         this.written += bytes.length;
         return Promise.resolve();
