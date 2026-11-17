@@ -40,6 +40,8 @@ export const LIMITS = {
   linkPasswordMax: 128,
   /** The most people one link can be limited to. */
   linkVisitorsMax: 100,
+  /** The most History entries one answer holds; Admin shows 50 more at a time. */
+  historyMax: 500,
 } as const;
 
 /** Usernames: 3–32 characters of lowercase letters, numbers, "-" and "_", starting with a letter or number. */
@@ -436,7 +438,7 @@ export type UsageCounts = {
   uploaded: number;
   /** Uploaded by guests through the member's requests. */
   received: number;
-  /** Downloaded by the member: files, previews and ZIPs. */
+  /** Downloaded by the member: files and ZIPs. Previews in the app aren't counted. */
   downloaded: number;
   /** Downloaded by people through the member's links. */
   shared: number;
@@ -482,10 +484,98 @@ export type AdminUsageReport = UsageReportBase & {
   members: { id: Id; username: string; name: string | null; totals: UsageCounts; used: number }[];
 };
 
+/** A member's own storage, for Settings → Storage. Bytes. */
+export type StorageOverview = {
+  /** Saved, Trash included, and uploads still arriving. */
+  used: number;
+  reserved: number;
+  /** What can still be uploaded now, and the member's own limit (null: shares the total storage). */
+  available: number;
+  limit: number | null;
+  /** What Trash holds; it counts until it is emptied. */
+  trash: { items: number; bytes: number };
+  /** Items in Files, and the largest of them, largest first. */
+  items: number;
+  largest: { id: Id; name: string; bytes: number }[];
+};
+
+/**
+ * Something that happened on this Relay, for the administrator's history. Names are as they were
+ * then. Never a file's name or contents: the history says that a member shared, not what.
+ */
+export type HistoryEvent =
+  /** `via`: an invitation (from `by`), single sign-on, or the first account made at setup. */
+  | { kind: "joined"; username: string; via: "invitation" | "sso" | "setup"; by: string | null }
+  | { kind: "removed"; username: string; by: string; items: number; bytes: number }
+  | { kind: "suspended" | "restored"; username: string; by: string }
+  | { kind: "role"; username: string; by: string; admin: boolean }
+  /** `by` is the administrator who reset it; null when the owner recovered access from the server. */
+  | { kind: "password"; username: string; by: string | null }
+  /** A member's finished upload: kept in Files, sent to one of their devices, or shared as a link. */
+  | {
+      kind: "sent";
+      username: string;
+      to: "files" | "device" | "link";
+      device: string | null;
+      files: number;
+      bytes: number;
+    }
+  /** A member made a link from Files, or opened a request for files. */
+  | { kind: "shared"; username: string; what: "link" | "request" }
+  /** Someone without an account sent files through a member's request. */
+  | { kind: "received"; username: string; files: number; bytes: number }
+  /** `username` is null when the name typed doesn't belong to anyone. */
+  | { kind: "signin"; username: string | null; reason: "password" | "suspended" | "locked" }
+  /** `area` says in words what went wrong: "uploading", "a cleanup job", "the file check"… */
+  | { kind: "error"; area: string; detail: string };
+export type HistoryKind = HistoryEvent["kind"];
+/** The filters History offers. */
+export const HISTORY_GROUPS = ["people", "sharing", "signin", "problems"] as const;
+export type HistoryGroup = (typeof HISTORY_GROUPS)[number];
+export const HISTORY_GROUP_OF: Record<HistoryKind, HistoryGroup> = {
+  joined: "people",
+  removed: "people",
+  suspended: "people",
+  restored: "people",
+  role: "people",
+  password: "people",
+  sent: "sharing",
+  shared: "sharing",
+  received: "sharing",
+  signin: "signin",
+  error: "problems",
+};
+/** Repeats of a failed sign-in or an error within an hour are one entry: `count` times, last at `last`. */
+export type HistoryEntry = HistoryEvent & { id: Id; created: Time; last: Time; count: number; userId: Id | null };
+/** The newest entries, newest first. `more`: older ones exist. */
+export type HistoryPage = { entries: HistoryEntry[]; more: boolean };
+
+/** What removing a member deletes, so the confirmation can say it in numbers. */
+export type MemberRemoval = {
+  /** Items in Files and Trash, and the space they free (uploads still arriving included). */
+  items: number;
+  bytes: number;
+  /** Shared links and upload requests that stop working. */
+  links: number;
+  requests: number;
+  /** Devices signed in now. */
+  devices: number;
+};
+
 /** Server-sent event topics. A client refetches whatever a topic covers. */
 /** `codes`: Relay noticed someone guessing pickup codes (Admin shows when). */
 export type Topic =
-  "items" | "links" | "deliveries" | "devices" | "requests" | "account" | "activity" | "codes" | "nearby";
+  | "items"
+  | "links"
+  | "deliveries"
+  | "devices"
+  | "requests"
+  | "account"
+  | "activity"
+  | "codes"
+  | "nearby"
+  /** Administrators only: something new in History. */
+  | "history";
 export type ChangeEvent = { topics: Topic[] };
 /**
  * The first event on every stream. After it the server sends a `beat` event at least every

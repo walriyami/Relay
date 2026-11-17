@@ -14,6 +14,7 @@ import { route } from "../../lib/http.ts";
 import { hashPassword, randomToken, sha256 } from "../../lib/secrets.ts";
 import { insertSession, newDevice, finishSignIn } from "./sessions.ts";
 import { insertUser } from "./users.ts";
+import { recordHistory } from "../history/index.ts";
 import { checkPassword } from "./passwords.ts";
 import { streamsOf } from "./streams.ts";
 import { api } from "../../../shared/api.ts";
@@ -163,6 +164,7 @@ export async function registerSharedSignIn(app: FastifyInstance, ctx: Context) {
             fail(409, "An administrator must complete application setup first.");
           // The same as joining with an invitation that sets no limits; administrators change them in Admin.
           const userId = insertUser(ctx, { username, passwordHash, admin: first }, NO_LIMITS, Date.now());
+          recordHistory(ctx, { kind: "joined", username, via: "sso", by: null }, userId);
           // The Walriyami administrator claimed a fresh server: setup continues with their choices.
           if (first) beginSetupChoices(ctx);
           const administrators = first

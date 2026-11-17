@@ -29,6 +29,9 @@ import { registerAdmin } from "./modules/admin/index.ts";
 import { registerSetup } from "./modules/setup/index.ts";
 import { createActivity, registerActivity } from "./modules/activity/index.ts";
 import { createUsageMeter, registerUsage } from "./modules/usage/index.ts";
+import { issueRecovery, registerRecovery } from "./modules/recovery/index.ts";
+import { registerAccountData } from "./modules/account-data/index.ts";
+import { recordHistory, registerHistory, sweepHistory } from "./modules/history/index.ts";
 import { LocalHelper } from "./modules/local/helper.ts";
 import { registerLocal } from "./modules/local/index.ts";
 import { registerNearby } from "./modules/nearby/index.ts";
@@ -189,9 +192,25 @@ export async function buildApp(config: Config): Promise<App> {
       if (status && status < 500) return reply.code(status).send({ error: (error as Error).message });
       if (isOutOfSpace(error)) {
         req.log.warn({ route: req.routeOptions.url }, "storage is full");
+        recordHistory(
+          ctx,
+          { kind: "error", area: areaOf(req.routeOptions.url), detail: "The server’s disk was full." },
+          null,
+          "disk-full",
+        );
         return reply.code(507).send({ error: "The server's disk is full. Retry after space is freed." });
       }
       req.log.error({ err: error, route: req.routeOptions.url }, "request failed");
+      recordHistory(
+        ctx,
+        {
+          kind: "error",
+          area: areaOf(req.routeOptions.url),
+          detail: "Something unexpected went wrong; the server log has the details.",
+        },
+        null,
+        `error:${req.routeOptions.url ?? ""}`,
+      );
       return reply.code(500).send({ error: "The operation could not finish. Retry or contact the administrator." });
     });
 
@@ -217,6 +236,9 @@ export async function buildApp(config: Config): Promise<App> {
     registerPush(app, ctx);
     registerShareTarget(app);
     registerUsage(app, ctx);
+    registerRecovery(app, ctx);
+    registerAccountData(app, ctx);
+    registerHistory(app, ctx);
     registerLocal(app, ctx);
     registerNearby(app, ctx);
 
@@ -239,12 +261,23 @@ export async function buildApp(config: Config): Promise<App> {
           ["Session cleanup", () => sweepAuth(ctx, now)],
           ["Activity cleanup", () => ctx.activity.sweep(now)],
           ["Usage statistics", () => ctx.usage.sweep(now)],
+          ["History cleanup", () => sweepHistory(ctx, now)],
         ];
         // One failed job must not prevent unrelated cleanup from running.
         for (const [name, work] of stages)
-          await ctx.operations.run(name, work, (error) =>
-            app.log.error({ err: error, stage: name }, "maintenance failed"),
-          );
+          await ctx.operations.run(name, work, (error) => {
+            app.log.error({ err: error, stage: name }, "maintenance failed");
+            recordHistory(
+              ctx,
+              {
+                kind: "error",
+                area: "a cleanup job",
+                detail: `“${name}” failed. Relay tries again on its next round.`,
+              },
+              null,
+              `maintenance:${name}`,
+            );
+          });
       })()
         .catch((error) => app.log.error({ err: error }, "maintenance sweep failed"))
         .finally(() => (sweeping = null)));
@@ -260,6 +293,8 @@ export async function buildApp(config: Config): Promise<App> {
     await sweep();
     timer = setInterval(() => void sweep(), config.sweepMs);
     timer.unref();
+    const recovery = issueRecovery(ctx);
+    if (recovery) app.log.warn(recovery.message);
 
     const dist = resolve("dist");
     if (config.serveClient && existsSync(dist)) {
@@ -301,4 +336,19 @@ export async function buildApp(config: Config): Promise<App> {
 function isOutOfSpace(error: unknown): boolean {
   const { code, errcode } = error as { code?: string; errcode?: number };
   return code === "ENOSPC" || code === "EDQUOT" || errcode === 13;
+}
+
+/** Where a failed request was, in the words of the app rather than its address. */
+const AREAS: [RegExp, string][] = [
+  [/^\/api\/(uploads|transfers|tabs)\b/, "uploading files"],
+  [/^\/api\/(items|trash)\b|\/(download|zip|preview|thumbnail)/, "Files"],
+  [/^\/api\/(links|s)\b|^\/s\//, "shared links"],
+  [/^\/api\/(requests|r)\b|^\/r\//, "requests"],
+  [/^\/api\/(deliveries|devices)\b/, "sending to devices"],
+  [/^\/api\/(nearby|n|local)\b/, "Nearby and Direct"],
+  [/^\/api\/(session|login-codes|invitations|setup|recover|account)\b|^\/auth\//, "signing in and accounts"],
+  [/^\/api\/admin\b/, "Admin"],
+];
+function areaOf(route: string | undefined) {
+  return AREAS.find(([pattern]) => route && pattern.test(route))?.[1] ?? "the app";
 }

@@ -156,8 +156,10 @@ test("usage counts what each member moved, and whose it was", async () => {
     const item = await ivy.call(api.items.get, { params: { id: sent.result.itemId } });
     const file = item.nodes.find((n) => n.kind === "file")!;
 
-    // Her own download counts as downloaded; a visitor's through her link as shared.
+    // Her own download counts as downloaded (looking at it in the app doesn't); a visitor's through
+    // her link as shared.
     assert.equal((await get(ivy, urls.nodeContent(file.id))).statusCode, 200);
+    assert.equal((await get(ivy, urls.nodeContent(file.id, { inline: true }))).statusCode, 200);
     const visitor = new Client(instance);
     await visitor.call(api.links.open, { params: { token: sent.result.link!.token } });
     assert.equal((await get(visitor, urls.shareContent(sent.result.link!.token, file.id))).statusCode, 200);

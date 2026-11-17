@@ -36,6 +36,11 @@ export type Config = {
    * kept in <root>/setup.key until setup. On unless RELAY_SETUP_KEY=false (a machine only you can reach).
    */
   setupKey: boolean;
+  /**
+   * An administrator's username: at startup Relay logs a one-time link that sets a new password for
+   * that account (see docs/hosting.md and modules/recovery). Unset or empty, there is none.
+   */
+  recoverAdmin?: string;
   /** How long a tab's transfers survive without its event stream. */
   tabLeaseMs: number;
   /** Interval of the maintenance sweep. */
@@ -83,6 +88,7 @@ export function configFromEnv(env = process.env): Config {
       .filter(Boolean),
     clientIpHeader: clientIpHeader(env.RELAY_CLIENT_IP_HEADER),
     setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true),
+    recoverAdmin: env.RELAY_RECOVER_ADMIN?.trim() || undefined,
     tabLeaseMs: 5 * 60_000,
     sweepMs: 60_000,
     logger: true,

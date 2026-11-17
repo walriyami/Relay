@@ -24,6 +24,7 @@ export const CONTENT_TABLES = [
   "activity",
   "usage",
   "traffic",
+  "history",
   "nearby_invites",
   "nearby_guests",
 ] as const;

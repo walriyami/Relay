@@ -508,3 +508,25 @@ CREATE TABLE delivery_receipts (
  delivery TEXT PRIMARY KEY REFERENCES deliveries(id) ON DELETE CASCADE,
  at INTEGER NOT NULL
 ) STRICT;
+
+-- The administrator's history of this Relay: members joining, leaving, being suspended or made
+-- administrators, what members sent and shared, failed sign-ins and errors. `data` is the
+-- event as JSON, never a file's name or contents; `kind` is repeated for filtering, and `user_id`
+-- is the member it is about (NULL once they are removed; the name stays in `data`). Repeats of the
+-- same failed sign-in or error within an hour share a `dedupe` key and add to `count` on one row,
+-- so a burst can't flood it. Kept for 90 days.
+CREATE TABLE history (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('joined', 'removed', 'suspended', 'restored', 'role', 'password', 'sent', 'shared', 'received', 'signin', 'error')),
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created INTEGER NOT NULL,
+  last INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 1,
+  dedupe TEXT,
+  data TEXT NOT NULL
+) STRICT;
+-- Index entries end in the rowid, so (created, rowid) puts same-millisecond events in the order they happened.
+CREATE INDEX history_created ON history(created);
+CREATE INDEX history_kind ON history(kind, created);
+CREATE INDEX history_user ON history(user_id, created);
+CREATE INDEX history_dedupe ON history(dedupe, created) WHERE dedupe IS NOT NULL;

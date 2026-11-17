@@ -9,6 +9,7 @@ import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
 import { perAddress } from "../auth/limits.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { publicName } from "../auth/sessions.ts";
+import { recordHistory, usernameOf } from "../history/index.ts";
 import {
   effectiveLinkExpiry,
   LINK_SELECT,
@@ -37,7 +38,12 @@ export function registerLinks(app: FastifyInstance, ctx: Context) {
     const passwordHash = await linkPasswordHash(password);
     if (memberFromToken(ctx, req.cookies[sessionCookie(ctx, req)])?.sessionHash !== member.sessionHash)
       fail(401, "Sign in to continue.");
-    return ctx.links.create(member.userId, { ...settings, passwordHash });
+    // Creating is idempotent by id; only the first time is news.
+    const fresh = !ctx.db.get("SELECT 1 FROM links WHERE id = ?", settings.id);
+    const link = ctx.links.create(member.userId, { ...settings, passwordHash });
+    if (fresh)
+      recordHistory(ctx, { kind: "shared", username: usernameOf(ctx, member.userId), what: "link" }, member.userId);
+    return link;
   });
 
   route(app, ctx, api.links.update, async ({ member, params, body, req }) => {
