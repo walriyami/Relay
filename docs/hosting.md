@@ -108,7 +108,7 @@ What it needs from the host:
 
 **Nearby** sends files and text from one device straight to another when both are on the same network, wherever that is, such as from an iPad to an iPhone at the office. Relay only introduces the two devices, so the transfer runs at the speed of the local network, and nothing is stored on the server. It needs nothing set up on the server.
 
-- **Your own devices** appear whenever you're signed in on them. They can receive while Relay is open on them, and they take what you send without asking.
+- **Your own devices** appear whenever you're signed in on them. They can receive while Relay is open on them, and they take what you send without asking. On a computer, what arrives from your own device downloads straight away. Nothing is kept on Relay, so the page asks before it's closed with something received and not yet saved. For a device that isn't open, use Send, which keeps a copy in Files and delivers it later.
 - **Other members** appear when both of you have Relay open on the same network and both allow it with **Visible to people nearby**, in Nearby or **Settings → Sending**. They're asked before anything arrives.
 - **People without an account** join with a Nearby code or link from **Invite someone**, and give a name. They can send to and receive from your devices, and are asked before anything arrives. A code lasts an hour unless you extend it. You can remove anyone who joined, and ending the code removes everyone.
 
