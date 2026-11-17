@@ -30,3 +30,6 @@ test-results/
 # Transfer benchmarks (scripts/bench-transfers.ts)
 bench-results.jsonl
 bench-failures/
+
+# Written while the Docker image is built (server/build-stamp.ts)
+server/build.json

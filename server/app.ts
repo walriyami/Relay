@@ -36,6 +36,7 @@ import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
 import { ProxyTrust } from "./lib/proxies.ts";
 import { registerSharedSignIn } from "./modules/auth/sso.ts";
+import { build } from "./build-info.ts";
 
 export type App = { app: FastifyInstance; ctx: Context; sweep: () => Promise<void> };
 
@@ -188,7 +189,13 @@ export async function buildApp(config: Config): Promise<App> {
             (stage) => stage.failed || now - stage.attempted > Math.max(5 * 60_000, 3 * config.sweepMs),
           );
       // Individual damaged files do not take healthy content offline. Monitoring should inspect status.
-      return { ok: true as const, status: degraded ? ("degraded" as const) : ("healthy" as const) };
+      return {
+        ok: true as const,
+        status: degraded ? ("degraded" as const) : ("healthy" as const),
+        // Which commit is live, so a deploy can be checked from outside (server/build-info.ts).
+        version: build.version,
+        commit: build.commit,
+      };
     });
     registerAuth(app, ctx);
     await registerSharedSignIn(app, ctx);

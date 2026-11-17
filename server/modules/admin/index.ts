@@ -30,6 +30,7 @@ import { DAY_MS, storageFree, toUser, usageOf, USER_COLUMNS, type UserRow } from
 import { streamsOf } from "../auth/streams.ts";
 import { renameUser } from "../auth/users.ts";
 import { limitsOf, setLimits } from "./settings.ts";
+import { build } from "../../build-info.ts";
 
 type MemberRow = UserRow & { disabled: number; created: number };
 const MEMBER_COLUMNS = `${USER_COLUMNS}, disabled, created`;
@@ -92,6 +93,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         receivedBytesLastHour: ctx.transfers.receivedBytesSince(hourAgo),
       },
       local: await localStatus(ctx),
+      build,
     };
   });
 

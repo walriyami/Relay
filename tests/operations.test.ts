@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { Operations } from "../server/lib/operations.ts";
 import { api } from "../shared/api.ts";
 import { admin, member, Client, send, start } from "./support/harness.ts";
+import { build } from "../server/build-info.ts";
+
+/** What /api/health reports about the running code; see tests/build-info.test.ts. */
+const release = { version: build.version, commit: build.commit };
 
 test("diagnostics are bounded to the last hour and never retain request details", () => {
   const ops = new Operations();
@@ -59,7 +63,7 @@ test("operator diagnostics remain admin-only and distinguish deduplication from 
     assert.equal(overview.storage.trashItems, 1);
     assert.equal((await user.raw({ method: "GET", url: "/api/admin" })).statusCode, 403);
     assert.equal((await new Client(instance).raw({ method: "GET", url: "/api/admin" })).statusCode, 401);
-    assert.deepEqual((await instance.app.inject("/api/health")).json(), { ok: true, status: "healthy" });
+    assert.deepEqual((await instance.app.inject("/api/health")).json(), { ok: true, status: "healthy", ...release });
   } finally {
     await instance.close();
   }

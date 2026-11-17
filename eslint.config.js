@@ -53,6 +53,7 @@ export default tseslint.config(
     files: ["scripts/**"],
     rules: { "no-console": "off" },
   },
-  { files: ["eslint.config.js"], ...tseslint.configs.disableTypeChecked },
+  // Plain JavaScript, outside the TypeScript project: the health probe runs without type stripping.
+  { files: ["eslint.config.js", "server/health.mjs"], ...tseslint.configs.disableTypeChecked },
   prettier,
 );

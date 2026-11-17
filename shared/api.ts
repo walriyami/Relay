@@ -158,7 +158,11 @@ export const transferInput = z.object({
 });
 
 export const api = {
-  health: endpoint<{ ok: true; status: "healthy" | "degraded" }>()("GET", "/api/health", { auth: "public" }),
+  health: endpoint<{ ok: true; status: "healthy" | "degraded"; version: string; commit: string | null }>()(
+    "GET",
+    "/api/health",
+    { auth: "public" },
+  ),
 
   session: {
     get: endpoint<M.Me>()("GET", "/api/session", { auth: "member" }),

@@ -389,6 +389,8 @@ function ServiceHealth({ data }: { data: Overview }) {
           <dd>
             {bytes(o.memoryBytes)} memory · started {dateTime(o.started)}. Counters reset on restart.
           </dd>
+          <dt>Version</dt>
+          <dd>{buildLine(data.build)}</dd>
           <dt>Usage reporting</dt>
           <dd>
             {plural(data.usageBuffer.pending, "buffered row")} ·{" "}
@@ -406,6 +408,13 @@ function ServiceHealth({ data }: { data: Overview }) {
       </details>
     </section>
   );
+}
+
+/** Which saved version of the code is running, so a deploy can be matched to its commit. */
+function buildLine({ version, commit, committed }: Overview["build"]) {
+  if (!commit) return `Relay ${version} · a development copy, not built from a saved commit`;
+  const when = committed ? `, saved ${dateTime(Date.parse(committed))}` : "";
+  return `Relay ${version} · commit ${commit.slice(0, 7)}${when}`;
 }
 
 function directTransfers(local: Overview["local"]) {

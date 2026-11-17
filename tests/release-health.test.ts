@@ -4,6 +4,10 @@ import { setTimeout } from "node:timers/promises";
 import { writeFile } from "node:fs/promises";
 import { api } from "../shared/api.ts";
 import { start, admin, member, Client, send } from "./support/harness.ts";
+import { build } from "../server/build-info.ts";
+
+/** What /api/health reports about the running code; see tests/build-info.test.ts. */
+const release = { version: build.version, commit: build.commit };
 
 test("admin-only integrity checks expose degradation without taking healthy content offline", async () => {
   const instance = await start();
@@ -29,10 +33,10 @@ test("admin-only integrity checks expose degradation without taking healthy cont
     assert.ok(overview.integrity.lastFullCheck);
     const health = await anonymous.raw({ url: "/api/health" });
     assert.equal(health.statusCode, 200);
-    assert.deepEqual(health.json(), { ok: true, status: "degraded" });
+    assert.deepEqual(health.json(), { ok: true, status: "degraded", ...release });
     // Reupload repairs the same content address, then the health signal recovers.
     await send(user, [{ path: "repaired.txt", data: "correct bytes" }]);
-    assert.deepEqual(await anonymous.call(api.health), { ok: true, status: "healthy" });
+    assert.deepEqual(await anonymous.call(api.health), { ok: true, status: "healthy", ...release });
     const malformed = await boss.raw({ method: "POST", url: "/api/admin/integrity", payload: { after: "invalid" } });
     assert.equal(malformed.statusCode, 400);
   } finally {
@@ -55,9 +59,9 @@ test("health distinguishes retained reporting failure from a healthy database", 
       db.tx = tx;
     }
     const client = new Client(instance);
-    assert.deepEqual(await client.call(api.health), { ok: true, status: "degraded" });
+    assert.deepEqual(await client.call(api.health), { ok: true, status: "degraded", ...release });
     usage.flush();
-    assert.deepEqual(await client.call(api.health), { ok: true, status: "healthy" });
+    assert.deepEqual(await client.call(api.health), { ok: true, status: "healthy", ...release });
   } finally {
     await instance.close();
   }
@@ -85,7 +89,7 @@ test("an asynchronous integrity failure settles, notifies the administrator and 
     assert.equal(instance.ctx.blobs.status().running, false);
     assert.equal(instance.ctx.blobs.status().lastError, true);
     assert.equal(notifications, 1);
-    assert.deepEqual(await boss.call(api.health), { ok: true, status: "degraded" });
+    assert.deepEqual(await boss.call(api.health), { ok: true, status: "degraded", ...release });
     fault.mock.restore();
     await boss.call(api.admin.integrity, { body: {} });
     await setTimeout(0);
@@ -93,7 +97,7 @@ test("an asynchronous integrity failure settles, notifies the administrator and 
     assert.equal(notifications, 2);
     assert.equal(instance.ctx.blobs.status().lastError, false);
     assert.equal(instance.ctx.blobs.status().lastResult?.complete, true);
-    assert.deepEqual(await boss.call(api.health), { ok: true, status: "healthy" });
+    assert.deepEqual(await boss.call(api.health), { ok: true, status: "healthy", ...release });
     unsubscribe();
   } finally {
     await instance.close();

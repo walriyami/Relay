@@ -391,6 +391,8 @@ export type AdminOverview = {
   };
   activity: { activeUploads: number; receivedBytesLastHour: number };
   local: LocalStatus;
+  /** The saved version of the code this server runs (server/build-info.ts). */
+  build: { version: string; commit: string | null; committed: string | null };
 };
 /**
  * Direct transfers on the local network. off: turned off with RELAY_DIRECT. starting: the helper is

@@ -1,4 +1,6 @@
-// The container's health check: Relay answers its health route on its port.
+// The container's health check: Relay answers its health route on its port. Plain JavaScript, so
+// each probe (every 20 s) starts without Node's TypeScript stripper: about a third of the CPU time
+// and 25 MB less memory on the Pi.
 import { request } from "node:http";
 
 const req = request(
