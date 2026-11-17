@@ -350,8 +350,35 @@ export class Receivers {
       throw error;
     }
     await file.close();
-    await this.commit(upload, receiver, position, hash, crc, source, authorize);
-    if (position === upload.size) await this.publishOnce(upload.id, receiver, authorize);
+    if (position < upload.size) {
+      await this.commit(upload, receiver, position, hash, crc, source, authorize);
+      return position;
+    }
+    // The whole file arrived. Publishing commits its offset with everything else in one transaction,
+    // so a small file costs one commit fewer.
+    const previous = { hash: receiver.hash, crc: receiver.crc, source: receiver.source };
+    Object.assign(receiver, { hash, crc, source });
+    try {
+      await this.publishOnce(upload.id, receiver, authorize);
+    } catch (error) {
+      // The bytes are synced and arrived while the request was allowed, so they are recorded as if
+      // publishing had never been tried. Whatever refused it (a suspended owner, storage that changed)
+      // is checked again when the file is next settled.
+      let recorded = false;
+      try {
+        const current = uploadRow(this.ctx, upload.id);
+        if (current && isActive(current) && current.offset === upload.offset) {
+          this.ctx.db.run("UPDATE uploads SET offset = ?, touched = ? WHERE id = ?", position, Date.now(), upload.id);
+          recorded = true;
+          this.counted(upload, position - upload.offset);
+        }
+      } catch {
+        // Unrecorded, the bytes past the old offset are simply received again.
+      }
+      if (!recorded) Object.assign(receiver, previous);
+      throw error;
+    }
+    this.counted(upload, position - upload.offset);
     return position;
   }
 
@@ -398,10 +425,15 @@ export class Receivers {
     receiver.hash = hash;
     receiver.crc = crc;
     receiver.source = source;
-    this.count(position - upload.offset);
+    this.counted(upload, position - upload.offset);
+  }
+
+  /** Counts bytes once their offset is committed. */
+  private counted(upload: UploadRow, bytes: number) {
+    this.count(bytes);
     // Bytes that came through someone's request link are what the owner received; the rest they sent.
     this.ctx.usage.add(upload.owner, {
-      [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: position - upload.offset,
+      [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: bytes,
     });
   }
 
