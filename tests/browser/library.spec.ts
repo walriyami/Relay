@@ -323,10 +323,8 @@ test("a preview the server is too busy for is asked for again, not left as an ic
   await fileInput(page).setInputFiles([{ name: `${name}.png`, mimeType: "image/png", buffer: png }]);
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
-  const card = page
-    .getByRole("list", { name: "Recent" })
-    .getByRole("button", { name: new RegExp(name) })
-    .first();
+  // The picture sits beside the card's button, not inside it, so look in the whole card.
+  const card = page.getByRole("list", { name: "Recent" }).locator(".collection-card", { hasText: name }).first();
   await expect
     .poll(() => card.locator("img").evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth), {
       timeout: 10_000,

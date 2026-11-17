@@ -147,7 +147,7 @@ test("a full request's limit can be raised, and never set below what it holds", 
   // The guest can send again after a reload.
   await guest.reload();
   await expect(guest.getByText("Up to 1 GB")).toBeVisible();
-  await expect(guest.getByRole("button", { name: "Choose files" })).toBeVisible();
+  await expect(guest.getByRole("button", { name: /^Choose (photos or )?files$/ })).toBeVisible();
   await visitor.close();
 });
 

@@ -118,14 +118,14 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     const card = page.locator(".transfer").first();
     await expect(card.getByRole("status")).toHaveText(endingWith(`: Delivered to ${phone.name} · copy kept in Files`));
     const popup = phone.page.getByRole("dialog", { name: `${second}.txt` });
-    await expect(phone.page.getByRole("button", { name: /^Activity, \d+ new$/ })).toBeVisible();
+    await expect(phone.page.getByRole("button", { name: /^Activity, (\d+|more than 9) new$/ })).toBeVisible();
     await expect(popup).toHaveCount(0);
     await phone.page.keyboard.press("Escape");
     await expect(popup.getByRole("button", { name: "Accept and download" })).toBeVisible();
     await expect(phone.page).toHaveTitle(/^\(\d+\) Relay$/);
     await popup.getByRole("button", { name: "Close" }).click();
 
-    const bell = phone.page.getByRole("button", { name: /^Activity, \d+ new$/ });
+    const bell = phone.page.getByRole("button", { name: /^Activity, (\d+|more than 9) new$/ });
     await bell.click();
     const activity = phone.page.getByRole("dialog", { name: "Activity" });
     const waiting = activity.getByRole("region", { name: "Waiting for you" }).getByRole("listitem");
@@ -183,7 +183,7 @@ test("a delivery that fails leaves everything saved, and Done keeps it in Files"
 
 test("the Activity popup sits directly under its bell", async ({ page }) => {
   await signedIn(page, "Laptop");
-  const button = page.getByRole("button", { name: /^Activity(, \d+ new)?$/ });
+  const button = page.getByRole("button", { name: /^Activity(, (\d+|more than 9) new)?$/ });
   await button.click();
   const popover = page.getByRole("dialog", { name: "Activity" });
   await expect(popover).toBeVisible();
