@@ -9,6 +9,8 @@ import { insertUser } from "./users.ts";
 import { checkPassword } from "./passwords.ts";
 import { streamsOf } from "./streams.ts";
 import { NO_LIMITS } from "../../../shared/model.ts";
+import { beginSetupChoices } from "../setup/index.ts";
+import { removeSetupKey } from "../setup/setup-key.ts";
 
 export async function registerSharedSignIn(app: FastifyInstance, ctx: Context) {
   const config = ctx.config.sso;
@@ -70,13 +72,18 @@ export async function registerSharedSignIn(app: FastifyInstance, ctx: Context) {
             "An application account already uses this username. Sign in to it, then link Walriyami in Settings.",
           );
         const passwordHash = await hashPassword(randomToken());
-        return ctx.db.tx(() => {
+        const created = ctx.db.tx(() => {
           const first = !ctx.db.get("SELECT 1 FROM users LIMIT 1");
           const proof = verifiedAdministrators.get(`${identity.issuer}|${identity.subject}`);
           if (first && (!proof?.administrator || proof.until < Date.now()))
             fail(409, "An administrator must complete application setup first.");
-          return insertUser(ctx, { username, passwordHash, admin: first }, NO_LIMITS, Date.now());
+          const userId = insertUser(ctx, { username, passwordHash, admin: first }, NO_LIMITS, Date.now());
+          // The Walriyami administrator claimed a fresh server: setup continues with their choices.
+          if (first) beginSetupChoices(ctx);
+          return { userId, first };
         });
+        if (created.first) removeSetupKey(ctx.config.root);
+        return created.userId;
       },
       linkAccount(userId, identity) {
         ctx.db.tx(() => {

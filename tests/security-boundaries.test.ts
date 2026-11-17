@@ -74,9 +74,11 @@ test("origin configuration rejects credentials and non-web origins", () => {
   assert.equal(configFromEnv({ RELAY_ORIGIN: "https://relay.example:443/" }).origin, "https://relay.example");
 });
 
-test("the setup key is off unless RELAY_SETUP_KEY turns it on, and a typo stops startup", () => {
-  assert.equal(configFromEnv({}).setupKey, false);
-  for (const value of ["", "false", "0", " FALSE "])
+test("the setup key is on unless RELAY_SETUP_KEY turns it off, and a typo stops startup", () => {
+  // A fresh or reset server must not be claimable by whoever opens it first.
+  assert.equal(configFromEnv({}).setupKey, true);
+  assert.equal(configFromEnv({ RELAY_SETUP_KEY: "" }).setupKey, true);
+  for (const value of ["false", "0", " FALSE "])
     assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, false);
   for (const value of ["true", "1", "True"]) assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, true);
   for (const value of ["yes", "on", "ture"])

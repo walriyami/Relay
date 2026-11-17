@@ -45,6 +45,10 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The Compose files, `.env.example`, `scripts/redeploy.sh` and `npm run verify:compose`. They described a way of running Relay that production doesn't use and nobody tested.
 - Old bundled copies of the Walriyami sign-in package in `vendor/` that nothing installed; only the version in use remains.
 
+### Security
+
+- A fresh or reset server can no longer be claimed by whoever opens it first. Setup asks for a one-time key that Relay prints in its server log (and keeps in `<data>/setup.key` until setup is done). With Walriyami sign-in configured, Walriyami's administrator can instead claim it by signing in. `RELAY_SETUP_KEY` is now on by default; set it to `false` only on a machine nobody else can reach.
+
 ## [1.0.0] - 2026-09-27
 
 The first public release.

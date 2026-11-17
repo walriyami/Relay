@@ -25,8 +25,9 @@ export type Config = {
    */
   trustProxy: string[];
   /**
-   * Setup asks for a one-time key from <root>/setup.key before anyone can create the administrator,
-   * for a server reachable by others before it's set up. Off unless RELAY_SETUP_KEY=true.
+   * Setup asks for a one-time key before anyone can create the administrator, so a fresh or reset
+   * server can't be claimed by whoever opens it first. The key is printed in the server log and
+   * kept in <root>/setup.key until setup. On unless RELAY_SETUP_KEY=false (a machine only you can reach).
    */
   setupKey: boolean;
   /** How long a tab's transfers survive without its event stream. */
@@ -74,7 +75,7 @@ export function configFromEnv(env = process.env): Config {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, false),
+    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true),
     tabLeaseMs: 5 * 60_000,
     sweepMs: 60_000,
     logger: true,

@@ -23,8 +23,8 @@ function freePort() {
 
 /**
  * Relay started the way a person starts it the first time: an empty data folder and no settings
- * at all, so there is no account, no address and no secret yet. `setupKey` starts it with
- * RELAY_SETUP_KEY, as someone who wants setup guarded would.
+ * at all, so there is no account, no address and no secret yet. Setup asks for its key unless the
+ * server is started with RELAY_SETUP_KEY=false; most tests here do that to reach the later steps.
  */
 async function firstStart({ setupKey = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "relay-first-start-"));
@@ -36,7 +36,7 @@ async function firstStart({ setupKey = false } = {}) {
       RELAY_DATA: root,
       PORT: String(port),
       HOST: "localhost",
-      ...(setupKey && { RELAY_SETUP_KEY: "true" }),
+      RELAY_SETUP_KEY: String(setupKey),
     },
     stdio: "ignore",
   });
@@ -160,9 +160,7 @@ test("closing the tab after creating the account picks up where it left off", as
   await skipToRelay(page);
 });
 
-test("a server started with RELAY_SETUP_KEY asks for its key first, spaced like the fields below it", async ({
-  page,
-}) => {
+test("a fresh server asks for its setup key first, spaced like the fields below it", async ({ page }) => {
   await relay.close();
   relay = await firstStart({ setupKey: true });
   await page.goto(relay.url);

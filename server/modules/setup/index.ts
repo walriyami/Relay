@@ -1,6 +1,7 @@
-// First start. Whoever opens Relay before anyone has an account creates the administrator, then
-// makes their own choices and sets the total storage. Nothing has to be configured outside the browser,
-// unless RELAY_SETUP_KEY asks for a one-time key from the server first.
+// First start. The owner proves they run this server, creates the administrator, then makes their
+// own choices and sets the total storage. The proof is the one-time setup key Relay prints in its
+// log (on unless RELAY_SETUP_KEY=false) or, with Walriyami sign-in configured, signing in as a
+// Walriyami administrator (see auth/sso.ts). A stranger who finds a fresh server first has neither.
 import type { FastifyInstance } from "fastify";
 import type { Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
@@ -15,6 +16,12 @@ import { setLimits } from "../admin/settings.ts";
 import { ensureSetupKey, hasSetupKey, removeSetupKey } from "./setup-key.ts";
 
 const ALREADY_SET_UP = "Relay is already set up. Sign in to continue.";
+const KEY_LOG_INTERVAL_MS = 5 * 60_000;
+
+/** Marks setup as waiting for the administrator's choices, once their account exists. */
+export function beginSetupChoices(ctx: Context) {
+  ctx.db.setSetting("setup", "choices");
+}
 
 /** Kept in `settings` under "setup" from the administrator's account until setup finishes. */
 export function setupStateOf(ctx: Context): SetupState {
@@ -26,9 +33,20 @@ export function registerSetup(app: FastifyInstance, ctx: Context) {
   if (ctx.config.setupKey && setupStateOf(ctx) === "account") ensureSetupKey(ctx.config.root);
   else removeSetupKey(ctx.config.root);
 
+  // Repeated now and then while someone is on the setup page, so the owner finds it at the end of a
+  // long log (walctl logs shows the latest lines).
+  let keyLoggedAt = 0;
   route(app, ctx, api.setup.status, () => {
     const state = setupStateOf(ctx);
-    return { state, keyRequired: ctx.config.setupKey && state === "account" };
+    if (ctx.config.setupKey && state === "account" && Date.now() - keyLoggedAt > KEY_LOG_INTERVAL_MS) {
+      keyLoggedAt = Date.now();
+      ctx.log.info(`Relay is waiting to be set up. Setup key: ${ensureSetupKey(ctx.config.root)}`);
+    }
+    return {
+      state,
+      keyRequired: ctx.config.setupKey && state === "account",
+      sharedSignIn: !!ctx.config.sso && state === "account",
+    };
   });
 
   route(
@@ -46,7 +64,7 @@ export function registerSetup(app: FastifyInstance, ctx: Context) {
         if (setupStateOf(ctx) !== "account") fail(409, ALREADY_SET_UP);
         // The administrator can change any limit, so they have none.
         const userId = insertUser(ctx, { username: body.username, passwordHash, admin: true }, NO_LIMITS, now);
-        ctx.db.setSetting("setup", "choices");
+        beginSetupChoices(ctx);
         return insertSession(ctx, userId, newDevice(req, body), "setup");
       });
       removeSetupKey(ctx.config.root);

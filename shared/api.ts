@@ -211,8 +211,13 @@ export const api = {
 
   /** First start: the administrator's account, then their choices and the total storage. See SetupState. */
   setup: {
-    /** `keyRequired`: creating the administrator needs the setup key from the server's data folder. */
-    status: endpoint<{ state: M.SetupState; keyRequired: boolean }>()("GET", "/api/setup", { auth: "public" }),
+    /**
+     * `keyRequired`: creating the administrator needs the one-time key from the server's log.
+     * `sharedSignIn`: a Walriyami administrator can claim it by signing in instead (/api/sso/login).
+     */
+    status: endpoint<{ state: M.SetupState; keyRequired: boolean; sharedSignIn: boolean }>()("GET", "/api/setup", {
+      auth: "public",
+    }),
     /** Creates the administrator and signs them in; refused once anyone has an account. */
     account: endpoint<M.Me>()("POST", "/api/setup/account", {
       auth: "public",

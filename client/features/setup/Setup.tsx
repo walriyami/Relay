@@ -29,6 +29,7 @@ const PROGRESS: { step: Step; label: string }[] = [
 export function Setup({
   state,
   keyRequired,
+  sharedSignIn,
   me,
   setMe,
   onSignedIn,
@@ -36,8 +37,10 @@ export function Setup({
 }: {
   /** Where setup stands when this screen opens; read once. */
   state: Exclude<SetupState, "done">;
-  /** The server was started with RELAY_SETUP_KEY, so creating the account needs its one-time key. */
+  /** Creating the account needs the one-time key the server printed in its log. */
   keyRequired: boolean;
+  /** A Walriyami administrator can claim this server by signing in instead. */
+  sharedSignIn: boolean;
   /** The administrator, once their account exists. */
   me: Me | null;
   setMe: SetMe;
@@ -46,7 +49,15 @@ export function Setup({
   onFinished: () => void;
 }) {
   const [resumed] = useState(state === "choices");
-  const [step, setStep] = useState<Step>(state === "account" ? "welcome" : "yours");
+  // Coming back from a Walriyami sign-in that could not claim this server.
+  const [sharedProblem] = useState(() => new URLSearchParams(location.search).has("sso"));
+  useEffect(() => {
+    if (!sharedProblem) return;
+    const url = new URL(location.href);
+    url.searchParams.delete("sso");
+    history.replaceState(history.state, "", url.pathname + url.search);
+  }, [sharedProblem]);
+  const [step, setStep] = useState<Step>(state !== "account" ? "yours" : sharedProblem ? "account" : "welcome");
   const [claimed, setClaimed] = useState(false);
   const [devicesAdded, setDevicesAdded] = useState(0);
 
@@ -71,6 +82,8 @@ export function Setup({
       step === "account" ? (
         <AccountStep
           keyRequired={keyRequired}
+          sharedSignIn={sharedSignIn}
+          sharedProblem={sharedProblem}
           onBack={() => setStep("welcome")}
           onCreated={(created) => {
             onSignedIn(created);
@@ -144,11 +157,15 @@ class KeyMissing extends Error {}
 
 function AccountStep({
   keyRequired,
+  sharedSignIn,
+  sharedProblem,
   onBack,
   onCreated,
   onClaimed,
 }: {
   keyRequired: boolean;
+  sharedSignIn: boolean;
+  sharedProblem: boolean;
   onBack: () => void;
   onCreated: (me: Me) => void;
   onClaimed: () => void;
@@ -157,10 +174,12 @@ function AccountStep({
   const [keyError, setKeyError] = useState("");
   const keyField = useRef<HTMLInputElement>(null);
   const keyHintId = useId();
+  // Walriyami's administrator proves who they are by signing in; anyone else uses the key from the log.
+  const [useKey, setUseKey] = useState(!sharedSignIn);
   // The key comes first, so it takes focus from the username the form focuses on its own.
   useEffect(() => {
-    if (keyRequired) keyField.current?.focus();
-  }, [keyRequired]);
+    if (keyRequired && useKey) keyField.current?.focus();
+  }, [keyRequired, useKey]);
   const refuseKey = (message: string) => {
     setKeyError(message);
     keyField.current?.focus();
@@ -176,63 +195,80 @@ function AccountStep({
         You’ll be Relay’s administrator: the one who invites people and looks after it. You can add a name, a passkey
         and your other devices later.
       </p>
-      <div className="setup-card card-surface">
-        <AccountForm
-          id="setup"
-          submitLabel="Create account"
-          before={
-            keyRequired && (
-              <Field
-                label="Setup key"
-                after={
-                  <span
-                    id={keyHintId}
-                    className={keyError ? "field-error" : "field-hint"}
-                    role={keyError ? "alert" : undefined}
-                  >
-                    {keyError || "This server asks for its one-time key, from setup.key in its data folder."}
-                  </span>
-                }
-              >
-                <input
-                  ref={keyField}
-                  aria-describedby={keyHintId}
-                  className="input"
-                  type="password"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  maxLength={128}
-                  aria-invalid={!!keyError || undefined}
-                  value={setupKey}
-                  onChange={(event) => {
-                    setSetupKey(event.target.value.trim());
-                    setKeyError("");
-                  }}
-                />
-              </Field>
-            )
-          }
-          create={async (account) => {
-            if (keyRequired && !setupKey) throw new KeyMissing();
-            onCreated(
-              await call(api.setup.account, {
-                body: { ...account, ...thisDevice(), setupKey: setupKey || undefined },
-              }),
-            );
-          }}
-          onError={(e) => {
-            // No account exists while this step shows, so a conflict means someone else got there first.
-            if (e instanceof ApiError && e.status === 409) {
-              onClaimed();
-              return true;
+      {sharedProblem && (
+        <p className="setup-lead" role="status">
+          Only Walriyami’s administrator can set up Relay by signing in. Anyone else needs the setup key.
+        </p>
+      )}
+      {!useKey ? (
+        <div className="setup-actions">
+          <a className="btn btn-primary" href="/api/sso/login">
+            Continue with Walriyami
+          </a>
+          <button type="button" className="link" onClick={() => setUseKey(true)}>
+            Use the setup key instead
+          </button>
+        </div>
+      ) : (
+        <div className="setup-card card-surface">
+          <AccountForm
+            id="setup"
+            submitLabel="Create account"
+            before={
+              keyRequired && (
+                <Field
+                  label="Setup key"
+                  after={
+                    <span
+                      id={keyHintId}
+                      className={keyError ? "field-error" : "field-hint"}
+                      role={keyError ? "alert" : undefined}
+                    >
+                      {keyError ||
+                        "Relay printed this one-time key in its log when it started. It’s also in setup.key in its data folder."}
+                    </span>
+                  }
+                >
+                  <input
+                    ref={keyField}
+                    aria-describedby={keyHintId}
+                    className="input"
+                    type="password"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    maxLength={128}
+                    aria-invalid={!!keyError || undefined}
+                    value={setupKey}
+                    onChange={(event) => {
+                      setSetupKey(event.target.value.trim());
+                      setKeyError("");
+                    }}
+                  />
+                </Field>
+              )
             }
-            if (e instanceof KeyMissing) return refuseKey("Enter the setup key.");
-            if (e instanceof ApiError && e.status === 403) return refuseKey(e.message);
-            return false;
-          }}
-        />
-      </div>
+            create={async (account) => {
+              if (keyRequired && !setupKey) throw new KeyMissing();
+              onCreated(
+                await call(api.setup.account, {
+                  body: { ...account, ...thisDevice(), setupKey: setupKey || undefined },
+                }),
+              );
+            }}
+            onError={(e) => {
+              // No account exists while this step shows, so a conflict means someone else got there first.
+              if (e instanceof ApiError && e.status === 409) {
+                onClaimed();
+                return true;
+              }
+              if (e instanceof KeyMissing) return refuseKey("Enter the setup key.");
+              if (e instanceof ApiError && e.status === 403) return refuseKey(e.message);
+              return false;
+            }}
+          />
+        </div>
+      )}
     </>
   );
 }

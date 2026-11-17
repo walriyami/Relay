@@ -185,7 +185,7 @@ function Private() {
   const [me, setMe] = useState<Me | null>(null);
   /** Stays as it was at load until setup's last screen is left, however far setup got meanwhile. */
   const [setup, setSetup] = useState<SetupState>("done");
-  const [setupKeyRequired, setSetupKeyRequired] = useState(false);
+  const [setupProof, setSetupProof] = useState({ keyRequired: false, sharedSignIn: false });
   const [loading, setLoading] = useState(true);
   /** The first session check failed for a reason other than being signed out. */
   const [unreachable, setUnreachable] = useState(false);
@@ -235,7 +235,7 @@ function Private() {
         if (cancelled) return;
         setUnreachable(false);
         setSetup(status.state);
-        setSetupKeyRequired(status.keyRequired);
+        setSetupProof({ keyRequired: status.keyRequired, sharedSignIn: status.sharedSignIn });
         if (data) signedIn(data);
         else setMe(null);
       })
@@ -341,7 +341,8 @@ function Private() {
       <Public>
         <Setup
           state={setup}
-          keyRequired={setupKeyRequired}
+          keyRequired={setupProof.keyRequired}
+          sharedSignIn={setupProof.sharedSignIn}
           me={me}
           setMe={updateMe}
           onSignedIn={signedInHere}
