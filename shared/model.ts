@@ -117,6 +117,8 @@ export type Me = {
   usage: Usage;
   /** The server offers direct transfers on the local network (see shared/local.ts). */
   local: boolean;
+  /** Files of this member, in Files or Trash, whose stored copy is missing or damaged. */
+  damagedFiles: number;
 };
 
 /** What a device is, from its browser when it signed in; it picks the icon, whatever the name. */
@@ -168,6 +170,8 @@ export type Node = NodeRef & {
   created: Time;
   /** Present only for kind "text". */
   text?: string;
+  /** The stored copy of this file is missing or damaged; uploading the same file again repairs it. */
+  damaged?: true;
 };
 
 /** One library card: everything saved by one transfer (or one guest submission). */
@@ -203,6 +207,8 @@ export type ItemSummary = {
   linked: boolean;
   /** Has unfinished uploads. */
   uploading: boolean;
+  /** Files whose stored copy is missing or damaged (found by the file check or at startup). */
+  damaged: number;
 };
 export type ItemDetail = ItemSummary & { nodes: Node[]; links: Link[] };
 /**
@@ -554,6 +560,11 @@ export type ScrubResult = {
   finished: number;
 };
 export type BlobStatus = {
+  /**
+   * Members with files whose stored copy is missing, damaged or unreadable, most affected first.
+   * Counts only: the administrator sees whose files, not which.
+   */
+  affected: { userId: Id; username: string; files: number; items: number }[];
   total: number;
   healthy: number;
   missing: number;

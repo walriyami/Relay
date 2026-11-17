@@ -84,14 +84,17 @@ export function ContentView({
           root={root}
           rootLabel={rootNode?.name}
           onOpen={(node, list) => setViewing({ list, index: list.indexOf(node) })}
-          fileAction={(node) => (
-            <IconButton
-              size="sm"
-              label={`Download ${node.name}`}
-              icon={<Download size={16} />}
-              onClick={() => download(source.file(node.id), node.name)}
-            />
-          )}
+          fileAction={(node) =>
+            // A damaged file would only fail to download; the item explains how to repair it.
+            node.damaged ? null : (
+              <IconButton
+                size="sm"
+                label={`Download ${node.name}`}
+                icon={<Download size={16} />}
+                onClick={() => download(source.file(node.id), node.name)}
+              />
+            )
+          }
           folderAction={({ node }) => (
             <IconButton
               size="sm"

@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
 import {
   Check,
+  CircleAlert,
   Clock,
   Copy,
   Download,
@@ -15,7 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import type { ItemSummary, Link, SearchMatch } from "../api";
-import { ago, bytes } from "../lib/format";
+import { ago, bytes, plural } from "../lib/format";
 import { isOnline } from "../lib/connection";
 import { ownerSource } from "../lib/source";
 import { snapshot, subscribe, transferFor, type Transfer } from "../lib/transfers";
@@ -157,6 +158,7 @@ export function CollectionCard({
   // A lone folder shows as a folder, not as whichever file happens to be first inside it.
   const onlyFolder = item.topFolders === 1 && !item.topFiles && !item.texts;
   const preview = item.preview;
+  const damaged = item.damaged > 0 ? `${plural(item.damaged, "damaged file")}. Open it to see which` : "";
   return (
     <div
       className={`card collection-card${trash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${selecting && selected ? " is-selected" : ""}`}
@@ -171,6 +173,7 @@ export function CollectionCard({
           item.name,
           meta,
           detail,
+          damaged,
           item.requestId && "Received through a request",
           listed.match && (listed.match.in === "text" ? `Text: ${listed.match.text}` : `Contains ${listed.match.text}`),
         ]
@@ -210,8 +213,13 @@ export function CollectionCard({
               <span style={{ width: `${Math.max(progress.pct, 3)}%` }} />
             </span>
           )}
-          {((item.linked && !trash) || parts > 1 || item.requestId) && (
+          {((item.linked && !trash) || parts > 1 || item.requestId || damaged) && (
             <span className="card-badges">
+              {damaged && (
+                <span className="card-badge card-badge-danger" title={damaged}>
+                  <CircleAlert size={13} aria-hidden /> {item.damaged}
+                </span>
+              )}
               {item.requestId && (
                 <span className="card-badge" title="Received through a request">
                   <Inbox size={13} aria-hidden />

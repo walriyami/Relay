@@ -95,6 +95,16 @@ export function summaries(ctx: Context, ids: string[]): Map<string, ItemSummary>
     "SELECT DISTINCT item FROM nodes WHERE state = 'pending' AND item IN (SELECT value FROM json_each(?))",
     list,
   );
+  // From the few damaged blobs to their nodes, so a healthy library costs one empty index lookup.
+  const damaged = new Map(
+    ctx.db
+      .all<{ item: string; files: number }>(
+        `SELECT n.item, count(*) AS files FROM blobs b CROSS JOIN nodes n ON n.blob = b.sha256
+         WHERE b.integrity <> 'ok' AND n.item IN (SELECT value FROM json_each(?)) GROUP BY n.item`,
+        list,
+      )
+      .map((r) => [r.item, r.files]),
+  );
   for (const id of ids) {
     const row = rows.get(id);
     if (!row || result.has(id) || !readable(ctx, row, now)) continue;
@@ -114,6 +124,7 @@ export function summaries(ctx: Context, ids: string[]): Map<string, ItemSummary>
       ...stored,
       linked: linked.has(id) && isLive(row, now),
       uploading: uploading.has(id),
+      damaged: damaged.get(id) ?? 0,
     });
   }
   return result;
@@ -123,6 +134,14 @@ type NodeRow = Omit<Node, "text"> & { text: string | null };
 
 /** Every ready node of an item with its path, parents before children. */
 export function nodes(ctx: Context, itemId: string): Node[] {
+  const damaged = new Set(
+    ctx.db
+      .all<{ id: string }>(
+        "SELECT n.id FROM blobs b CROSS JOIN nodes n ON n.blob = b.sha256 WHERE b.integrity <> 'ok' AND n.item = ?",
+        itemId,
+      )
+      .map((r) => r.id),
+  );
   return ctx.db
     .all<NodeRow>(
       // The walk carries every column: joining back to nodes lets the planner scan the whole table.
@@ -136,7 +155,9 @@ export function nodes(ctx: Context, itemId: string): Node[] {
        SELECT id, name, path, kind, size, mime, parent, created, text FROM tree ORDER BY path`,
       itemId,
     )
-    .map(({ text, ...node }) => (node.kind === "text" ? { ...node, text: text ?? "" } : node));
+    .map(({ text, ...node }) =>
+      node.kind === "text" ? { ...node, text: text ?? "" } : damaged.has(node.id) ? { ...node, damaged: true } : node,
+    );
 }
 
 export function listItems(ctx: Context, owner: string, query: Query<typeof api.items.list>): ItemPage {

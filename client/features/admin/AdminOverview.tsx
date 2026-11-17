@@ -292,7 +292,7 @@ function healthProblems({ operations: o, storage, integrity, usageBuffer, local 
     storage.diskFree < Math.min(1024 ** 3, storage.diskTotal * 0.05) &&
       "Disk space is low. Free space on the host before uploads fail.",
     integrity.missing + integrity.corrupt + integrity.errors > 0 &&
-      `${plural(integrity.missing + integrity.corrupt + integrity.errors, "stored file")} unavailable or damaged. Check the data volume and restore affected files from a verified backup.`,
+      `${plural(integrity.missing + integrity.corrupt + integrity.errors, "stored file")} missing or damaged. The members below see which of their items are affected and can upload those files again. Check the data disk for faults.`,
     integrity.lastError && "The last file check failed. Retry the check when storage is available.",
     usageBuffer.failed && "Usage statistics could not be saved. Buffered counts will retry when storage recovers.",
     usageBuffer.discarded > 0 &&
@@ -350,6 +350,23 @@ function ServiceHealth({ data }: { data: Overview }) {
           {problem}
         </p>
       ))}
+      {data.integrity.affected.length > 0 && (
+        <section aria-labelledby="admin-damaged">
+          <h3 id="admin-damaged" className="field-label">
+            Members with damaged files
+          </h3>
+          <ul className="list">
+            {data.integrity.affected.map((m) => (
+              <li className="list-row" key={m.userId}>
+                <span>{m.username}</span>
+                <span className="muted">
+                  {plural(m.files, "file")} in {plural(m.items, "item")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {!problems.length && (
         <p className="muted">
           {jobs === 1 ? "The maintenance job is" : `All ${jobs} maintenance jobs are`} running on schedule. Last hour:{" "}

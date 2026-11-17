@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { crc32 } from "node:zlib";
 import { api, urls } from "../shared/api.ts";
 import { thumbnailFailure, thumbnailPath } from "../server/storage/blobs.ts";
-import { member, send, start, type Instance } from "./support/harness.ts";
+import { admin, ApiError, member, send, start, type Instance } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 async function seed(instance: Instance, data: string | Buffer) {
@@ -116,6 +116,75 @@ for (const damage of ["missing", "corrupt"] as const) {
     }
   });
 }
+
+test("owners see which items and files are damaged, the administrator sees whose, and nobody else sees anything", async () => {
+  const instance = await start();
+  try {
+    const boss = await admin(instance);
+    const sara = await member(instance, "sara", boss);
+    const omar = await member(instance, "omar", boss);
+    const first = (
+      await send(sara, [
+        { path: "a.bin", data: "alpha payload" },
+        { path: "b.bin", data: "bravo payload" },
+      ])
+    ).result.itemId;
+    const second = (await send(sara, [{ path: "c.bin", data: "charlie payload" }])).result.itemId;
+    const theirs = (await send(omar, [{ path: "d.bin", data: "delta payload" }])).result.itemId;
+    const blobs = instance.ctx.blobs;
+    writeFileSync(blobs.path(sha("alpha payload")), "x".repeat("alpha payload".length));
+    await fsPromises.unlink(blobs.path(sha("charlie payload")));
+    const told: [string, string[]][] = [];
+    const publish = instance.ctx.events.publish.bind(instance.ctx.events);
+    instance.ctx.events.publish = (userId, ...topics) => {
+      told.push([userId, topics]);
+      publish(userId, ...topics);
+    };
+    await blobs.scrub();
+    const saraId = (await sara.call(api.session.get)).user.id;
+    assert.ok(
+      told.some(([user, topics]) => user === saraId && topics.includes("items") && topics.includes("account")),
+      "the owner's open pages refresh when damage is found",
+    );
+
+    const damagedOf = async (client: typeof sara) =>
+      Object.fromEntries((await client.call(api.items.list)).items.map((item) => [item.id, item.damaged]));
+    assert.deepEqual(await damagedOf(sara), { [first]: 1, [second]: 1 });
+    assert.deepEqual(await damagedOf(omar), { [theirs]: 0 });
+    const detail = await sara.call(api.items.get, { params: { id: first } });
+    assert.deepEqual(
+      detail.nodes.map((n) => [n.name, !!n.damaged]),
+      [
+        ["a.bin", true],
+        ["b.bin", false],
+      ],
+    );
+    assert.equal((await sara.call(api.session.get)).damagedFiles, 2);
+    assert.equal((await omar.call(api.session.get)).damagedFiles, 0);
+
+    // Counts only: the administrator learns whose files, not which.
+    const { integrity } = await boss.call(api.admin.overview);
+    assert.deepEqual(integrity.affected, [{ userId: saraId, username: "sara", files: 2, items: 2 }]);
+    assert.ok(!JSON.stringify(integrity).includes("a.bin"));
+    await assert.rejects(omar.call(api.admin.overview), (e) => e instanceof ApiError && e.status === 403);
+    await assert.rejects(
+      omar.call(api.items.get, { params: { id: first } }),
+      (e) => e instanceof ApiError && e.status === 404,
+    );
+
+    // Uploading the same file again repairs it everywhere.
+    told.length = 0;
+    await send(sara, [{ path: "again.bin", data: "alpha payload" }]);
+    assert.ok(told.some(([user, topics]) => user === saraId && topics.includes("items")));
+    assert.equal((await damagedOf(sara))[first], 0);
+    assert.equal((await sara.call(api.session.get)).damagedFiles, 1);
+    assert.deepEqual((await boss.call(api.admin.overview)).integrity.affected, [
+      { userId: saraId, username: "sara", files: 1, items: 1 },
+    ]);
+  } finally {
+    await instance.close();
+  }
+});
 
 test("scrub cursors and cancellation never certify a skipped prefix; validated chunks can complete a full scan", async () => {
   const instance = await start({}, undefined, { setup: false });

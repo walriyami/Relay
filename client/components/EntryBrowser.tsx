@@ -119,7 +119,11 @@ export function EntryBrowser({
                 <span className="tile-name" title={node.name}>
                   {node.name}
                 </span>
-                <span className="tile-meta">{bytes(node.size)}</span>
+                {node.damaged ? (
+                  <span className="tile-meta danger">Damaged · can’t be downloaded</span>
+                ) : (
+                  <span className="tile-meta">{bytes(node.size)}</span>
+                )}
               </button>
               {fileAction && <div className="tile-action">{fileAction(node)}</div>}
             </div>

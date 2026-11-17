@@ -61,6 +61,14 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
       footer={data ? data.trashed ? <TrashFooter c={data} /> : <ItemFooter c={data} /> : undefined}
     >
       {error && !unavailable && data && <LoadFailed error={error} onRetry={reload} banner />}
+      {!!data?.damaged && (
+        <p className="notice" role="alert">
+          {data.damaged === 1 ? "1 file in this item is" : `${data.damaged.toLocaleString()} files in this item are`}{" "}
+          damaged: Relay’s stored copy is missing or no longer matches what was uploaded, so{" "}
+          {data.damaged === 1 ? "it" : "they"} can’t be downloaded. Upload the same file again to repair it, or move the
+          item to Trash if you no longer need it.
+        </p>
+      )}
       {data?.uploading && (
         <p className="notice neutral" role="status">
           Wait for the uploads to finish before sharing or sending.

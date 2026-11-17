@@ -399,6 +399,14 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           </div>
         )}
       </div>
+      {!trash && me.damagedFiles > 0 && (
+        <p className="notice" role="alert">
+          {me.damagedFiles === 1 ? "1 of your files is" : `${me.damagedFiles.toLocaleString()} of your files are`}{" "}
+          damaged and can’t be downloaded. Items with a red warning, here or in Trash, show which. Upload the same{" "}
+          {me.damagedFiles === 1 ? "file again to repair it" : "files again to repair them"}, or delete what you no
+          longer need.
+        </p>
+      )}
       {/* Nothing to search or sort until there is something here. */}
       {!nothingHere && (
         <div className="toolbar">

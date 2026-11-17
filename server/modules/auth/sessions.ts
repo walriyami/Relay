@@ -106,6 +106,11 @@ export function me(ctx: Context, userId: string, deviceId: string, csrf: string)
     prefs: readPrefs(user.prefs),
     usage: usageOf(ctx, userId),
     local: !!ctx.config.local,
+    damagedFiles: ctx.db.value<number>(
+      `SELECT count(*) FROM blobs b CROSS JOIN nodes n ON n.blob = b.sha256
+       WHERE b.integrity <> 'ok' AND n.owner = ? AND n.state = 'ready'`,
+      userId,
+    )!,
   };
 }
 

@@ -1140,6 +1140,10 @@ button.card:focus-visible,
   font-weight: 700;
   backdrop-filter: blur(4px);
 }
+/* On top of a thumbnail in either theme, so a fixed red rather than the theme's danger text colour. */
+.card-badge-danger {
+  background: #b22b20;
+}
 .card-badge-link {
   width: 24px;
   justify-content: center;
@@ -1324,6 +1328,9 @@ button.card:focus-visible,
   padding: 0 var(--s3) var(--s2);
   font-size: 0.78rem;
   color: var(--muted);
+}
+.tile-meta.danger {
+  color: var(--danger);
 }
 .tile-action {
   position: absolute;

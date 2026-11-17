@@ -269,8 +269,13 @@ export function createBlobStore(ctx: Context): BlobStore {
     return draining;
   };
   const unavailable = () => fail(503, "A stored file is unavailable. Contact the administrator.");
-  const mark = (row: BlobRow, integrity: Integrity) =>
-    ctx.db.run(
+  // Owners see damage on their items and in Files, so tell them when a file's state changes.
+  const notifyOwners = (sha256: string) => {
+    for (const { owner } of ctx.db.all<{ owner: string }>("SELECT DISTINCT owner FROM nodes WHERE blob = ?", sha256))
+      ctx.events.publish(owner, "items", "account");
+  };
+  const mark = (row: BlobRow, integrity: Integrity) => {
+    const changes = ctx.db.run(
       "UPDATE blobs SET integrity = ?, checked_at = ? WHERE sha256 = ? AND created = ? AND integrity = ? AND checked_at IS ?",
       integrity,
       Date.now(),
@@ -279,6 +284,9 @@ export function createBlobStore(ctx: Context): BlobStore {
       row.integrity,
       row.checked_at,
     ).changes;
+    if (changes && integrity !== row.integrity) notifyOwners(row.sha256);
+    return changes;
+  };
 
   async function scan(options: ScrubOptions): Promise<ScrubResult> {
     const started = Date.now();
@@ -452,7 +460,8 @@ export function createBlobStore(ctx: Context): BlobStore {
         for (const dir of [root, dirname(directory), directory]) fsyncDirectory(dir);
       }
       const now = Date.now();
-      ctx.db.tx(() => {
+      const repaired = ctx.db.tx(() => {
+        const was = ctx.db.value<string>("SELECT integrity FROM blobs WHERE sha256 = ?", sha256);
         ctx.db.run(
           `INSERT INTO blobs(sha256, size, crc32, created, integrity, checked_at) VALUES(?, ?, ?, ?, 'ok', ?)
        ON CONFLICT(sha256) DO UPDATE SET size = excluded.size, crc32 = excluded.crc32, integrity = 'ok', checked_at = excluded.checked_at`,
@@ -463,7 +472,10 @@ export function createBlobStore(ctx: Context): BlobStore {
           now,
         );
         ctx.db.run("DELETE FROM blob_cleanup WHERE sha256 = ? AND temporary = ?", sha256, name);
+        return was !== undefined && was !== "ok";
       });
+      // Uploading a damaged file again repairs every item that holds it.
+      if (repaired) notifyOwners(sha256);
       if (stage) release(sha256, stage);
     } catch (error) {
       if (!stage) collect([sha256]);
@@ -528,8 +540,14 @@ export function createBlobStore(ctx: Context): BlobStore {
          coalesce(sum(integrity = 'missing'), 0) AS missing, coalesce(sum(integrity = 'corrupt'), 0) AS corrupt,
          coalesce(sum(integrity = 'unreadable'), 0) AS errors, max(checked_at) AS lastChecked FROM blobs`,
       )!;
+      const affected = ctx.db.all<{ userId: string; username: string; files: number; items: number }>(
+        `SELECT u.id AS userId, u.username, count(*) AS files, count(DISTINCT n.item) AS items
+         FROM blobs b CROSS JOIN nodes n ON n.blob = b.sha256 JOIN users u ON u.id = n.owner
+         WHERE b.integrity <> 'ok' AND n.state = 'ready' GROUP BY u.id ORDER BY files DESC, u.username`,
+      );
       return {
         ...counts,
+        affected: affected.map((row) => ({ ...row })),
         lastFullCheck: Number(ctx.db.setting(FULL_CHECK)) || null,
         lastResult,
         lastError,
@@ -723,8 +741,10 @@ export function createBlobStore(ctx: Context): BlobStore {
           else errors.push(error);
         }
       }
-      for (const sha256 of missing)
+      for (const sha256 of missing) {
         ctx.db.run("UPDATE blobs SET integrity = 'missing', checked_at = ? WHERE sha256 = ?", Date.now(), sha256);
+        notifyOwners(sha256);
+      }
       if (errors.length) throw new AggregateError(errors, "Storage reconciliation failed; retry required.");
       return { removedFiles, missing };
     },

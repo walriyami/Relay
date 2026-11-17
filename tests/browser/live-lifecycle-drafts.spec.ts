@@ -180,6 +180,7 @@ function itemFixture(now: number, patch: Partial<ItemDetail> = {}): ItemDetail {
     textExcerpt: null,
     linked: true,
     uploading: false,
+    damaged: 0,
     nodes: [],
     links: [],
     ...patch,

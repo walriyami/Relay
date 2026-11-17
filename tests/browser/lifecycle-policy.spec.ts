@@ -27,6 +27,7 @@ const itemFixture = (now: number, patch: Partial<ItemDetail> = {}): ItemDetail =
   textExcerpt: null,
   linked: false,
   uploading: false,
+  damaged: 0,
   nodes: [],
   links: [],
   ...patch,
