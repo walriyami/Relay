@@ -475,6 +475,8 @@ CREATE TABLE external_identities (
  issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  PRIMARY KEY(issuer, subject), UNIQUE(issuer, user_id)
 ) STRICT;
+-- Admin's member list asks, for each member, whether they sign in with Walriyami.
+CREATE INDEX external_identities_user ON external_identities(user_id);
 CREATE TABLE external_sessions (
  session_hash TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
  issuer TEXT NOT NULL, subject TEXT NOT NULL

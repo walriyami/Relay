@@ -20,6 +20,7 @@ export const CONTENT_TABLES = [
   "links",
   "link_visits",
   "deliveries",
+  "delivery_receipts",
   "activity",
   "usage",
   "traffic",
