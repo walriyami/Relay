@@ -71,7 +71,9 @@ test("six numeric digits auto-submit once and preserve leading zeroes", async ({
   await page.keyboard.type("012345");
   await expect(field(page)).toHaveValue("012-345");
   await expect(boxes(page)).toHaveText(["0", "1", "2", "3", "4", "5"]);
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   expect(attempts).toEqual(["012345"]);
 });
 
@@ -123,7 +125,9 @@ test("a chosen box is the one that changes and keyboard navigation follows it", 
 test("a failed lookup preserves the final selection for correction", async ({ page }) => {
   await field(page).click();
   await page.keyboard.type("123456");
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(field(page)).toBeFocused();
   await expect(boxes(page).nth(5)).toHaveAttribute("data-current", "true");
   expect(await selection(page)).toEqual([6, 7]);
@@ -160,7 +164,9 @@ test("a delayed failure preserves a chosen box and does not steal another field'
   } finally {
     releaseResponse();
   }
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(page.getByLabel("Username")).toBeFocused();
   await expect(boxes(page).nth(3)).toHaveAttribute("data-current", "true");
   expect(await selection(page)).toEqual([4, 5]);
