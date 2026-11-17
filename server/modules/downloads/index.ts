@@ -59,12 +59,14 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     return access;
   };
   /**
-   * A download is a GET for a file saved rather than previewed, or a ZIP. Resuming one (a Range
-   * past the start) is the same download, and HEAD fetches nothing.
+   * A download is a GET for a whole file saved rather than previewed, or a ZIP. Resuming one (a Range
+   * past the start) is the same download and HEAD fetches nothing. A browser saving a file asks for
+   * all of it or for `bytes=0-`; a range with an end is a page reading part of a file (the share
+   * page's text excerpt reads the first 4 KiB), not someone downloading it.
    */
   const counted = (req: FastifyRequest, access: ShareAccess, attachment: boolean) => {
-    const range = req.headers.range;
-    if (req.method === "GET" && attachment && (!range || /^bytes=0-/.test(range))) ctx.links.downloaded(access);
+    const range = req.headers.range?.trim();
+    if (req.method === "GET" && attachment && (!range || range === "bytes=0-")) ctx.links.downloaded(access);
   };
 
   /** Bytes a member took from their own Files, or that a link delivered on their behalf. */

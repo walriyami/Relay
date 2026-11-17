@@ -225,7 +225,7 @@ export function FilePreview({ entry, source }: { entry: NodeRef; source: Content
       <PdfPreview url={inline} name={entry.name} onFailed={() => setPdfFailed(true)} />
     );
   if (entry.size === 0) return <NoPreview entry={entry} message="This file is empty." />;
-  if (kind === "text") return <TextPreview url={source.file(entry.id)} size={entry.size} />;
+  if (kind === "text") return <TextPreview url={inline} size={entry.size} />;
   if (kind === "video") return <video className="preview-media" src={inline} controls playsInline preload="metadata" />;
   if (kind === "audio")
     return (

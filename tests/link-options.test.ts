@@ -58,6 +58,25 @@ test("opens and downloads are traced per person, never for the owner", async () 
     const share = await openShare(phone, link.token);
     const file = share.nodes[0].id;
 
+    // Opening the page and looking at it isn't a download: the card's text excerpt reads only the
+    // first bytes, with or without the preview flag, and fires no "downloaded" notice.
+    assert.equal((await download(phone, link.token, file, { range: "bytes=0-3" })).statusCode, 206);
+    assert.equal(
+      (
+        await phone.raw({
+          method: "GET",
+          url: urls.shareContent(link.token, file, { inline: true }),
+          headers: { range: "bytes=0-4095" },
+        })
+      ).statusCode,
+      206,
+    );
+    assert.equal((await owner.call(api.links.list))[0].downloads, 0);
+    assert.equal(
+      (await owner.call(api.activity.list)).entries.some((e) => e.kind === "link" && e.action === "downloaded"),
+      false,
+    );
+
     // Previews and resumed ranges aren't downloads; a whole attachment is.
     assert.equal(
       (await phone.raw({ method: "GET", url: urls.shareContent(link.token, file, { inline: true }) })).statusCode,

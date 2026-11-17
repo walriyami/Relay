@@ -159,7 +159,7 @@ export function Thumbnail({
         if (size > 2 * 1024 ** 3) throw new Error("large");
         return pdfThumbnail(file, file ? "" : source!.file(entry.id!, true), size);
       }
-      return textExcerpt(file ? undefined : source!.file(entry.id!), file);
+      return textExcerpt(file ? undefined : source!.file(entry.id!, true), file);
     })
       .then((value) => {
         if (!value) return;

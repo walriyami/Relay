@@ -51,6 +51,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 ### Fixed
 
 - Moving an item to Trash pauses its links and codes instead of turning them off for good. Restoring it, or **Undo**, makes them work again, including links an earlier version turned off this way.
+- Opening a share page no longer counts as a download or tells the owner “Someone downloaded”. Only saving a whole file or a ZIP counts.
 
 ## [1.0.0] - 2026-09-27
 
