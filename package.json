@@ -39,7 +39,7 @@
     "@walriyami/auth": "file:vendor/walriyami-auth-0.1.4.tgz",
     "fastify": "^5.6.0",
     "heic-decode": "^2.1.0",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.48.0",
     "node-datachannel": "^0.33.4",
     "pdfjs-dist": "^6.3.289",
     "qrcode": "^1.5.4",
