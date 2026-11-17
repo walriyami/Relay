@@ -48,15 +48,21 @@ Tests never touch real data. Every instance uses a new temporary directory and g
 
 These scripts exercise Relay at a scale that's too slow for every commit. Each one uses disposable storage and generated content.
 
-| Command                                                  | What it checks                                                                                                                                                                                                   |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run verify:scale`                                   | Uploads a 2 GiB file with a server restart halfway through, then checks the download's SHA-256. Uploads 10,000 files and checks every ZIP path and hash.                                                         |
-| `npm run verify:browser-scale`                           | Sends 10,000 files through a real browser.                                                                                                                                                                       |
-| `npm run verify:container`                               | Builds the Docker image and checks the single-writer lock, recovery after `SIGKILL` and a full disk, on throwaway containers and volumes.                                                                        |
-| `npm run verify:compose`                                 | Runs the portable Compose stack with the prebuilt `relay-verify` image, checking compressed wire bytes, cache headers and the end-to-end deployment verifier. Build with `docker build -t relay-verify .` first. |
-| `npm run verify:deployment -- --run-live --origin <url>` | Smoke-tests a running instance end to end. It needs `RELAY_VERIFY_USERNAME` and `RELAY_VERIFY_PASSWORD`, and never runs without `--run-live`.                                                                    |
+| Command                                                  | What it checks                                                                                                                                           |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run verify:scale`                                   | Uploads a 2 GiB file with a server restart halfway through, then checks the download's SHA-256. Uploads 10,000 files and checks every ZIP path and hash. |
+| `npm run verify:browser-scale`                           | Sends 10,000 files through a real browser.                                                                                                               |
+| `npm run verify:container`                               | Builds the Docker image and checks the single-writer lock, recovery after `SIGKILL` and a full disk, on throwaway containers and volumes.                |
+| `npm run verify:deployment -- --run-live --origin <url>` | Smoke-tests a running instance end to end. It needs `RELAY_VERIFY_USERNAME` and `RELAY_VERIFY_PASSWORD`, and never runs without `--run-live`.            |
 
 Each script's header comment lists its options, for example `--size 80MiB --files 300` for a quick run.
+
+## Releasing
+
+Commit the change, then deploy that commit as described in [Hosting](hosting.md#updating):
+`walctl deploy relay-production --commit main`. A build from uncommitted files stops with an error, because the
+image must record the commit it holds; `/api/health` and **Admin → Service health** then show it. To build an
+image locally, name the commit: `docker build --build-arg RELAY_COMMIT=$(git rev-parse HEAD) .`
 
 `npm run bench:transfers` measures Direct transfers, Nearby and plain HTTP the way they run on real devices: each browser and the server in a container of its own, sending over links shaped like fast, typical and weak Wi-Fi (`--profiles wifi6,wifi7` go past what a 400 Mbit/s connection carries), with phones given one or two CPUs. Numbers from one computer talking to itself only show the best case, so judge changes to either path with this. It needs Docker; `--source <checkout>` measures another checkout, such as `main`, to compare with, and results also go to `bench-results.jsonl`. A transfer that doesn't finish leaves each page's text, console and a screenshot in `bench-failures/`.
 

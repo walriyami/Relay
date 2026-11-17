@@ -21,7 +21,12 @@ updates:
       actions:
         patterns: ["*"]
 
+  # Moves the pinned base image to its newest digest, which is how the image gets OS and Node fixes.
+  # Node majors are a deliberate change (and odd ones are never LTS), so they aren't proposed.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]

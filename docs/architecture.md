@@ -21,7 +21,7 @@ flowchart LR
     BLOBS[(blobs/ by SHA-256)]
   end
   UI -- JSON --> API
-  UI -- 8 MiB chunks --> TUS
+  UI -- adaptive chunks --> TUS
   UI -- byte ranges --> DL
   SSE -- Server-Sent Events --> UI
   API --> DB
@@ -39,7 +39,7 @@ flowchart LR
 ## Transfers
 
 1. The browser announces a transfer as one manifest: its files, folders and optional text. The server creates the pending item and one upload per file in a single transaction.
-2. Each file uploads separately over the [tus](https://tus.io) resumable protocol in 8 MiB chunks, several at a time. The server hashes bytes as they arrive, so finishing even a very large file is instant.
+2. Each file uploads separately over the [tus](https://tus.io) resumable protocol in chunks, several at a time. Chunks start at 1 MiB and grow or shrink (256 KiB to 32 MiB) so each takes about 15 seconds on the connection it's using. The server hashes bytes as they arrive, so finishing even a very large file is instant.
 3. When every file is in, the browser completes the transfer with a destination: **Save**, **Create link**, or **Send to a device**.
 
 Uploads belong to the browser tab that started them. The tab holds a lease through its event stream or a short authenticated capacity probe. If the network drops or the server restarts, the tab resumes from the server's confirmed offset. When a tab closes or reloads, its unfinished uploads are abandoned on purpose. If a tab disappears without warning, its uploads are released five minutes after it was last heard from.

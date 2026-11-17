@@ -4,8 +4,8 @@
 //      stale-lock wait), resumes from HEAD's offset and serves the file with the source's SHA-256;
 //   3. a full disk (small tmpfs) refuses new transfers with 507, a chunk that hits ENOSPC answers 507
 //      without moving the offset, and the same upload succeeds after space is freed.
-// Every container and volume is named relay-verify-<run>-* and removed afterwards. The live `relay`
-// compose project, its volumes and its network are never touched.
+// Every container and volume is named relay-verify-<run>-* and removed afterwards; nothing else is
+// touched.
 //
 // Usage: npm run verify:container -- [--skip-build] [--payload 96MiB]
 import { execFileSync, spawnSync } from "node:child_process";
@@ -57,7 +57,8 @@ const docker = (...args: string[]) =>
     timeout: 180_000,
     killSignal: "SIGKILL",
   }).trim();
-// The same hardening as compose.yaml, so the image is exercised the way it is deployed.
+// Everything walctl applies (an init process, no capabilities, no privilege escalation), plus a
+// read-only root, a small /tmp and a process limit, so the image is known to work under either.
 const hardened = [
   "--init",
   "--read-only",
@@ -180,12 +181,17 @@ assert(payload.length > LIMITS.chunkBytes, "--payload must be larger than one ch
 try {
   if (!flags["skip-build"])
     await step(`docker build -t ${IMAGE} .`, () => {
-      const built = spawnSync("docker", ["build", "--progress", "plain", "-t", IMAGE, "."], {
-        cwd: REPO,
-        encoding: "utf8",
-        timeout: 15 * 60_000,
-        killSignal: "SIGKILL",
-      });
+      const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim();
+      const built = spawnSync(
+        "docker",
+        ["build", "--progress", "plain", "--build-arg", `RELAY_COMMIT=${commit}`, "-t", IMAGE, "."],
+        {
+          cwd: REPO,
+          encoding: "utf8",
+          timeout: 15 * 60_000,
+          killSignal: "SIGKILL",
+        },
+      );
       assert(built.status === 0, `docker build failed:\n${built.stderr.trim().split("\n").slice(-40).join("\n")}`);
       builtImage = true;
     });

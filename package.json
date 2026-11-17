@@ -24,10 +24,8 @@
     "verify:scale": "node scripts/verify-scale.ts",
     "verify:browser-scale": "node scripts/verify-browser-scale.ts",
     "verify:container": "node scripts/verify-container.ts",
-    "verify:compose": "node scripts/verify-compose.ts",
     "verify:deployment": "node scripts/verify-deployment.ts",
     "bench:transfers": "node scripts/bench-transfers.ts",
-    "redeploy": "scripts/redeploy.sh",
     "test:resources": "playwright test --config tests/resources/playwright.config.ts"
   },
   "dependencies": {

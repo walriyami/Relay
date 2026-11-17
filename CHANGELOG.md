@@ -11,7 +11,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Administrators can change a member's name, username, link lifetime and Trash retention.
 - Members choose how long Trash keeps what they delete, in **Settings → Storage**.
 - Direct transfers. On the server's own network, members' uploads and downloads go straight to Relay over WebRTC instead of the internet connection, with nothing to set up on their devices. A **Direct** button in the top bar shows when this is on and switches it off. It's on by default and needs no configuration: Relay runs the helper itself, and the connection comes up without any address being set, including on Docker Desktop and when the server changes networks. On Linux, `compose.host.yaml` gives Relay the host's network for them. See [Self-hosting](docs/self-hosting.md#direct-transfers-on-your-network).
-- Nearby, a tab of its own for sending files and text straight from one device to another on the same network, without going through Relay or into Files. Your own signed-in devices always appear and take what you send without asking. Other members appear on the same network, must accept, and can hide themselves with **Visible to people nearby**. Someone without an account joins with a Nearby code or link. Received photos save to the photo library through the share sheet on phones and tablets, and computers download files or one ZIP. Transfers pick up where they left off if the connection drops. When your own device can't be reached directly, **Send via Relay** sends the same files the usual way. See [Self-hosting](docs/self-hosting.md#nearby).
+- Nearby, a tab of its own for sending files and text straight from one device to another on the same network, without going through Relay or into Files. Your own signed-in devices always appear and take what you send without asking. Other members appear on the same network, must accept, and can hide themselves with **Visible to people nearby**. Someone without an account joins with a Nearby code or link. Received photos save to the photo library through the share sheet on phones and tablets, and computers download files or one ZIP. Transfers pick up where they left off if the connection drops. When your own device can't be reached directly, **Send via Relay** sends the same files the usual way. See [Hosting](docs/hosting.md#nearby).
 - Direct transfers and Nearby spread their bytes over several WebRTC connections at once, since a browser lets each connection carry only a few megabits a second over Wi-Fi.
 
 - `RELAY_TRUST_PROXY` accepts host names, such as a tunnel connector's container name, which Relay follows as Docker readdresses it.
@@ -19,11 +19,15 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 ### Changed
 
-- Relay runs as one container. The Caddy gateway, its Unix socket and `RELAY_SOCKET` are gone: Relay serves HTTP itself on `127.0.0.1:3090`, and a tunnel connector reaches it at `http://relay:3090` through `compose.tunnel.yaml`. Every visitor through a tunnel now gets their own rate limits, instead of all sharing the connector's.
-- Compose overlays are chosen once in `.env` with `COMPOSE_FILE`, so later commands can't leave one out.
+- Relay runs as one container. The Caddy gateway, its Unix socket and `RELAY_SOCKET` are gone: Relay serves HTTP itself on port 3090.
+- Relay is hosted with walctl, which builds, runs, health-checks and rolls back the container. [Hosting](docs/hosting.md) replaces the Self-hosting guide.
+- Every image records the commit it was built from, shown by `/api/health` and **Admin → Service health**. A build that can't name its commit stops, so uncommitted work can't reach production unnoticed.
+- The image's base is pinned by digest and no longer upgraded during the build, so the same commit builds the same image. It no longer carries npm, Yarn or browser-only packages.
+- The data volume is no longer marked resettable, so a walctl reset can't empty it.
+- Server libraries updated to versions without known security advisories.
 
 - `RELAY_ORIGIN` is optional. Unset, Relay answers at whatever address it's opened at. Set it to accept only one address.
-- `RELAY_SECRET` is no longer required by `compose.yaml`. Relay generates one and keeps it with the data.
+- `RELAY_SECRET` is no longer required. Relay generates one and keeps it with the data.
 
 ### Removed
 
@@ -32,6 +36,8 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 - Backup snapshots, the backup volume, the `RELAY_BACKUP_*` settings and the `npm run ops` command. Everything Relay stores lives in the data volume.
 - The maximum file size limit. A file only has to fit the member's storage and the service capacity.
+- The Compose files, `.env.example`, `scripts/redeploy.sh` and `npm run verify:compose`. They described a way of running Relay that production doesn't use and nobody tested.
+- Old bundled copies of the Walriyami sign-in package in `vendor/` that nothing installed; only the version in use remains.
 
 ## [1.0.0] - 2026-09-27
 

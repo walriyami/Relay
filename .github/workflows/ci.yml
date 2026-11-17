@@ -52,8 +52,13 @@ jobs:
           retention-days: 14
 
   docker:
-    name: Container and Compose
-    runs-on: ubuntu-24.04
+    # Production runs on a Raspberry Pi (ARM64), so the image is built and checked on both.
+    name: Container (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,5 +74,5 @@ jobs:
           push: false
           load: true
           tags: relay-verify
+          build-args: RELAY_COMMIT=${{ github.sha }}
       - run: npm run verify:container -- --skip-build
-      - run: npm run verify:compose

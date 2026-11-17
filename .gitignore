@@ -6,7 +6,6 @@ dist/
 .data/
 .env
 .env.*
-!.env.example
 secret.key
 setup.key
 *.sqlite

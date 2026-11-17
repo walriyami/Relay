@@ -14,7 +14,7 @@ Resumable uploads of any size, streamed downloads, and nothing stored anywhere y
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ed?logo=docker&logoColor=white)
 
-[Features](#features) · [Quick start](#quick-start) · [Self-hosting](docs/self-hosting.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md)
+[Features](#features) · [Running Relay](#running-relay) · [Hosting](docs/hosting.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md)
 
 <br>
 
@@ -40,7 +40,7 @@ Drop or paste files, whole folders and text into one draft. Nothing uploads unti
 
 ### ⏯️ Large files that survive
 
-Uploads use the resumable [tus](https://tus.io) protocol in 8 MiB chunks, several at a time. A dropped network or a server restart picks up where it left off. You can pause or cancel any transfer. On the server's own network, uploads and downloads skip the internet and go straight to Relay.
+Uploads use the resumable [tus](https://tus.io) protocol, several files at a time, in chunks sized to what the connection is achieving (256 KiB to 32 MiB). A dropped network or a server restart picks up where it left off. You can pause or cancel any transfer.
 
 </td>
 </tr>
@@ -90,7 +90,7 @@ Responsive from phones to desktops, with light, dark and system themes. Keyboard
 
 ### 🧱 Simple to run
 
-One container, one SQLite database, one data volume. Each unique file is stored once. It needs no external services.
+One container, one SQLite database, one data volume. Each unique file is stored once. Signing in with a Walriyami account is optional; without it, Relay needs no other service.
 
 </td>
 </tr>
@@ -109,33 +109,26 @@ One container, one SQLite database, one data volume. Each unique file is stored 
 </tr>
 </table>
 
-## Quick start
+## Running Relay
 
-You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose.
+This copy runs at relay.walriyami.com on the owner's Raspberry Pi, deployed by Walriyami Control from a saved commit:
 
 ```sh
-git clone https://github.com/walriyami/Relay.git relay
-cd relay
-docker compose up -d --build
+walctl deploy relay-production --commit main
 ```
 
-The default stack creates its own network and binds to loopback. For a containerized HTTPS proxy or tunnel, see the [optional network overlay](docs/self-hosting.md#proxy-in-another-container).
-
-Open **http://localhost:3090** to create your administrator account, choose member limits, and invite people. If others can reach the server before you finish setup, set `RELAY_SETUP_KEY=true` so setup also asks for a one-time key only the server's owner can read. For a public hostname, first set `RELAY_ORIGIN` to your HTTPS address; see [self-hosting](docs/self-hosting.md).
-
-> [!TIP]
-> To share Relay beyond your own machine, put it behind HTTPS. The [self-hosting guide](docs/self-hosting.md) covers reverse proxies, optional settings and updates.
+[Hosting](docs/hosting.md) covers updates, settings, data and backups. To work on Relay on your own computer, see [Development](docs/development.md): `npm ci && npm run dev`, then open http://localhost:5178.
 
 ## Documentation
 
-| Guide                                | What it covers                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------ |
-| [Self-hosting](docs/self-hosting.md) | Docker Compose, HTTPS reverse proxies, configuration, limits and updates |
-| [Architecture](docs/architecture.md) | How transfers, storage, downloads and security fit together              |
-| [Development](docs/development.md)   | Local setup, tests, release checks and conventions                       |
-| [Reviewing Relay](docs/review.md)    | Independent product and engineering assessment                           |
-| [Security policy](SECURITY.md)       | Reporting vulnerabilities and the security model                         |
-| [Changelog](CHANGELOG.md)            | What changed in each release                                             |
+| Guide                                | What it covers                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| [Hosting](docs/hosting.md)           | How relay.walriyami.com runs: updates, settings, data, backups and limits |
+| [Architecture](docs/architecture.md) | How transfers, storage, downloads and security fit together               |
+| [Development](docs/development.md)   | Local setup, tests, release checks and conventions                        |
+| [Reviewing Relay](docs/review.md)    | Independent product and engineering assessment                            |
+| [Security policy](SECURITY.md)       | Reporting vulnerabilities and the security model                          |
+| [Changelog](CHANGELOG.md)            | What changed in each release                                              |
 
 ## Built with
 
