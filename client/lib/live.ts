@@ -95,6 +95,11 @@ export function connectLive() {
     },
   });
 }
+// Back in view: a stream that slept with the page reconnects, rather than every view loading again.
+if (typeof document !== "undefined")
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) source?.wake();
+  });
 export function disconnectLive() {
   source?.close();
   source = undefined;
@@ -128,6 +133,15 @@ export function onChange(topic: Topic, fn: Listener) {
   return () => {
     listeners.get(topic)!.delete(fn);
   };
+}
+/**
+ * Like `onChange`, but a stream that opens runs `fn` only if the answer last read, stamped `read()`,
+ * may lack something it won't send. For state kept outside `useLive`.
+ */
+export function onChangeSince(topic: Topic, read: () => ChangeStamp | null | undefined, fn: () => void) {
+  return onChange(topic, (opened) => {
+    if (!opened || missed(read(), opened)) fn();
+  });
 }
 /** Local changes made by this tab refresh its own views without waiting for the stream. */
 export function notifyChange(topic: Topic) {
@@ -294,8 +308,10 @@ export function useLive<E extends Endpoint, I = Response<E>>(
         was = now;
       }),
     );
+    // While the stream is open it says what changed, and it checks itself when the page comes back
+    // (see `wake`). Without one (a probe, a guest), coming back loads again; so does a failed load.
     const visible = () => {
-      if (!document.hidden) soon();
+      if (!document.hidden && (!open || failed.current)) soon();
     };
     document.addEventListener("visibilitychange", visible);
     return () => {

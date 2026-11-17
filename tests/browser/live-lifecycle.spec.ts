@@ -1,5 +1,5 @@
 import { expect, request, test } from "@playwright/test";
-import { api } from "../../shared/api.ts";
+import { api, urls } from "../../shared/api.ts";
 import {
   copyShareUrl,
   BASE,
@@ -505,3 +505,72 @@ for (const guestFirst of [false, true]) {
     }
   });
 }
+
+test("opening Relay loads the account once, and coming back loads nothing that didn't change", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: BASE, storageState: await deviceState("Laptop") });
+  const page = await context.newPage();
+  const loads: string[] = [];
+  page.on("request", (sent) => {
+    const { pathname } = new URL(sent.url());
+    if (sent.method() === "GET" && pathname.startsWith("/api/") && pathname !== "/api/events") loads.push(pathname);
+  });
+  const count = (path: string) => loads.filter((loaded) => loaded === path).length;
+  const away = (hidden: boolean) =>
+    page.evaluate((value) => {
+      Object.defineProperty(document, "hidden", { value, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+  try {
+    await page.goto("/");
+    await expect(composer(page)).toBeVisible();
+    // The stream opening says nothing changed since the page read these, so they aren't read again.
+    await page.waitForTimeout(2500);
+    expect(count("/api/session")).toBe(1);
+    expect(count("/api/items")).toBe(1);
+
+    loads.length = 0;
+    for (let i = 0; i < 3; i++) {
+      await away(true);
+      await away(false);
+    }
+    await page.waitForTimeout(1500);
+    expect(loads).toEqual([]);
+
+    // A file saved elsewhere while away still arrives over the stream.
+    const name = `${unique("came-back")}.txt`;
+    await away(true);
+    const me = (await (await page.request.get(api.session.get.path)).json()) as { csrf: string };
+    const data = Buffer.from("saved while the page was away\n");
+    const created = (await (
+      await page.request.post(api.transfers.create.path, {
+        headers: { "X-Relay-CSRF": me.csrf },
+        data: {
+          id: crypto.randomUUID(),
+          tab: crypto.randomUUID().replaceAll("-", ""),
+          name: null,
+          folders: [],
+          files: [{ path: name, size: data.length, mime: "text/plain" }],
+        },
+      })
+    ).json()) as { id: string; uploads: { id: string }[] };
+    const patched = await page.request.patch(urls.upload(created.uploads[0].id), {
+      headers: {
+        "X-Relay-CSRF": me.csrf,
+        "Tus-Resumable": "1.0.0",
+        "Upload-Offset": "0",
+        "Content-Type": "application/offset+octet-stream",
+      },
+      data,
+    });
+    expect(patched.status()).toBe(204);
+    const completed = await page.request.post(api.transfers.complete.path.replace(":id", created.id), {
+      headers: { "X-Relay-CSRF": me.csrf },
+      data: { destination: { kind: "save" } },
+    });
+    expect(completed.ok()).toBe(true);
+    await away(false);
+    await expect(page.getByText(name)).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});

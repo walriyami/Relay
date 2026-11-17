@@ -51,7 +51,7 @@ Persistent event streams are capped at four per member session, two per guest gr
 
 Successful authenticated member probes also keep the device available for direct delivery. This presence expires 50 seconds after the last successful probe under the default timing, allowing one missed poll; guest probes do not create member presence. Presence and delivery checks revalidate credentials, so expired, signed-out, or suspended sessions cannot remain reachable.
 
-Every API response carries a change stamp: how many changes the server had published when it began reading. A stream reports the same count when it opens, and it delivers every change after that. A view whose last answer is at least that recent has missed nothing, so opening the app or reconnecting reloads only the views that may have fallen behind.
+Every API response carries a change stamp: how many changes the server had published when it began reading. A stream reports the same count when it opens, and it delivers every change after that. A view whose last answer is at least that recent has missed nothing, so opening the app or reconnecting reloads only the views that may have fallen behind. The account details follow the same rule. Coming back to the page loads nothing while the stream kept its 20-second beat, because it delivered every change meanwhile. A stream that went quiet while the page was hidden, as a locked phone's can, is replaced at once, and its stamp decides what to reload. Pages without a stream, such as a guest's, still reload when they come back.
 
 ## Lanes
 

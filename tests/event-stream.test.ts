@@ -228,3 +228,46 @@ test("ready passes on where changes stood, and nothing when the server didn't sa
   assert.deepEqual(opened, ["boot.7", undefined, undefined]);
   stream.close();
 });
+
+test("coming back to the page replaces a stream only when it went quiet", (t) => {
+  Source.instances = [];
+  const original = globalThis.EventSource;
+  globalThis.EventSource = Source as unknown as typeof EventSource;
+  t.after(() => {
+    globalThis.EventSource = original;
+  });
+  t.mock.method(Math, "random", () => 0);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let failures = 0;
+  const stream = eventStream("/api/events?tab=wake", { failed: () => failures++ });
+  const first = Source.instances[0];
+  first.event("ready", { beatMs: 20_000 });
+
+  // Still beating: everything since was delivered, so there is nothing to replace.
+  t.mock.timers.tick(15_000);
+  first.event("beat");
+  t.mock.timers.tick(20_000);
+  stream.wake();
+  assert.equal(Source.instances.length, 1);
+  assert.equal(first.closed, false);
+
+  // Quiet past a beat and a half (a phone that slept): replaced at once, without counting a failure.
+  t.mock.timers.tick(11_000);
+  stream.wake();
+  assert.equal(first.closed, true);
+  assert.equal(Source.instances.length, 2);
+  assert.equal(failures, 0);
+
+  // Waiting to retry after a failure: coming back retries now.
+  const second = Source.instances[1];
+  second.event("error");
+  assert.equal(failures, 1);
+  stream.wake();
+  assert.equal(Source.instances.length, 3);
+
+  // A tab over the stream limit keeps the server's delay.
+  Source.instances[2].event("limited", { retryMs: 20_000 });
+  stream.wake();
+  assert.equal(Source.instances.length, 3);
+  stream.close();
+});

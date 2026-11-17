@@ -41,6 +41,9 @@ export function eventStream(url: string, options: Options = {}) {
   let limited = false;
   let delay = 1000;
   let browser = browserId();
+  // When the open stream last said anything, and how often the server promised to.
+  let heardAt = 0;
+  let beatMs = 20_000;
 
   const closeSource = () => {
     cleanup?.();
@@ -80,7 +83,7 @@ export function eventStream(url: string, options: Options = {}) {
       return;
     }
     source = current;
-    let beatMs = 20_000;
+    beatMs = 20_000;
     let silence: ReturnType<typeof setTimeout> | undefined;
     const valid = () => !stopped && source === current;
     const failed = () => {
@@ -89,6 +92,7 @@ export function eventStream(url: string, options: Options = {}) {
       options.failed?.();
     };
     const heard = () => {
+      heardAt = Date.now();
       clearTimeout(silence);
       silence = setTimeout(failed, beatMs * 2.5);
     };
@@ -169,6 +173,19 @@ export function eventStream(url: string, options: Options = {}) {
       clearTimeout(retry);
       retry = undefined;
       connect();
+    },
+    /**
+     * The page is in view again. A stream that kept beating has delivered every change since, so
+     * nothing needs loading. One that went quiet while the page slept (a locked phone's connection
+     * can die without saying so) is replaced now; its `ready` says whether anything was missed.
+     */
+    wake() {
+      if (stopped || limited) return;
+      if (retry) this.retryNow();
+      else if (source && Date.now() - heardAt > beatMs * 1.5) {
+        closeSource();
+        connect();
+      }
     },
   };
 }
