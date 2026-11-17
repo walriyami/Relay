@@ -100,7 +100,11 @@ export function BootShell({ route }: { route: string }) {
             {NAV.map((item) => {
               const active = isCurrent(item.to, section);
               return (
-                <span key={item.to} className={active ? "nav-link active" : "nav-link"} aria-current={active ? "page" : undefined}>
+                <span
+                  key={item.to}
+                  className={active ? "nav-link active" : "nav-link"}
+                  aria-current={active ? "page" : undefined}
+                >
                   <span className="nav-icon">{item.icon}</span>
                   <span>{item.label}</span>
                 </span>

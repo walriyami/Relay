@@ -64,5 +64,7 @@ export function ItemThumb({ item }: { item: ItemSummary | null }) {
       <Icon.link size={18} aria-hidden />
     );
   // Text is too small to read at this size, so it shows as text's icon.
-  return <Thumbnail compact source={ownerSource} entry={preview.kind === "text" ? { ...preview, text: null } : preview} />;
+  return (
+    <Thumbnail compact source={ownerSource} entry={preview.kind === "text" ? { ...preview, text: null } : preview} />
+  );
 }

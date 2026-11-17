@@ -9,18 +9,7 @@ import {
   type ComponentProps,
   type ComponentType,
 } from "react";
-import {
-  ChartColumn,
-  Compass,
-  Download,
-  LogOut,
-  Monitor,
-  Moon,
-  Pencil,
-  Settings,
-  Shield,
-  Sun,
-} from "lucide-react";
+import { ChartColumn, Compass, Download, LogOut, Monitor, Moon, Pencil, Settings, Shield, Sun } from "lucide-react";
 import {
   ApiError,
   api,
@@ -500,9 +489,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
         <main id="main" className="main" tabIndex={-1}>
           <CodeProtectionBanner />
           <PageBoundary key={section}>
-            <Suspense fallback={<PageSkeleton section={section} />}>
-              {page}
-            </Suspense>
+            <Suspense fallback={<PageSkeleton section={section} />}>{page}</Suspense>
           </PageBoundary>
         </main>
       </div>

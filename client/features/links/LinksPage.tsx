@@ -155,9 +155,7 @@ export function LinksPage() {
                 { label: "Link settings", icon: <Icon.options size={16} />, onSelect: () => setEditingId(s.id) },
               ]
             : []),
-          ...(s.item
-            ? [{ label: "Open item", icon: <Icon.open size={16} />, onSelect: () => setOpen(s.itemId) }]
-            : []),
+          ...(s.item ? [{ label: "Open item", icon: <Icon.open size={16} />, onSelect: () => setOpen(s.itemId) }] : []),
           ...(live
             ? [
                 {
