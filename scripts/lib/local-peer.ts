@@ -75,7 +75,7 @@ export class LocalPeer {
     try {
       const { answer } = await client.call(api.local.connect, { body: { offer: await offer(pc) } });
       pc.setRemoteDescription(answer, "answer");
-      await opened;
+      await opened();
       peer = new LocalPeer(pc, channel);
       await peer.widen();
       return peer;
@@ -109,7 +109,7 @@ export class LocalPeer {
         const { pc, channel, opened } = lanes[i];
         this.pcs.push(pc);
         pc.setRemoteDescription(sdp, "answer");
-        await opened;
+        await opened();
         this.use(channel);
         joined.set(i, laneOf(channel));
         this.mux.add(joined.get(i)!);
@@ -224,19 +224,36 @@ export class LocalPeer {
   }
 }
 
-/** A lane's peer connection, offering; `opened` resolves when its channel opens. */
+/**
+ * A lane must be up this soon after its answer, as the helper allows. Counted from the answer, not
+ * from the offer: setting up a connection's lanes one after another takes seconds of its own on a
+ * busy machine, which once failed lanes that were opening fine.
+ */
+const OPEN_MS = 20_000;
+
+/** A lane's peer connection, offering; `opened()`, called once it has its answer, resolves when its channel opens. */
 function offering(onClosed: () => void) {
   const pc = new nodeDataChannel.PeerConnection("browser", { iceServers: [], maxMessageSize: LANES.frameBytes });
   // Offering, node-datachannel creates the channel before any description, and offers on its own.
   const channel = laneChannel(pc, onClosed);
-  const opened = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("The lane did not open.")), 5000);
-    channel.onOpen(() => {
-      clearTimeout(timer);
-      resolve();
-    });
+  let open = false;
+  let onOpen = () => {};
+  channel.onOpen(() => {
+    open = true;
+    onOpen();
   });
-  opened.catch(() => pc.close());
+  const opened = () =>
+    new Promise<void>((resolve, reject) => {
+      if (open) return resolve();
+      const timer = setTimeout(() => {
+        pc.close();
+        reject(new Error("The lane did not open."));
+      }, OPEN_MS);
+      onOpen = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
   return { pc, channel, opened };
 }
 
