@@ -3773,10 +3773,256 @@ audio.preview-media {
 .link-visits .muted {
   font-size: 0.8rem;
 }
-.member-username {
-  margin-left: 6px;
-  font-weight: 400;
-  font-size: 0.86rem;
+/* Admin → Members: the name, then what the person is, as pills that wrap on a phone. */
+.member-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--s2);
+  min-width: 0;
+}
+.member-name .pill {
+  margin-left: 0;
+}
+/* Admin → Manage: removing the account sits apart from everything that can be undone. */
+.danger-zone {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.removal-list {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+/* Admin overview: the status card first, with what is wrong or waiting and the space left. */
+.admin-status-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+.admin-status-head h2 {
+  margin: 0;
+}
+.admin-status-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+.admin-status.is-ok .admin-status-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.admin-status.is-danger .admin-status-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.admin-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.admin-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s1) var(--s3);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r1);
+  font-size: 0.92rem;
+}
+.admin-alert.is-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.admin-alert.is-info {
+  background: var(--well);
+}
+.admin-alert .link {
+  color: inherit;
+  font-weight: 600;
+}
+.admin-alert-more {
+  font-size: 0.92rem;
+}
+
+/* Admin overview, then: trends over a period, and the history. */
+.admin-range h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.admin-trends-skeleton {
+  height: 640px;
+  border-radius: var(--r2);
+}
+.usage-card-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.admin-reliability {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  font-size: 0.92rem;
+}
+.admin-reliability svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--success);
+}
+.admin-reliability.is-danger svg {
+  color: var(--danger);
+}
+.member-table-name > span:last-child {
+  display: flex;
+  flex-direction: column;
+}
+.member-table-link {
+  font-weight: 600;
+  text-align: left;
+}
+.member-table-seen {
+  font-size: 0.8rem;
+}
+.admin-history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+}
+.admin-history-member select {
+  width: auto;
+  max-width: 100%;
+}
+.admin-history-skeleton {
+  height: 240px;
+  border-radius: var(--r1);
+}
+.admin-history-empty {
+  margin: 0;
+}
+.admin-history-day h3 {
+  margin: 0 0 var(--s1);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.admin-history-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.admin-history-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  font-size: 0.94rem;
+}
+.admin-history-row + .admin-history-row {
+  border-top: 1px solid var(--line);
+}
+.admin-history-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  align-self: center;
+  border-radius: 50%;
+  background: var(--well);
+  color: var(--muted);
+}
+.admin-history-row.is-signin .admin-history-icon,
+.admin-history-row.is-problems .admin-history-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.admin-history-time {
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .admin-history-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .admin-history-time {
+    grid-column: 2;
+  }
+}
+
+/* Settings → Storage: Trash, the largest items, and the export. */
+.storage-summary-skeleton {
+  height: 120px;
+}
+.storage-largest h3 {
+  margin: 0 0 var(--s2);
+  font-size: 0.95rem;
+}
+.storage-largest ol {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.storage-largest-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--s3);
+  padding: var(--s2);
+  margin: 0 calc(-1 * var(--s2));
+  border-radius: var(--r1);
+  color: inherit;
+  text-decoration: none;
+}
+.storage-largest-link:hover {
+  background: var(--well);
+}
+.storage-largest-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.storage-largest-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.storage-largest-size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.storage-largest-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: var(--pill);
+  background: var(--well);
+  overflow: hidden;
+}
+.storage-largest-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--accent);
 }
 
 /* A share behind a password: one question, nothing else. */

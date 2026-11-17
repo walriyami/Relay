@@ -74,6 +74,7 @@ test("security audit reconciles every registered route and denies unauthorized r
         "/api/nodes/:id/content",
         "/api/nodes/:id/thumbnail",
         "/api/items/:id/zip",
+        "/api/export/zip",
       ].includes(route.path);
       const auth = definition?.endpoint.auth ?? (rawMember ? "member" : "raw");
       const evidence: { actor: string; check: string; status: number }[] = [];

@@ -8,6 +8,7 @@ import {
   type AdminMember,
   type LimitsApplied,
   type MemberLimits,
+  type MemberRemoval,
   type PendingInvite,
 } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
@@ -22,6 +23,8 @@ import { applyMemberLimits, LIMIT_COLUMNS, limitValues, toLimits, type LimitRow 
 import { DAY_MS, storageFree, toUser, usageOf, USER_COLUMNS, type UserRow } from "../auth/sessions.ts";
 import { streamsOf } from "../auth/streams.ts";
 import { renameUser } from "../auth/users.ts";
+import { purge } from "../library/items.ts";
+import { recordHistory, usernameOf } from "../history/index.ts";
 import { limitsOf, setLimits } from "./settings.ts";
 import { build } from "../../build-info.ts";
 
@@ -97,9 +100,24 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     // here, then report completion through the ordinary administrator status channel.
     const check = ctx.blobs.scrub({ after: body.after });
     void check.then(
-      () => ctx.events.publish(member.userId, "account"),
+      (result) => {
+        const damaged = result.missing + result.corrupt + result.errors;
+        if (damaged)
+          recordHistory(ctx, {
+            kind: "error",
+            area: "stored files",
+            detail: `The file check found ${damaged} missing or damaged ${damaged === 1 ? "file" : "files"}.`,
+          });
+        ctx.events.publish(member.userId, "account");
+      },
       (error: unknown) => {
         ctx.log.error({ err: error }, "storage integrity check failed");
+        recordHistory(
+          ctx,
+          { kind: "error", area: "the file check", detail: "It couldn’t finish; the server log has the details." },
+          null,
+          "integrity",
+        );
         ctx.events.publish(member.userId, "account");
       },
     );
@@ -187,24 +205,45 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     return { ok: true as const };
   });
 
-  route(app, ctx, api.admin.updateMember, ({ params, body }) => {
+  const admins = () => ctx.db.value<number>("SELECT COUNT(*) FROM users WHERE admin = 1")!;
+  const LAST_ADMIN = "Relay needs at least one administrator. Make someone else an administrator first.";
+
+  route(app, ctx, api.admin.updateMember, ({ member: administrator, params, body }) => {
     const target = member(params.id);
-    if (target.admin && body.disabled) fail(409, "The administrator account cannot be disabled.");
-    // An administrator could lift any limit of their own, so the account has none.
-    if (target.admin && body.limits) fail(409, "The administrator account has no limits.");
-    const { name, username, disabled, limits } = body;
+    const { name, username, disabled, limits, admin } = body;
+    // An administrator could lift their own limits or re-enable themselves, so an administrator
+    // account is never limited or disabled. Remove the role first.
+    const willBeAdmin = admin ?? !!target.admin;
+    if (willBeAdmin && disabled)
+      fail(409, "An administrator can't be disabled. Remove their administrator role first.");
+    if (willBeAdmin && limits) fail(409, "Administrators have no limits.");
+    if (admin && target.disabled && disabled !== false)
+      fail(409, "Turn this account back on before making it an administrator.");
     const applied = ctx.db.tx((): LimitsApplied => {
       if (limits) checkExpectedLimits(member(params.id), body.expectedLimits);
+      const by = usernameOf(ctx, administrator.userId);
+      if (admin !== undefined && admin !== !!target.admin) {
+        if (!admin && admins() <= 1) fail(409, LAST_ADMIN);
+        recordHistory(ctx, { kind: "role", username: target.username, by, admin }, target.id);
+        ctx.db.run(
+          // Administrators have no limits; a member who loses the role starts with none too.
+          "UPDATE users SET admin = ?, quota = NULL, max_retention_days = NULL, max_link_days = NULL WHERE id = ?",
+          admin ? 1 : 0,
+          target.id,
+        );
+      }
       if (name !== undefined)
         ctx.db.run("UPDATE users SET display_name = ? WHERE id = ?", name?.normalize("NFC") || null, target.id);
       if (username !== undefined && username !== target.username) renameUser(ctx, target.id, username);
       if (disabled !== undefined) {
+        if (disabled !== !!target.disabled)
+          recordHistory(ctx, { kind: disabled ? "suspended" : "restored", username: target.username, by }, target.id);
         ctx.db.run("UPDATE users SET disabled = ? WHERE id = ?", disabled ? 1 : 0, target.id);
         if (disabled) ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       }
       return limits ? applyMemberLimits(ctx, target.id, limits, Date.now()) : { links: 0, items: 0, requests: 0 };
     });
-    if (disabled) streamsOf(ctx).recheck();
+    if (disabled || admin === false) streamsOf(ctx).recheck();
     ctx.events.publish(
       target.id,
       "account",
@@ -214,6 +253,72 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       ...(applied.requests || applied.items ? (["requests"] as const) : []),
     );
     return applied;
+  });
+
+  /** What removing a member deletes, so the confirmation can say it in numbers. */
+  /** What removing a member deletes, counted now. */
+  const removalOf = (target: { id: string }): MemberRemoval => {
+    const now = Date.now();
+    return {
+      items: ctx.db.value<number>("SELECT COUNT(*) FROM items WHERE owner = ?", target.id)!,
+      bytes:
+        ctx.db.value<number>("SELECT bytes_used FROM users WHERE id = ?", target.id)! +
+        ctx.db.value<number>(
+          "SELECT ifnull(SUM(size), 0) FROM nodes WHERE owner = ? AND state = 'pending'",
+          target.id,
+        )!,
+      links: ctx.db.value<number>(
+        "SELECT COUNT(*) FROM links WHERE owner = ? AND revoked IS NULL AND (expires IS NULL OR expires > ?)",
+        target.id,
+        now,
+      )!,
+      requests: ctx.db.value<number>(
+        "SELECT COUNT(*) FROM requests WHERE owner = ? AND closed IS NULL AND expires > ?",
+        target.id,
+        now,
+      )!,
+      devices: ctx.db.value<number>(
+        "SELECT COUNT(DISTINCT device_id) FROM sessions WHERE user_id = ? AND expires > ?",
+        target.id,
+        now,
+      )!,
+    };
+  };
+  route(app, ctx, api.admin.removal, ({ params }) => removalOf(member(params.id)));
+
+  /**
+   * Deletes the account and everything it owns: files (Trash too), links, requests, devices and
+   * sessions. Each item goes through the library's purge so open transfers stop and stored bytes
+   * are freed the same way as emptying Trash.
+   */
+  route(app, ctx, api.admin.removeMember, ({ member: administrator, params }) => {
+    const target = member(params.id);
+    if (target.id === administrator.userId) fail(409, "You can't remove your own account.");
+    if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
+    const freed = removalOf(target);
+    // Sign the member out first so nothing new arrives while their files are deleted.
+    ctx.db.tx(() => {
+      ctx.db.run("UPDATE users SET disabled = 1 WHERE id = ?", target.id);
+      ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
+    });
+    streamsOf(ctx).recheck();
+    for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM requests WHERE owner = ?", target.id))
+      ctx.transfers.cancelForRequest(id);
+    for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", target.id)) purge(ctx, id);
+    ctx.db.tx(() => {
+      if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
+      ctx.db.run("DELETE FROM users WHERE id = ?", target.id);
+      recordHistory(ctx, {
+        kind: "removed",
+        username: target.username,
+        by: usernameOf(ctx, administrator.userId),
+        items: freed.items,
+        bytes: freed.bytes,
+      });
+    });
+    ctx.log.info({ member: target.id, by: administrator.userId }, "member removed");
+    ctx.events.broadcast("account");
+    return { ok: true as const };
   });
 
   route(app, ctx, api.admin.resetPassword, async ({ member: administrator, params, body, req }) => {
@@ -227,6 +332,11 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       ctx.db.run("DELETE FROM passkeys WHERE user_id = ?", target.id);
       ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       ctx.activity.record(target.id, { kind: "password", device: null });
+      recordHistory(
+        ctx,
+        { kind: "password", username: target.username, by: usernameOf(ctx, administrator.userId) },
+        target.id,
+      );
     });
     streamsOf(ctx).recheck({ userId: target.id, reason: "password-reset" });
     ctx.events.publish(target.id, "account", "devices");

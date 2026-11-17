@@ -80,8 +80,10 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     (bytes) =>
       ctx.usage.add(access.owner, access.byOwner ? { downloaded: bytes } : { shared: bytes });
 
-  async function content(req: FastifyRequest, reply: FastifyReply, node: NodeRow, onSent: Meter) {
+  async function content(req: FastifyRequest, reply: FastifyReply, node: NodeRow, meter: Meter) {
     const inline = (req.query as Query).inline === "1";
+    // Looking at a file in the app isn't taking it away, so previews aren't counted as downloads.
+    const onSent = inline ? undefined : meter;
     if (node.kind === "folder") fail(400, "Download a folder as a ZIP file.");
     if (node.kind === "text") {
       const data = Buffer.from(node.text ?? "", "utf8");

@@ -67,14 +67,12 @@ test("admin health reports cleanup and storage without exposing operator control
   await signedIn(page);
   await page.getByRole("button", { name: /^Account/ }).click();
   await page.getByRole("menuitem", { name: "Admin", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Service health" })).toBeVisible();
-  await expect(page.getByText("No active alerts", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Everything looks fine" })).toBeVisible();
   // A healthy service keeps its detail folded away until asked for.
-  await expect(page.getByText(/maintenance jobs are running on schedule/)).toBeVisible();
   await expect(page.getByText("Library retention", { exact: true })).toBeHidden();
-  await page.getByText("Details", { exact: true }).click();
+  await page.getByText("Server details", { exact: true }).click();
   await expect(page.getByText("Library retention", { exact: true })).toBeVisible();
-  await expect(page.getByText(/unique · .* in \d+ trashed items?/)).toBeVisible();
+  await expect(page.getByText(/on disk, with copies of the same file stored once · .* in Trash/)).toBeVisible();
   await expect(page.getByRole("button", { name: /backup|restore snapshot/i })).toHaveCount(0);
 });
 

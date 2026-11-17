@@ -4,7 +4,7 @@
 // zod/mini is tree-shakable, so the client bundle carries only the validators it uses.
 import * as z from "zod/mini";
 import { LOCAL } from "./local.ts";
-import { LIMITS, USAGE_RANGES, USERNAME } from "./model.ts";
+import { HISTORY_GROUPS, LIMITS, USAGE_RANGES, USERNAME } from "./model.ts";
 import type * as M from "./model.ts";
 import { NEARBY } from "./nearby.ts";
 import type * as N from "./nearby.ts";
@@ -109,6 +109,8 @@ const usageQuery = z.object({
   /** The viewer's time zone, in minutes east of UTC, so days and months start at their midnight. */
   tz: z._default(z.coerce.number().check(z.int(), z.gte(-840), z.lte(840)), 0),
 });
+/** A one-time administrator recovery token from the server log (see docs/hosting.md). */
+const recoveryToken = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/));
 const linkNote = z.string().check(z.trim(), z.maxLength(LIMITS.linkNoteLength));
 /** A new link's settings; anything left out is open to anyone, with no note. */
 const linkSettings = {
@@ -469,6 +471,23 @@ export const api = {
 
   /** The member's own storage and activity over a range. */
   usage: endpoint<M.UsageReport>()("GET", "/api/usage", { auth: "member", query: usageQuery }),
+  /** What the member keeps against their space: for Settings → Storage. */
+  storage: endpoint<M.StorageOverview>()("GET", "/api/storage", { auth: "member" }),
+  /** Administrator password recovery, from a link Relay logs when RELAY_RECOVER_ADMIN is set. */
+  recovery: {
+    /** Who the link is for, while it can still be used; 410 once used, replaced or expired. */
+    check: endpoint<{ username: string; expires: M.Time }>()("POST", "/api/recover/check", {
+      auth: "public",
+      csrf: false,
+      body: z.object({ token: recoveryToken }),
+    }),
+    /** Sets the new password, removes passkeys and signs the account out everywhere. */
+    reset: ok("POST", "/api/recover", {
+      auth: "public",
+      csrf: false,
+      body: z.object({ token: recoveryToken, password }),
+    }),
+  },
 
   activity: {
     list: endpoint<M.ActivityFeed>()("GET", "/api/activity", { auth: "member" }),
@@ -579,6 +598,16 @@ export const api = {
     }),
     /** Everyone's storage and activity over a range, and the requests the server answered. */
     usage: endpoint<M.AdminUsageReport>()("GET", "/api/admin/usage", { auth: "admin", query: usageQuery }),
+    /** What happened on this Relay, newest first: all of it, one kind of event, or about one member. */
+    history: endpoint<M.HistoryPage>()("GET", "/api/admin/history", {
+      auth: "admin",
+      query: z.object({
+        group: z.optional(z.enum(HISTORY_GROUPS)),
+        member: z.optional(id),
+        /** How many of the newest to return; "Show older" asks for more. */
+        limit: z._default(z.coerce.number().check(z.int(), z.gte(1), z.lte(LIMITS.historyMax)), 50),
+      }),
+    }),
     invite: endpoint<{ token: string; code: string; expires: M.Time }>()("POST", "/api/admin/invites", {
       auth: "admin",
       body: z.object({
@@ -612,8 +641,14 @@ export const api = {
         /** Required when changing limits: the policy shown when the editor opened. */
         expectedLimits: z.optional(memberLimits),
         disabled: z.optional(z.boolean()),
+        /** Makes them an administrator (their limits are lifted) or a member again. One always remains. */
+        admin: z.optional(z.boolean()),
       }),
     }),
+    /** What removing a member would delete, for the confirmation. */
+    removal: endpoint<M.MemberRemoval>()("GET", "/api/admin/members/:id/removal", { auth: "admin" }),
+    /** Deletes the account with everything it keeps, freeing its space. Never your own account. */
+    removeMember: ok("DELETE", "/api/admin/members/:id", { auth: "admin" }),
     resetPassword: ok("POST", "/api/admin/members/:id/password", { auth: "admin", body: z.object({ password }) }),
     settings: ok("PATCH", "/api/admin/settings", {
       auth: "admin",
@@ -644,6 +679,8 @@ export const urls = {
   shareThumbnail: (token: string, node: M.Id, size: "s" | "l" = "s") =>
     `/api/s/${token}/nodes/${node}/thumbnail${q({ size })}`,
   shareZip: (token: string, folder?: M.Id, tz?: string) => `/api/s/${token}/zip${q({ folder, tz })}`,
+  /** Everything in the signed-in member's Files (not Trash), as one ZIP; `tz` as for `itemZip`. */
+  exportZip: (tz?: string) => `/api/export/zip${q({ tz })}`,
   /** tus 1.0 core protocol: HEAD and PATCH. Created by transfers.create / requests.transfer. */
   upload: (upload: M.Id) => `/uploads/${upload}`,
   /** Member event stream. Holding it open keeps `tab`'s transfers alive and the device online. */

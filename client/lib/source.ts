@@ -10,7 +10,7 @@ export type ContentSource = {
   zip(itemId: string, folderId?: string): string;
 };
 /** File times in a ZIP are shown in this zone by most unzip tools, so the archive uses it. */
-const timeZone = () => {
+export const timeZone = () => {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
   } catch {

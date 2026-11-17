@@ -12,6 +12,7 @@ import { hashPassword } from "../../lib/secrets.ts";
 import { SIGN_IN_LIMIT } from "../auth/session.ts";
 import { finishSignIn, insertSession, newDevice } from "../auth/sessions.ts";
 import { insertUser } from "../auth/users.ts";
+import { recordHistory } from "../history/index.ts";
 import { setLimits } from "../admin/settings.ts";
 import { ensureSetupKey, hasSetupKey, removeSetupKey } from "./setup-key.ts";
 
@@ -64,6 +65,7 @@ export function registerSetup(app: FastifyInstance, ctx: Context) {
         if (setupStateOf(ctx) !== "account") fail(409, ALREADY_SET_UP);
         // The administrator can change any limit, so they have none.
         const userId = insertUser(ctx, { username: body.username, passwordHash, admin: true }, NO_LIMITS, now);
+        recordHistory(ctx, { kind: "joined", username: body.username, via: "setup", by: null }, userId);
         beginSetupChoices(ctx);
         return insertSession(ctx, userId, newDevice(req, body), "setup");
       });

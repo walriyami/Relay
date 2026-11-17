@@ -54,6 +54,7 @@ import { RequestsPage } from "../features/requests/RequestsPage";
 // Usage ships with the app because Admin shares its charts, and WebKit can't retry a page chunk
 // that failed to load if it imports another chunk.
 import { UsagePage } from "../features/usage/UsagePage";
+import { RecoverPage } from "../features/auth/Recover";
 import { GuestUpload, PickupPage, PublicSharePage } from "./PublicPages";
 import { SessionProvider, useSession, type SetMe } from "./session";
 import { DeviceEditorProvider, DeviceIcon, useEditDevice } from "./devices";
@@ -147,6 +148,12 @@ export function App() {
     return (
       <Public>
         <PickupPage />
+      </Public>
+    );
+  if (parts[0] === "recover")
+    return (
+      <Public>
+        <RecoverPage />
       </Public>
     );
   return <Private />;

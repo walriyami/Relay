@@ -11,6 +11,7 @@ import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { bytesLabel } from "../transfers/create.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { registerGuests, remaining, used } from "./guests.ts";
+import { recordHistory, usernameOf } from "../history/index.ts";
 
 const DAY_MS = 86_400_000;
 
@@ -99,6 +100,11 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
           body.maxBytes,
           pickup.codeHash,
           fingerprint,
+        );
+        recordHistory(
+          ctx,
+          { kind: "shared", username: usernameOf(ctx, member.userId), what: "request" },
+          member.userId,
         );
       }
       return ownedRequest(ctx, member.userId, body.id);

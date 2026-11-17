@@ -11,6 +11,7 @@ import { CANCELLED, TAB_CLOSED } from "./create.ts";
 import { isActive, uploadRow, type Receivers, type UploadRow } from "./receivers.ts";
 
 import { DAY_MS } from "../../lib/time.ts";
+import { recordHistory, usernameOf } from "../history/index.ts";
 
 type TransferRow = {
   id: string;
@@ -194,6 +195,7 @@ export async function complete(
           );
           recordSubmission(ctx, current);
         }
+        recordFinished(ctx, current, principal, destination);
       }
       // Both creates are idempotent by id, so a retry returns the link or delivery made the first time.
       const link =
@@ -257,6 +259,24 @@ function recordSubmission(ctx: Context, transfer: TransferRow) {
     bytes: files.bytes,
     text,
   });
+}
+
+/** Adds a finished upload to the administrator's history: how many files and bytes, and where to. */
+function recordFinished(ctx: Context, transfer: TransferRow, principal: Principal, destination: Destination) {
+  const { files, bytes } = ctx.db.get<{ files: number; bytes: number }>(
+    `SELECT count(*) AS files, ifnull(sum(n.size), 0) AS bytes
+     FROM uploads u JOIN nodes n ON n.id = u.node WHERE u.transfer = ? AND n.state = 'ready'`,
+    transfer.id,
+  )!;
+  const username = usernameOf(ctx, transfer.owner);
+  if (principal.kind === "grant")
+    return recordHistory(ctx, { kind: "received", username, files, bytes }, transfer.owner);
+  const device =
+    destination.kind === "device"
+      ? (ctx.db.value<string>("SELECT name FROM devices WHERE id = ?", destination.device) ?? null)
+      : null;
+  const to = destination.kind === "save" ? "files" : destination.kind;
+  recordHistory(ctx, { kind: "sent", username, to, device, files, bytes }, transfer.owner);
 }
 
 export function removeUpload(ctx: Context, receivers: Receivers, upload: UploadRow) {

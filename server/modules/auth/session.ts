@@ -11,6 +11,7 @@ import { finishSignIn, insertSession, me, newDevice } from "./sessions.ts";
 import { streamsOf } from "./streams.ts";
 import { LIMIT_COLUMNS, toLimits, type LimitRow } from "./member-limits.ts";
 import { insertUser } from "./users.ts";
+import { recordHistory, usernameOf } from "../history/index.ts";
 
 export const SIGN_IN_LIMIT = perAddress(10, "1 minute");
 /** One answer for expired, used, withdrawn and unknown invitations alike. */
@@ -35,8 +36,15 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
         body.password,
         user?.password_hash ?? dummyPasswordHash(),
       );
+      // Names nobody has share one entry an hour, so guessing can't fill the history.
+      if (!user) recordHistory(ctx, { kind: "signin", username: null, reason: "password" }, null, "signin:unknown");
+      else if (!valid)
+        recordHistory(ctx, { kind: "signin", username, reason: "password" }, user.id, `signin:${user.id}:password`);
       if (!user || !valid) fail(401, "Incorrect username or password.");
-      if (user.disabled) fail(403, "This account is disabled. Contact the administrator.");
+      if (user.disabled) {
+        recordHistory(ctx, { kind: "signin", username, reason: "suspended" }, user.id, `signin:${user.id}:suspended`);
+        fail(403, "This account is disabled. Contact the administrator.");
+      }
       const session = ctx.db.tx(() => {
         // The password may have changed while scrypt ran.
         if (ctx.db.value("SELECT password_hash FROM users WHERE id = ?", user.id) !== user.password_hash)
@@ -95,6 +103,11 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
         const userId = insertUser(ctx, { username: body.username, passwordHash, admin: false }, toLimits(limits), now);
         ctx.db.run("UPDATE invites SET used_by = ? WHERE token_hash = ?", userId, invite);
         ctx.activity.record(inviter, { kind: "joined", userId, username: body.username, note });
+        recordHistory(
+          ctx,
+          { kind: "joined", username: body.username, via: "invitation", by: usernameOf(ctx, inviter) },
+          userId,
+        );
         return { inviter, ...insertSession(ctx, userId, newDevice(req, body), "invitation") };
       });
       // The inviting administrator sees the new member, and the invitation leaves the pending list.

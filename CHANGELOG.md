@@ -18,6 +18,11 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Relay installs as an app on phones and computers, opening in its own window, and appears in the share sheet: files, text and links shared to it land in the Send draft. On iPhone, a Shortcut can send text and links. See [On your phone](README.md#on-your-phone).
 - Notifications on each device, even with Relay closed, when something arrives for that device, someone sends files to your request, or a link is first downloaded. They're off until turned on in **Settings → Arrivals**; on iPhone and iPad they need Relay added to the Home Screen.
 - A **Share…** button for links on phones, and received photos and videos save to Photos through the share sheet.
+- Administrators can make another member an administrator and take the role away again. Relay always keeps at least one.
+- **Remove member**, in a member's **Manage** dialog, deletes their account, files and links. The confirmation says what goes and how much space that frees, and asks for their username.
+- `RELAY_RECOVER_ADMIN` recovers an administrator who lost their password: Relay writes a one-time link to its log. See [Hosting](docs/hosting.md#recovering-administrator-access).
+- **Settings → Storage** shows what takes the most space, what Trash still holds with a button to empty it, and **Download all my files**, one ZIP of everything in Files.
+- **Admin → Overview → History**: who joined, left, was suspended or became an administrator, what members sent and shared, failed sign-ins and errors, for the last 90 days. It can be narrowed to one kind of event or one member. It never records file names, link addresses or contents.
 
 - `RELAY_TRUST_PROXY` accepts host names, such as a tunnel connector's container name, which Relay follows as Docker readdresses it.
 - The web app's text files are Brotli- and gzip-compressed at build time and served precompressed.
@@ -35,7 +40,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
 - Editing `server/db/schema.sql` no longer locks Relay out of existing data. At startup Relay adds new tables, columns and indexes itself, ignores comments and formatting, and refuses only an edit that would remove or reshape stored data, with a message naming it. The one-off upgrade from the first schema is gone.
 - A damaged database stops Relay at startup with a plain explanation and recovery steps instead of a stack trace. Startup errors Relay understands are printed the same way.
-- The health check reports what is wrong instead of always answering "ok": it names problems (`database`, `disk-space`, `stored-files`, `usage-records`, `maintenance`), notices a disk that stops taking writes, and fails with a 503 only when the database can't be read or is damaged. **Admin → Overview → Service health** says when the database couldn't save a change.
+- The health check reports what is wrong instead of always answering "ok": it names problems (`database`, `disk-space`, `stored-files`, `usage-records`, `maintenance`), notices a disk that stops taking writes, and fails with a 503 only when the database can't be read or is damaged. **Admin → Overview** says when the database couldn't save a change.
 - `control-reset --content` keeps invitations' codes and every code ever given out, so a printed code is never reused. `--clone` also removes notification subscriptions and the push key, so a copy never notifies the original's phones. The tables each reset clears are listed explicitly; a new table is kept until someone decides otherwise.
 - Send has a clear main action and no greyed-out panel: an empty draft offers **Choose files**, and the place to send stays put as things are added. After a link is made, the link itself is shown. Each upload uses your own retention setting, so the per-draft retention menu is gone.
 - Send and Nearby each say in one line what they do: Send goes through Relay and keeps a copy in Files; Nearby goes straight between devices on the same network and keeps nothing.
@@ -43,7 +48,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 - Relay runs as one container. The Caddy gateway, its Unix socket and `RELAY_SOCKET` are gone: Relay serves HTTP itself on port 3090.
 - Relay is hosted with walctl, which builds, runs, health-checks and rolls back the container. [Hosting](docs/hosting.md) replaces the Self-hosting guide.
-- Every image records the commit it was built from, shown by `/api/health` and **Admin → Service health**. A build that can't name its commit stops, so uncommitted work can't reach production unnoticed.
+- Every image records the commit it was built from, shown by `/api/health` and **Admin → Overview → Server details**. A build that can't name its commit stops, so uncommitted work can't reach production unnoticed.
 - The image's base is pinned by digest and no longer upgraded during the build, so the same commit builds the same image. It no longer carries npm, Yarn or browser-only packages.
 - The data volume is no longer marked resettable, so a walctl reset can't empty it.
 - Server libraries updated to versions without known security advisories.
@@ -58,6 +63,9 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - On phones and tablets, option pickers and icon-only buttons are full 44-pixel touch targets, buttons give a little when pressed, and the page clears the notch when the phone is held sideways.
 - With reduced motion on, spinners and placeholders pulse gently instead of freezing.
 - The **Direct** button in the top bar looks like its neighbours, and on phones it says "Direct" under its bolt instead of showing a bare icon.
+
+- **Admin → Overview** says first, in plain words, whether anything is wrong, how much space is left and what is waiting for the administrator. Trends over time and each member's share follow, then History. How the server runs moves under **Server details**, and request counts became a sentence about whether things worked.
+- Opening a file to look at it in the app no longer counts as a download. **Download all my files** does.
 
 - `RELAY_ORIGIN` is optional. Unset, Relay answers at whatever address it's opened at. Set it to accept only one address.
 - `RELAY_SECRET` is no longer required. Relay generates one and keeps it with the data.

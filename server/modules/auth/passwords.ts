@@ -12,6 +12,7 @@ import { cookieOptions, knownBrowserCookie } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { verifyPassword } from "../../lib/secrets.ts";
 import { FailureLog, wideNetworkOf } from "./limits.ts";
+import { recordHistory } from "../history/index.ts";
 
 const HOUR = 3_600_000;
 /** Wrong passwords for one account from one network in an hour: plenty of room for typos. */
@@ -62,6 +63,17 @@ export function rememberBrowser(ctx: Context, reply: FastifyReply, userId: strin
   reply.setCookie(knownBrowserCookie(ctx, reply.request), value, cookieOptions(ctx, reply.request, KNOWN_MS));
 }
 
+/** Tells administrators an account is being refused for wrong passwords; repeats within the hour add to one entry. */
+function lockedOut(ctx: Context, account: { username: string; userId: string | null }) {
+  if (account.userId)
+    recordHistory(
+      ctx,
+      { kind: "signin", username: account.username, reason: "locked" },
+      account.userId,
+      `signin:${account.userId}:locked`,
+    );
+}
+
 const minutesUntil = (log: FailureLog, key: string, max: number, now: number) =>
   Math.max(1, Math.ceil(log.waitFor(key, max, now) / 60_000));
 
@@ -84,6 +96,7 @@ export async function checkPassword(
   const known = !!account.signedIn || (!!account.userId && knownAccounts(ctx, req).includes(account.userId));
 
   if (!limits.network.reserve(pair, now, PER_NETWORK.max)) {
+    lockedOut(ctx, account);
     const minutes = minutesUntil(limits.network, pair, PER_NETWORK.max, now);
     fail(429, `Too many wrong passwords for this account. Try again in about ${minutes} minutes, or use a passkey.`);
   }
@@ -91,6 +104,7 @@ export async function checkPassword(
   try {
     if (!known) {
       if (!limits.account.reserve(account.username, now, PER_ACCOUNT.max)) {
+        lockedOut(ctx, account);
         const minutes = minutesUntil(limits.account, account.username, PER_ACCOUNT.max, now);
         fail(
           429,

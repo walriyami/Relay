@@ -76,11 +76,16 @@ test("members cannot use administration", async () => {
       () => plain.call(api.admin.updateMember, { params: { id: user.id }, body: { limits: NO_LIMITS } }),
       () => plain.call(api.admin.updateInvite, { params: { id: "0".repeat(64) }, body: { limits: NO_LIMITS } }),
       () => plain.call(api.admin.usage, { query: { range: "30d", tz: 0 } }),
+      () => plain.call(api.admin.history, { query: {} }),
+      () => plain.call(api.admin.removal, { params: { id: user.id } }),
+      () => plain.call(api.admin.removeMember, { params: { id: user.id } }),
+      () => plain.call(api.admin.updateMember, { params: { id: user.id }, body: { admin: true } }),
       () => plain.call(api.admin.resetPassword, { params: { id: user.id }, body: { password: "Some-new-password" } }),
       () => plain.call(api.admin.settings, { body: { capacity: 1 } }),
     ];
     for (const call of calls) assert.equal(await status(call()), 403);
     assert.equal(await status(new Client(instance).call(api.admin.overview)), 401);
+    assert.equal(await status(new Client(instance).call(api.admin.history, { query: {} })), 401);
     assert.deepEqual((await plain.call(api.session.get)).user.limits, NO_LIMITS);
   } finally {
     await instance.close();
