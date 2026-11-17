@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Page, type Route } from "@playwright/test";
 import { api } from "../../shared/api.ts";
 import type { User } from "../../shared/model.ts";
 import { BASE, composer, destinations, fileInput, signedIn, unique } from "./helpers";
@@ -100,9 +100,12 @@ test("after a reload the paused upload is offered back and the same file finishe
   await signedIn(page);
   // The first chunk arrives; the rest hang until the page reloads.
   let patches = 0;
-  await page.route("**/uploads/**", async (route) => {
-    if (route.request().method() !== "PATCH" || patches++ === 0) return route.continue();
-    await new Promise(() => {});
+  let phase: "hold" | "cut" | "pass" = "hold";
+  const held: Route[] = [];
+  await page.route("**/uploads/**", (route) => {
+    if (route.request().method() !== "PATCH" || patches++ === 0 || phase === "pass") return route.continue();
+    if (phase === "cut") return route.abort();
+    held.push(route);
   });
   const name = unique("reloaded");
   const bytes = Buffer.from(Array.from({ length: 3 * MB }, (_, i) => (i * 7) % 256));
@@ -111,8 +114,11 @@ test("after a reload the paused upload is offered back and the same file finishe
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   await expect(composer(page).locator(".transfer")).toContainText(/1 MB of 3 MB/, { timeout: 15_000 });
   page.on("dialog", (d) => void d.accept());
-  await page.unrouteAll({ behavior: "ignoreErrors" });
+  // The reload cuts the held request off before any of it reaches Relay.
+  phase = "cut";
+  await Promise.all(held.map((route) => route.abort().catch(() => {})));
   await page.reload();
+  phase = "pass";
 
   const notice = composer(page)
     .getByRole("status")
