@@ -4,6 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import staticFiles from "@fastify/static";
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import { statfs } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { core as zod } from "zod/mini";
 import type { Config } from "./config.ts";
@@ -110,6 +111,17 @@ export async function buildApp(config: Config): Promise<App> {
     );
 
     await proxies.start(app.log);
+    if (config.clientIpHeader) {
+      // A trusted proxy names the visitor in its own header (Cloudflare's CF-Connecting-IP). Before
+      // the rate limiter runs, it becomes the forwarded address, so req.ip is the visitor everywhere.
+      const header = config.clientIpHeader;
+      app.addHook("onRequest", (req, _reply, done) => {
+        const reported = req.headers[header];
+        if (typeof reported === "string" && proxies.trusts(req.socket.remoteAddress) && isIP(reported.trim()))
+          req.headers["x-forwarded-for"] = reported.trim();
+        done();
+      });
+    }
     await app.register(cookie);
     await app.register(rateLimit, {
       max: 6000,

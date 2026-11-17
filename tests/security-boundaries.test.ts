@@ -163,6 +163,39 @@ test("client addresses come only from trusted proxies, given by address, range o
   assert.deepEqual(warnings, [{ address: "198.51.100.1" }]);
 });
 
+test("behind Cloudflare each visitor is counted on their own, never as the tunnel", async () => {
+  assert.equal(configFromEnv({ RELAY_CLIENT_IP_HEADER: " CF-Connecting-IP " }).clientIpHeader, "cf-connecting-ip");
+  assert.equal(configFromEnv({}).clientIpHeader, undefined);
+  assert.throws(() => configFromEnv({ RELAY_CLIENT_IP_HEADER: "cf connecting ip" }), /RELAY_CLIENT_IP_HEADER/);
+  // As the gateway sends it: X-Forwarded-For names the tunnel connector, the same for everyone.
+  const pickup = (instance: Instance, peer: string, visitor: string) =>
+    instance.app.inject({
+      method: "POST",
+      url: api.pickup.resolve.path,
+      remoteAddress: peer,
+      headers: { host: "relay.test", "x-forwarded-for": "172.18.0.5", "cf-connecting-ip": visitor },
+      payload: { code: "short" },
+    });
+  const behind = await start(
+    { trustProxy: ["127.0.0.1", "172.18.0.0/16"], clientIpHeader: "cf-connecting-ip" },
+    undefined,
+    { setup: false },
+  );
+  try {
+    for (let i = 1; i <= 6; i++)
+      assert.equal((await pickup(behind, "127.0.0.1", "198.51.100.1")).statusCode, i <= 5 ? 404 : 429);
+    assert.equal((await pickup(behind, "127.0.0.1", "2001:db8::1")).statusCode, 404, "another visitor still gets in");
+    // A value that isn't an address is ignored, leaving the forwarded chain.
+    for (let i = 1; i <= 5; i++) await pickup(behind, "127.0.0.1", "not-an-address");
+    assert.equal((await pickup(behind, "127.0.0.1", "also-not")).statusCode, 429, "both count as the tunnel");
+    // Anyone reaching Relay without the proxy can't choose their own address with the header.
+    for (let i = 1; i <= 5; i++) await pickup(behind, "203.0.113.9", `198.51.100.${10 + i}`);
+    assert.equal((await pickup(behind, "203.0.113.9", "198.51.100.99")).statusCode, 429);
+  } finally {
+    await behind.close();
+  }
+});
+
 test("existing data directories are made private at startup", async () => {
   const instance = await start({}, undefined, { setup: false });
   try {

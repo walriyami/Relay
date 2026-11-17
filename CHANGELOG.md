@@ -53,6 +53,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - One account can make at most 100 sign-in codes a day.
 - Strangers guessing a member's password can no longer lock them out: a browser the member has signed in on before keeps working, each network gets only a few wrong tries, and a flood of guesses can't crowd out everyone's sign-ins. Joins with a dead invitation are turned away before any password work.
 - New passwords need at least 10 characters. Existing shorter passwords keep working.
+- `RELAY_CLIENT_IP_HEADER` reads the visitor's address from a header such as Cloudflare's `CF-Connecting-IP`, sent by a trusted proxy. Behind a tunnel with a gateway in front of Relay, every visitor shared one set of limits; now each gets their own.
 
 ## [1.0.0] - 2026-09-27
 

@@ -25,6 +25,12 @@ export type Config = {
    */
   trustProxy: string[];
   /**
+   * A header in which a trusted proxy names the visitor's own address, such as Cloudflare's
+   * CF-Connecting-IP. Read only from trusted proxies (`trustProxy`); limits then count each
+   * visitor rather than everyone behind the proxy as one. Lowercase; unset uses X-Forwarded-For.
+   */
+  clientIpHeader?: string;
+  /**
    * Setup asks for a one-time key before anyone can create the administrator, so a fresh or reset
    * server can't be claimed by whoever opens it first. The key is printed in the server log and
    * kept in <root>/setup.key until setup. On unless RELAY_SETUP_KEY=false (a machine only you can reach).
@@ -75,6 +81,7 @@ export function configFromEnv(env = process.env): Config {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    clientIpHeader: clientIpHeader(env.RELAY_CLIENT_IP_HEADER),
     setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true),
     tabLeaseMs: 5 * 60_000,
     sweepMs: 60_000,
@@ -93,6 +100,14 @@ function flag(name: string, value: string | undefined, fallback: boolean) {
   if (normalized === "true" || normalized === "1") return true;
   if (normalized === "false" || normalized === "0") return false;
   throw new Error(`${name} must be true or false.`);
+}
+
+function clientIpHeader(value: string | undefined) {
+  const name = value?.trim().toLowerCase();
+  if (!name) return undefined;
+  if (!/^[a-z0-9-]+$/.test(name))
+    throw new Error("RELAY_CLIENT_IP_HEADER must be a header name, such as CF-Connecting-IP.");
+  return name;
 }
 
 function udpPort(value: string | undefined) {
