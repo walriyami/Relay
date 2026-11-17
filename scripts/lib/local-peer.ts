@@ -35,6 +35,8 @@ export class LocalPeer {
   /** Response body bytes that arrived, and that were credited back, over the connection's life. */
   private arrived = 0;
   private credited = 0;
+  /** Frames that arrived on the first lane. */
+  firstFrames = 0;
   /** Resolves once the connection is over. */
   readonly closed: Promise<void>;
   private onClosed = () => {};
@@ -62,22 +64,25 @@ export class LocalPeer {
       },
       LOCAL.messageChars,
     );
-    this.use(channel);
+    this.use(channel, true);
     pc.onStateChange((state) => {
       if (state === "failed" || state === "closed") this.close();
     });
   }
 
-  /** Sets up a connection the way the page does, signed in as `client`, and waits for its lanes. */
-  static async connect(client: Pick<Session, "call">): Promise<LocalPeer> {
+  /**
+   * Sets up a connection the way the page does, signed in as `client`, and waits for its lanes;
+   * with `widen: false`, the first lane alone, for `widen()` to offer the others later.
+   */
+  static async connect(client: Pick<Session, "call">, { widen = true } = {}): Promise<LocalPeer> {
     const { pc, channel, opened } = offering(() => peer?.close());
     let peer: LocalPeer | undefined;
     try {
       const { answer } = await client.call(api.local.connect, { body: { offer: await offer(pc) } });
       pc.setRemoteDescription(answer, "answer");
-      await opened;
+      await opened();
       peer = new LocalPeer(pc, channel);
-      await peer.widen();
+      if (widen) await peer.widen();
       return peer;
     } catch (error) {
       peer?.close();
@@ -92,7 +97,7 @@ export class LocalPeer {
   }
 
   /** Offers the other lanes on the first, as the page does, and waits for them to open. */
-  private async widen() {
+  async widen() {
     // Any lane but the first may go; what it carried goes on the others.
     const joined = new Map<number, Lane>();
     const gone = (i: number) => {
@@ -108,9 +113,11 @@ export class LocalPeer {
       sdps.map(async (sdp, i) => {
         const { pc, channel, opened } = lanes[i];
         this.pcs.push(pc);
-        pc.setRemoteDescription(sdp, "answer");
-        await opened;
+        // Listening from the start, as the page does: the helper may send on the lane the moment it
+        // opens, and node-datachannel drops what arrives with no one listening.
         this.use(channel);
+        pc.setRemoteDescription(sdp, "answer");
+        await opened();
         joined.set(i, laneOf(channel));
         this.mux.add(joined.get(i)!);
         pc.onStateChange((state) => {
@@ -120,11 +127,14 @@ export class LocalPeer {
     );
   }
 
-  private use(channel: DataChannel) {
+  private use(channel: DataChannel, first = false) {
     feed(this.mux, channel);
     // Counting what arrives on the way.
     const deliver = (message: string | Buffer | ArrayBuffer) => {
-      if (typeof message !== "string") this.arrived += message.byteLength - HEADER;
+      if (typeof message !== "string") {
+        this.arrived += message.byteLength - HEADER;
+        if (first) this.firstFrames++;
+      }
       this.mux.receive(message);
     };
     channel.onMessage(deliver);
@@ -224,19 +234,36 @@ export class LocalPeer {
   }
 }
 
-/** A lane's peer connection, offering; `opened` resolves when its channel opens. */
+/**
+ * A lane must be up this soon after its answer, as the helper allows. Counted from the answer, not
+ * from the offer: setting up a connection's lanes one after another takes seconds of its own on a
+ * busy machine, which once failed lanes that were opening fine.
+ */
+const OPEN_MS = 20_000;
+
+/** A lane's peer connection, offering; `opened()`, called once it has its answer, resolves when its channel opens. */
 function offering(onClosed: () => void) {
   const pc = new nodeDataChannel.PeerConnection("browser", { iceServers: [], maxMessageSize: LANES.frameBytes });
   // Offering, node-datachannel creates the channel before any description, and offers on its own.
   const channel = laneChannel(pc, onClosed);
-  const opened = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("The lane did not open.")), 5000);
-    channel.onOpen(() => {
-      clearTimeout(timer);
-      resolve();
-    });
+  let open = false;
+  let onOpen = () => {};
+  channel.onOpen(() => {
+    open = true;
+    onOpen();
   });
-  opened.catch(() => pc.close());
+  const opened = () =>
+    new Promise<void>((resolve, reject) => {
+      if (open) return resolve();
+      const timer = setTimeout(() => {
+        pc.close();
+        reject(new Error("The lane did not open."));
+      }, OPEN_MS);
+      onOpen = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
   return { pc, channel, opened };
 }
 

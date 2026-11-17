@@ -37,6 +37,11 @@ const MAX_LINKS_PER_SESSION = 8;
 const CONNECT_TIMEOUT_MS = 20_000;
 const DISCONNECTED_GRACE_MS = 10_000;
 /**
+ * Once the first lane opens, frames wait this long for the browser's other lanes (see Mux.expect),
+ * as the page's own side does.
+ */
+const LANES_WAIT_MS = 3000;
+/**
  * Bytes each lane lets arrive per round trip; libdatachannel's default holds uploads well below
  * what the local network carries. Sending, the browser's side is what limits a lane.
  */
@@ -54,6 +59,8 @@ type Link = {
   pending: Set<PeerConnection>;
   /** The browser offered its other lanes; it does once. */
   settled: boolean;
+  /** Until the other lanes join, or it's clear they won't, frames wait for them. */
+  wait?: NodeJS.Timeout;
   /** Closes the connection if the first lane doesn't open in time, or stays lost. */
   timer?: NodeJS.Timeout;
 };
@@ -68,6 +75,7 @@ export async function startHelper(options: HelperOptions) {
   const close = (link: Link) => {
     if (!links.delete(link)) return;
     clearTimeout(link.timer);
+    clearTimeout(link.wait);
     link.exchanges.close();
     link.mux.close();
     for (const pc of [link.first, ...link.others, ...link.pending]) pc.close();
@@ -130,11 +138,14 @@ export async function startHelper(options: HelperOptions) {
     };
     links.add(link);
     feed(mux, channel);
+    // Bulk on the first lane before the others open overfills it, and holds up control messages.
+    mux.expect();
     channel.onOpen(() => {
       if (!links.has(link)) return;
       link.opened = true;
       clearTimeout(link.timer);
       link.timer = undefined;
+      link.wait = setTimeout(() => release(link), LANES_WAIT_MS);
     });
     pc.onStateChange((state) => {
       // Closing reports states of its own; the connection is already gone.
@@ -150,6 +161,13 @@ export async function startHelper(options: HelperOptions) {
       close(link);
       throw error;
     }
+  }
+
+  /** Frames stop waiting for lanes: none are left to join. */
+  function release(link: Link) {
+    clearTimeout(link.wait);
+    link.wait = undefined;
+    link.mux.settle();
   }
 
   /** Answers the browser's offers for the connection's other lanes. */
@@ -180,12 +198,14 @@ export async function startHelper(options: HelperOptions) {
         clearTimeout(timer);
         if (own) link.mux.remove(own);
         pc.close();
+        if (!link.others.size && !link.pending.size) release(link);
       };
       const timer = setTimeout(gone, CONNECT_TIMEOUT_MS);
       link.pending.add(pc);
       channel.onOpen(() => {
         if (!links.has(link) || !link.pending.delete(pc)) return;
         clearTimeout(timer);
+        clearTimeout(link.wait);
         link.others.add(pc);
         own = laneOf(channel);
         feed(link.mux, channel);
@@ -206,7 +226,9 @@ export async function startHelper(options: HelperOptions) {
         break;
       }
     }
-    if (links.has(link)) link.mux.send({ lanes: answers });
+    if (!links.has(link)) return;
+    link.mux.send({ lanes: answers });
+    if (!answers.length) release(link);
   }
 
   const server = createServer((req, res) => {

@@ -26,6 +26,8 @@ export class Lanes {
   /** This side offered lanes and waits for the answers; or lanes were set up, and won't be again. */
   private offered: RTCPeerConnection[] | null = null;
   private settled = false;
+  /** Until the other lanes join, or it's clear they won't, frames wait for them. */
+  private wait: ReturnType<typeof setTimeout> | null = null;
   private state: LanesState = "connected";
   closed = false;
 
@@ -45,17 +47,16 @@ export class Lanes {
       options.maxMessage,
     );
     feed(this.mux, channel);
+    // Bulk frames on the first lane before the others open overfill it: it stalls for seconds
+    // recovering, and the message setting up the other lanes waits behind them.
+    this.mux.expect();
+    this.wait = setTimeout(() => this.release(), WAIT_MS);
     channel.onclose = () => this.fail();
     first.onconnectionstatechange = () => {
       const now = first.connectionState;
       if (now === "failed" || now === "closed") this.fail();
       else if (now === "disconnected" || now === "connected") this.report(now);
     };
-  }
-
-  /** Lanes carrying bytes now. */
-  get width() {
-    return this.mux.width;
   }
 
   /** Offers the other lanes; the side that offered the first does. */
@@ -69,6 +70,7 @@ export class Lanes {
     } catch {
       // This browser won't make more connections: the first carries everything.
       this.drop(pcs);
+      this.mux.send({ lanes: [] });
     }
   }
 
@@ -83,6 +85,7 @@ export class Lanes {
     )
       return;
     this.settled = true;
+    if (!sdps.length) return this.release();
     if (this.offered) void this.answered(this.offered, sdps as string[]);
     else void this.answer(sdps as string[]);
   }
@@ -96,19 +99,12 @@ export class Lanes {
   }
 
   private async answer(offers: string[]) {
-    const answers = await Promise.all(
-      offers.map(async (sdp) => {
-        const pc = this.create();
-        try {
-          return await describe(pc, sdp);
-        } catch {
-          this.drop([pc]);
-          return null;
-        }
-      }),
-    );
-    // Answers pair with offers in order, so a lane this side couldn't make ends the list.
+    const pcs = offers.map(() => this.create());
+    const answers = await Promise.all(pcs.map((pc, i) => describe(pc, offers[i]).catch(() => null)));
+    // Answers pair with offers in order, so a lane this side couldn't make ends the list, and those
+    // after it go unanswered.
     const usable = answers.indexOf(null) < 0 ? answers.length : answers.indexOf(null);
+    this.drop(pcs.slice(usable));
     if (!this.closed) this.mux.send({ lanes: answers.slice(0, usable) });
   }
 
@@ -134,6 +130,15 @@ export class Lanes {
       pc.onconnectionstatechange = null;
       pc.close();
     }
+    // None left to join: the first lane carries frames.
+    if (!this.pending.size && !this.others.size) this.release();
+  }
+
+  /** Frames stop waiting for lanes. */
+  private release() {
+    if (this.wait) clearTimeout(this.wait);
+    this.wait = null;
+    this.mux.settle();
   }
 
   /**
@@ -143,6 +148,8 @@ export class Lanes {
   private join(pc: RTCPeerConnection, channel: RTCDataChannel) {
     const own = lane(channel);
     this.others.add(pc);
+    if (this.wait) clearTimeout(this.wait);
+    this.wait = null;
     feed(this.mux, channel);
     this.mux.add(own);
     const gone = () => {
@@ -177,6 +184,8 @@ export class Lanes {
   close() {
     if (this.closed) return;
     this.closed = true;
+    if (this.wait) clearTimeout(this.wait);
+    this.wait = null;
     this.mux.close();
     this.drop([...this.pending, ...this.others, this.first]);
     this.others.clear();
@@ -198,6 +207,11 @@ function feed(mux: Mux, channel: RTCDataChannel) {
   channel.onmessage = ({ data }: MessageEvent<string | ArrayBuffer>) => mux.receive(data);
 }
 
+/**
+ * How long frames wait for the other lanes before the first carries them. Lanes on a local network
+ * open within a second or two.
+ */
+const WAIT_MS = 3000;
 /** Finding local addresses takes moments; a description goes with those found by then. */
 const GATHER_MS = 2500;
 /**

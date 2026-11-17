@@ -123,6 +123,8 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
     engine.receiveSignal(other.id, { kind: "offer", session: "fixture-session", sdp: "local fixture" });
     const pc = LocalPeerConnection.created.at(-1)!;
     pc.channel.onopen?.();
+    // The other side makes no more lanes, so this one carries frames at once.
+    pc.channel.control({ lanes: [] });
     engine.watch(true);
     context.after(() => {
       engine.watch(false);
@@ -512,7 +514,6 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
         get stored() {
           return written;
         },
-        crc: 0,
         async write(bytes: Uint8Array) {
           await wait("write");
           written += bytes.length;
@@ -585,7 +586,6 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
       get stored() {
         return this.written;
       },
-      crc: 0,
       write(bytes: Uint8Array) {
         this.written += bytes.length;
         return Promise.resolve();

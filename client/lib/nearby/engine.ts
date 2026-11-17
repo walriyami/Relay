@@ -59,9 +59,8 @@ export type NearbyTransfer = {
   reason: string;
   started: number;
   finished: number | null;
-  /** In, once done: the files that arrived, in the order of `files`, with their CRC-32s. */
+  /** In, once done: the files that arrived, in the order of `files`. */
   received: File[] | null;
-  crcs: number[] | null;
   /** The text: what was sent, or once done, what arrived. */
   text: string | null;
 };
@@ -465,7 +464,6 @@ export function send(
     started: Date.now(),
     finished: null,
     received: null,
-    crcs: null,
     text: text || null,
   };
   const r: Out = {
@@ -790,7 +788,6 @@ function offered(link: Link, message: Extract<Control, { t: "offer" }>, late = f
     started: Date.now(),
     finished: null,
     received: null,
-    crcs: null,
     text: null,
   };
   const r: In = {
@@ -1037,7 +1034,6 @@ function finishIn(r: In) {
 async function assembleIn(r: In) {
   try {
     const received: File[] = [];
-    const crcs: number[] = [];
     for (const [i, f] of r.t.files.entries()) {
       const name = f.path.split("/").pop()!;
       const sink = r.sinks.get(String(i));
@@ -1047,7 +1043,6 @@ async function assembleIn(r: In) {
           : new File([], name, { type: f.type, lastModified: f.modified }),
       );
       if (!isActive(r.t)) return;
-      crcs.push(sink?.crc ?? 0);
     }
     const text = r.sinks.get(TEXT);
     const content = text ? await (await text.finish("text/plain", "text.txt", Date.now())).text() : null;
@@ -1059,7 +1054,6 @@ async function assembleIn(r: In) {
     if (!isActive(r.t)) return;
     r.t.text = content;
     r.t.received = received;
-    r.t.crcs = crcs;
     r.t.moved = r.t.bytes;
     r.link?.send({ t: "done", id: r.t.id });
     end(r, "done");
@@ -1193,7 +1187,6 @@ function discardIn(r: In) {
   const cleanup = [...r.sinks.values()].map((sink) => sink.discard().catch(() => {}));
   r.sinks.clear();
   r.t.received = null;
-  r.t.crcs = null;
   r.t.text = null;
   void Promise.all([r.work, r.finishing, ...cleanup]).then(() => memory?.release());
 }

@@ -4,6 +4,7 @@ FROM node:24-trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends iproute2 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
+COPY vendor ./vendor
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN NODE_ENV=production npx vite build \

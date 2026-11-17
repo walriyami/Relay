@@ -126,8 +126,8 @@ async function save(t: NearbyTransfer) {
   if (canShare(files) && (await share(files))) return;
   if (files.length === 1) downloadFile(files[0], files[0].name);
   else
-    downloadZip(
-      files.map((file, i) => ({ path: t.files[i].path, file, crc: t.crcs![i], modified: t.files[i].modified })),
+    await downloadZip(
+      files.map((file, i) => ({ path: t.files[i].path, file, modified: t.files[i].modified })),
       t.folders,
       archiveName(t),
     );

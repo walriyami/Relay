@@ -70,9 +70,11 @@ const LAUNCH: Record<string, object> = {
 
 const ORIGIN = "http://localhost:3091";
 const PASSWORD = "Browser-test-password-only";
-const NETWORK = "relay-bench";
-const SERVER = "relay-bench-server";
-const DEVICES = ["relay-bench-a", "relay-bench-b"] as const;
+// RELAY_BENCH_NAME names this run's containers and network, so two benches can run side by side.
+const NAME = process.env.RELAY_BENCH_NAME || "relay-bench";
+const NETWORK = NAME;
+const SERVER = `${NAME}-server`;
+const DEVICES = [`${NAME}-a`, `${NAME}-b`] as const;
 const bench = join(dirname(fileURLToPath(import.meta.url)), "bench");
 const MB = Number(args.mb);
 
