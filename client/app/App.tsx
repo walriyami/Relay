@@ -46,12 +46,15 @@ import { clearSelection } from "../lib/nearby/selection";
 import { coalesce } from "../lib/coalesce";
 import { abandonAll, isBusy, setTransferPrefs, transfers } from "../lib/transfers";
 import { clearDraft } from "../lib/draft";
+import { forgetPush } from "../lib/push";
+import { forgetShares } from "../lib/pwa-share";
 import { setLocalPrefs, useLocalPrefs } from "../lib/local-prefs";
 import { Button, ConfirmHost, Popover, Spinner, Toaster, confirmDialog, menuKeys } from "../components/ui";
 import { AuthFrame, SignIn } from "../features/auth/Auth";
 import { Join } from "../features/join/Join";
 import { Setup } from "../features/setup/Setup";
 import { SendPage } from "../features/send/SendPage";
+import { ShareIntake } from "../features/send/ShareIntake";
 import { NearbyPage } from "../features/nearby/NearbyPage";
 import { NearbyAlerts } from "../features/nearby/NearbyAlerts";
 import { NearbyGuestPage } from "../features/nearby/GuestPage";
@@ -436,6 +439,9 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     case "/":
       page = <SendPage />;
       break;
+    case "/share":
+      page = <ShareIntake />;
+      break;
     case "/nearby":
       page = <NearbyPage />;
       break;
@@ -717,6 +723,8 @@ export async function signOut(to = "/") {
   stopLink();
   stopPresence();
   await call(api.session.signOut).catch(() => {});
+  // The server forgets this device's notifications with its session; the browser forgets too.
+  await Promise.all([forgetPush(), forgetShares()]);
   clearDraft();
   clearSelection();
   setPrincipal(null);

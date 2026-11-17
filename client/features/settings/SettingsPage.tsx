@@ -15,6 +15,7 @@ import { StorageMeter } from "../../components/StorageMeter";
 import { AddDevice } from "./AddDevice";
 import { PasskeysSection } from "./Passkeys";
 import { Section } from "./Section";
+import { NotificationSettings } from "../activity/Notifications";
 import {
   Button,
   LoadFailed,
@@ -185,8 +186,6 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
     }
     saving.current = false;
   }
-  const notifySupported = typeof Notification !== "undefined";
-  const notifyBlocked = notifySupported && Notification.permission === "denied";
   const limits = me.user.limits;
   return (
     <div className="page settings">
@@ -244,7 +243,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
       <Section
         id="s-activity"
         title="Activity"
-        description="What the bell shows. Items waiting for this device to accept them are always shown."
+        description="What the bell shows, and what notifications tell you about. Items waiting for this device to accept them are always shown."
       >
         <Toggle
           label="Items you received"
@@ -259,13 +258,13 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         />
         <Toggle
           label="Your links"
-          description="Someone opened or downloaded from a link you shared."
+          description="Someone opened or downloaded from a link you shared. Downloads are marked new."
           checked={me.prefs.activity.links}
           onChange={(v) => void save({ prefs: { activity: { links: v } } })}
         />
         <Toggle
           label="Sign-ins and security"
-          description="New sign-ins, password changes, and passkeys added or removed."
+          description="Sign-ins, password changes, and passkeys added or removed. Only sign-ins on a new kind of device are marked new."
           checked={me.prefs.activity.security}
           onChange={(v) => void save({ prefs: { activity: { security: v } } })}
         />
@@ -296,26 +295,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
           onChange={(v) => setLocalPrefs({ popups: v })}
         />
         <Toggle label="Play a sound" checked={local.sound} onChange={(v) => setLocalPrefs({ sound: v })} />
-        <Toggle
-          label="System notifications when Relay is in the background"
-          description={
-            !notifySupported
-              ? "This browser doesn’t support notifications."
-              : notifyBlocked
-                ? "Blocked by your browser. Allow notifications for this site, then reload."
-                : undefined
-          }
-          disabled={!notifySupported || notifyBlocked}
-          checked={local.system && typeof Notification !== "undefined" && Notification.permission === "granted"}
-          onChange={async (v) => {
-            if (!v) return setLocalPrefs({ system: false });
-            if (typeof Notification === "undefined") return;
-            const permission =
-              Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
-            if (permission === "granted") setLocalPrefs({ system: true });
-            else toast("Notifications weren’t allowed.", { tone: "error" });
-          }}
-        />
+        <NotificationSettings />
       </Section>
       <Section id="s-look" title="Appearance" description="Applies to this browser only.">
         <div className="setting-row">

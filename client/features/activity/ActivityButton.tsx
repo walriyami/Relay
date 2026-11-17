@@ -13,6 +13,7 @@ import { requestAddress } from "../requests/address";
 import { acceptDelivery, declineDelivery } from "../incoming/answer";
 import { describeAnswered, describeDelivery, describeEntry, type Described } from "./describe";
 import { useActivity } from "./ActivityProvider";
+import { PushOffer } from "./Notifications";
 
 /** The list shows at most this many lines; older ones are still in the feed's own limit. */
 const SHOWN = 50;
@@ -81,13 +82,15 @@ function ActivityPanel({ close }: { close: () => void }) {
         ? () => go(linkAddress(e.linkId))
         : e.kind === "joined" && me.user.admin
           ? () => go("/admin")
-          : undefined;
+          : e.kind === "signin" && e.news
+            ? () => go("/settings#s-devices")
+            : undefined;
   const lines: Line[] = [
     ...entries.map((e) => ({
       key: e.id,
       at: e.created,
       described: describeEntry(e),
-      fresh: !e.self && e.created > seenAtOpen,
+      fresh: e.news && e.created > seenAtOpen,
       onOpen: entryAction(e),
     })),
     ...(me.prefs.activity.received ? answered : []).map((d) => ({
@@ -113,6 +116,7 @@ function ActivityPanel({ close }: { close: () => void }) {
         />
       </div>
       <div className="activity-scroll">
+        <PushOffer />
         {deliveryError && (
           <LoadFailed
             banner
@@ -155,7 +159,8 @@ function ActivityPanel({ close }: { close: () => void }) {
         ) : !pending.length && !deliveryError && !feedError ? (
           <div className="popover-empty">
             <InlineEmpty icon={<Bell size={20} />} title="No activity yet">
-              Items from your other devices, files sent to your requests and sign-ins appear here.
+              Things your other devices send here, files people send to your requests, downloads through your links and
+              sign-ins on new devices appear here.
             </InlineEmpty>
           </div>
         ) : null}

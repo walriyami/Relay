@@ -24,23 +24,32 @@ function contents(files: number, size: number, text: boolean) {
 export function describeEntry(e: ActivityEntry): Described {
   switch (e.kind) {
     case "signin":
-      return {
-        icon: <LogIn size={16} />,
-        title: e.self ? "This device signed in" : `${e.device} signed in`,
-        detail: METHOD[e.method],
-      };
+      // A new kind of device is worth a look; a familiar one signing in again is routine.
+      return e.news
+        ? {
+            icon: <LogIn size={16} />,
+            title: `New sign-in on ${e.device}`,
+            detail: `${METHOD[e.method]} · Not you? Sign it out in Settings`,
+            tone: "warn",
+          }
+        : {
+            icon: <LogIn size={16} />,
+            title: e.self ? "This device signed in" : `${e.device} signed in`,
+            detail: METHOD[e.method],
+          };
     case "password":
       return e.device === null
         ? {
             icon: <KeyRound size={16} />,
-            title: "The administrator set a new password",
-            detail: "Your other devices were signed out",
+            title: "The administrator set a new password for you",
+            detail: "Your devices were signed out",
             tone: "warn",
           }
         : {
             icon: <KeyRound size={16} />,
-            title: "Password changed",
-            detail: e.self ? "On this device" : `On ${e.device}`,
+            title: "Your password was changed",
+            detail: e.self ? "On this device · Your other devices were signed out" : `On ${e.device}`,
+            tone: e.self ? undefined : "warn",
           };
     case "passkey":
       return {
@@ -57,11 +66,11 @@ export function describeEntry(e: ActivityEntry): Described {
     case "link":
       // One entry per person: when they first open the link, and when they first download from it.
       return e.action === "opened"
-        ? { icon: <Eye size={16} />, title: `Someone opened “${e.item}”`, detail: `${e.device} · with your link` }
+        ? { icon: <Eye size={16} />, title: `Your link to “${e.item}” was opened`, detail: `On ${e.device}` }
         : {
             icon: <Download size={16} />,
-            title: `Someone downloaded “${e.item}”`,
-            detail: `${e.device} · with your link`,
+            title: `“${e.item}” was downloaded with your link`,
+            detail: `On ${e.device}`,
           };
     case "joined":
       return {

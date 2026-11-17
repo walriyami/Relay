@@ -15,6 +15,9 @@ export default defineConfig({
     // locally, rerun a failing test with --trace on.
     trace: process.env.CI ? "retain-on-failure" : "off",
     screenshot: "only-on-failure",
+    // Relay's own worker (public/sw.js) would answer requests the specs intercept with page.route;
+    // tests/browser/pwa.spec.ts allows it to test it.
+    serviceWorkers: "block",
   },
   webServer: {
     command: "node tests/browser-server.ts",

@@ -3,6 +3,7 @@ import { api, call, type ActivityEntry, type ActivityFeed, type Delivery } from 
 import { plural } from "../../lib/format";
 import { useLive } from "../../lib/live";
 import { chime, getLocalPrefs } from "../../lib/local-prefs";
+import { pushState } from "../../lib/push";
 import { navigate } from "../../lib/router";
 import { setWaitingCount } from "../../lib/tab-title";
 import { toast } from "../../components/ui";
@@ -10,6 +11,7 @@ import { downloadItem, errorToast, hasDownloads } from "../library/actions";
 import { requestAddress } from "../requests/address";
 import { ReceiveModal, type Received } from "../incoming/ReceiveModal";
 import { answerDelivery, isPending } from "../incoming/answer";
+import { offerPushAfterArrival } from "./Notifications";
 
 type Activity = {
   /** Deliveries waiting for this device to accept or decline them, newest first. */
@@ -43,11 +45,23 @@ const EMPTY_FEED: ActivityFeed = { entries: [], seen: 0 };
 /** A tab in the background leaves an arrival to a visible tab of the same browser for this long. */
 const BACKGROUND_GRACE = 1500;
 const itemName = (d: Delivery) => d.item?.name || "an item";
-const isNew = (e: ActivityEntry, seen: number) => !e.self && e.created > seen;
+/** Badged in the bell: news (not caused here, not routine) that no device has seen yet. */
+const isNew = (e: ActivityEntry, seen: number) => e.news && e.created > seen;
 
+/**
+ * A notice from this tab while it is in the background, for browsers without push. With push on,
+ * the service worker shows the same news instead, open tab or not.
+ */
 export function notifySystem(body: string, tag: string, onClick?: () => void) {
   const prefs = getLocalPrefs();
-  if (!prefs.system || !document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+  if (
+    pushState().on ||
+    !prefs.system ||
+    !document.hidden ||
+    !("Notification" in window) ||
+    Notification.permission !== "granted"
+  )
+    return;
   const notice = new Notification("Relay", { body, tag });
   notice.onclick = () => {
     window.focus();
@@ -107,6 +121,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     if (prefs.sound) chime();
     notifySystem(message, `delivery:${first.id}`);
     for (const d of [...fresh].reverse()) arrive(d);
+    offerPushAfterArrival();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- announce arrivals only when the delivery list changes.
   }, [deliveries.data, deliveries.loading, deliveries.error]);
 
@@ -186,6 +201,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     toast(message, { key: `request-files:${one?.requestId ?? "many"}`, action: { label: "View", onClick: view } });
     if (getLocalPrefs().sound) chime();
     notifySystem(message, `request:${one?.requestId ?? "many"}`, view);
+    offerPushAfterArrival();
   }, [entries, feed.loading, feed.error]);
 
   const newest = entries[0]?.created ?? 0;

@@ -1765,6 +1765,36 @@
 .activity-section + .activity-section {
   border-top: 1px solid var(--line);
 }
+/* The bell's one-time offer to turn on notifications for this device. */
+.push-offer {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s2) var(--s3);
+  margin: var(--s3) var(--s3) var(--s1);
+  padding: var(--s3);
+  border-radius: var(--r2);
+  background: var(--well);
+}
+.push-offer > svg {
+  margin-top: 2px;
+  color: var(--accent);
+}
+.push-offer p {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.push-offer p .muted {
+  font-size: 0.84rem;
+}
+.push-offer-actions {
+  grid-column: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s1);
+}
 .activity-heading {
   padding: var(--s3) var(--s4) var(--s1);
   font-size: 0.75rem;
