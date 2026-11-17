@@ -7,7 +7,7 @@ import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
 import { currentAuth, currentPrincipalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
-import { TAB_CLOSED } from "./create.ts";
+import { CANCELLED, MOVED, TAB_CLOSED } from "./create.ts";
 import { uploadRow, type Receivers } from "./receivers.ts";
 
 const TUS_VERSION = "1.0.0";
@@ -39,8 +39,11 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
       return notFound("That upload");
     }
     ensureTransferAvailability(ctx, upload);
+    // A page that names itself must still be the one sending: another may have continued the upload.
+    const tab = req.headers[headers.tab.toLowerCase()];
+    if (typeof tab === "string" && tab !== upload.tab && upload.state === "open") fail(409, MOVED);
     if (!ctx.transfers.renewTab(upload.tab, principal)) fail(409, TAB_CLOSED);
-    if (upload.state !== "open" && upload.state !== "complete") fail(410, "This transfer was cancelled.");
+    if (upload.state !== "open" && upload.state !== "complete") fail(410, CANCELLED);
     if (upload.completed === null && upload.node === null) fail(410, "This file was removed from its transfer.");
     return upload;
   };

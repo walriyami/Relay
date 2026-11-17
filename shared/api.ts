@@ -119,6 +119,8 @@ const linkSettings = {
 };
 
 const nearbyTab = z.string().check(z.regex(/^[A-Za-z0-9_-]{16,64}$/));
+/** A page load's id (`X-Relay-Tab`). */
+const transferTab = nearbyTab;
 const nearbySession = z.string().check(z.regex(/^[A-Za-z0-9_-]{8,64}$/));
 const sdp = text(1, NEARBY.sdpBytes);
 const nearbySignalBody = z.object({
@@ -143,8 +145,8 @@ export const transferInput = z.object({
    * and its links show the additions once they finish. `name` and `retentionDays` are then ignored.
    */
   item: z.optional(id),
-  /** The page load that owns the transfer. Closing that tab abandons it. */
-  tab: z.string().check(z.regex(/^[A-Za-z0-9_-]{16,64}$/)),
+  /** The page load sending the transfer. Once no page sends it, it is paused (see `transfers.paused`). */
+  tab: transferTab,
   /** Null derives the name from the contents. */
   name: z.nullable(name),
   retentionDays: z.optional(retentionDays),
@@ -392,8 +394,15 @@ export const api = {
     cancel: endpoint<M.TransferCancelled>()("POST", "/api/transfers/:id/cancel", { auth: "any" }),
     /** Skips one unfinished file of a transfer. */
     removeUpload: ok("DELETE", "/api/uploads/:id", { auth: "any" }),
-    /** A page is going away: abandon its unfinished transfers now and refuse its late requests. */
+    /**
+     * A page is going away: refuse its late requests. A member's unfinished transfers stay paused
+     * (see `paused`); a guest's are abandoned.
+     */
     closeTab: ok("POST", "/api/tabs/:id/close", { auth: "any" }),
+    /** The member's transfers no open page is sending, most recent first. */
+    paused: endpoint<M.PausedTransfer[]>()("GET", "/api/transfers/paused", { auth: "member" }),
+    /** This page (`tab`) continues a paused transfer; the page that started it is closed. */
+    resume: ok("POST", "/api/transfers/:id/resume", { auth: "member", body: z.object({ tab: transferTab }) }),
   },
 
   links: {

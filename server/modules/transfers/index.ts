@@ -1,18 +1,20 @@
 import { LIMITS } from "../../../shared/model.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { api } from "../../../shared/api.ts";
 import type { Context, Transfers } from "../../context.ts";
 import { authOf, currentPrincipalFor, principalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
+import { api, headers } from "../../../shared/api.ts";
 import { createTransfer } from "./create.ts";
 import {
+  adopt,
   cancel,
   cancelForItem,
   cancelForRequest,
   closeTab,
   complete,
   ownTransfer,
+  paused,
   recover,
   removeUpload,
   renewTab,
@@ -80,6 +82,18 @@ export function registerTransfers(app: FastifyInstance, ctx: Context) {
     const auth = authOf(ctx, req);
     const caller = auth.member ?? auth.grants[0] ?? fail(401, "Sign in to continue.");
     closeTab(ctx, receivers, principalOf(req), params.id, caller);
+    return { ok: true as const };
+  });
+
+  route(app, ctx, api.transfers.paused, ({ req, member }) => {
+    const tab = req.headers[headers.tab.toLowerCase()];
+    return paused(ctx, receivers, member.userId, typeof tab === "string" ? tab : null);
+  });
+  route(app, ctx, api.transfers.resume, ({ req, params, body }) => {
+    const { transfer, principal } = ownTransfer(ctx, principalOf(req), params.id);
+    // Only a member continues a paused transfer; a guest's ends with its page.
+    if (principal.kind !== "member") return notFound("That transfer");
+    adopt(ctx, transfer, principal, body.tab);
     return { ok: true as const };
   });
 

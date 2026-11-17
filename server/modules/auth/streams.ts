@@ -5,6 +5,7 @@ import type { ChangeEvent, SessionEnded, StreamLimited, StreamReady } from "../.
 import { grantFor, memberFromToken, requireMember, sessionCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { sha256 } from "../../lib/secrets.ts";
+import { TAB_CLOSED } from "../transfers/create.ts";
 
 export type EndReason = SessionEnded["reason"];
 /** Why a user's sessions were just revoked, when the database alone can't tell. */
@@ -169,7 +170,7 @@ class Streams {
         )
       : undefined;
     if (lease && (lease.closed !== null || lease.principal !== principalKey(spec.lease!.principal)))
-      fail(409, "This tab was closed, so its transfer was cancelled.");
+      fail(409, TAB_CLOSED);
     const renewTab = tab && (!lease || lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs);
     const renewDevice =
       spec.deviceId &&

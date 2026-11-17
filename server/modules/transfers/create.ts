@@ -18,7 +18,11 @@ import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const DISK_HEADROOM = 256 * 1024 ** 2;
-export const TAB_CLOSED = "This tab was closed, so its transfer was cancelled.";
+export const TAB_CLOSED = "This page was closed. Reload it to continue.";
+/** Said to a page whose paused upload another page took over. */
+export const MOVED = "This upload is continuing on another page.";
+/** Said for a transfer that was cancelled: on purpose, or after staying paused too long. */
+export const CANCELLED = "This upload was stopped, and its unfinished files were removed.";
 const NAME_TAKEN = "A file or folder with that name already exists there.";
 
 export function bytesLabel(bytes: number) {
@@ -120,7 +124,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       if (initial.principal !== principal || initial.request_hash !== requestHash)
         fail(409, "This transfer was already created with different contents.");
       ensureTransferAvailability(ctx, { ...target, item: initial.item });
-      if (initial.state === "cancelled") fail(410, "This transfer was cancelled.");
+      if (initial.state === "cancelled") fail(410, CANCELLED);
       const plan = planNodes(input);
       const ids = ctx.db.all<{ id: string }>("SELECT id FROM uploads WHERE transfer = ? ORDER BY rowid", input.id);
       if (options.sender != null)

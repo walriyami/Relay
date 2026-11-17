@@ -1,12 +1,13 @@
 import { readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { Destination, TransferCancelled, TransferResult } from "../../../shared/model.ts";
+import type { Destination, PausedTransfer, TransferCancelled, TransferResult } from "../../../shared/model.ts";
 import { linkPasswordHash } from "../links/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { leaseRenewalMs, principalKey, type Context, type Principal } from "../../context.ts";
 import { fail, HttpError, notFound } from "../../lib/errors.ts";
 import { publishItemChange } from "./publish.ts";
 import { assertTransferAvailability, ensureTransferAvailability, settleTransferAvailability } from "./availability.ts";
+import { CANCELLED, TAB_CLOSED } from "./create.ts";
 import { isActive, uploadRow, type Receivers, type UploadRow } from "./receivers.ts";
 
 import { DAY_MS } from "../../lib/time.ts";
@@ -158,7 +159,7 @@ export async function complete(
     result = ctx.db.tx(() => {
       const current = transferRow(ctx, transfer.id) ?? notFound("That transfer");
       assertTransferAvailability(ctx, current);
-      if (current.state === "cancelled") fail(410, "This transfer was cancelled.");
+      if (current.state === "cancelled") fail(410, CANCELLED);
       let saved: StoredResult;
       if (current.state === "complete") {
         saved = JSON.parse(current.result!) as StoredResult;
@@ -289,7 +290,13 @@ export function closeTab(
   }
   if (!principalOf(row.principal)) return notFound("That tab");
   ctx.db.run("UPDATE tabs SET closed = ? WHERE id = ? AND closed IS NULL", Date.now(), tab);
-  for (const t of ctx.db.all<{ id: string }>("SELECT id FROM transfers WHERE tab = ? AND state = 'open'", tab))
+  // A member's unfinished uploads stay paused: the page may only have reloaded, and the next one
+  // offers to continue them (see `paused`). A guest has no way back to a paused upload, and it
+  // would hold the request's room, so a guest's page going away still cancels its uploads.
+  for (const t of ctx.db.all<{ id: string }>(
+    "SELECT id FROM transfers WHERE tab = ? AND state = 'open' AND principal LIKE 'grant:%'",
+    tab,
+  ))
     abandon(ctx, receivers, transferRow(ctx, t.id)!);
 }
 
@@ -301,6 +308,113 @@ export function closeTab(
  */
 export const STALLED_GUEST_MS = 30 * 60_000;
 export const STALLED_MEMBER_MS = DAY_MS;
+
+/**
+ * How long a guest's upload stays paused once its page goes quiet (a phone that slept): as long as
+ * a guest may go without sending bytes, since a quiet page sends none.
+ */
+export const GUEST_PAUSE_MS = STALLED_GUEST_MS;
+
+/** When a tab was last seen: closed, or its lease (renewed while it is open) ran out. */
+const LAST_SEEN = "min(b.lease_expires, coalesce(b.closed, b.lease_expires))";
+
+/**
+ * A member's unfinished transfers that no open page is sending: their page closed, reloaded or
+ * slept past its lease. Each can be continued by choosing the same files again, until the sweep
+ * removes it `pausedUploadMs` after its page was last seen.
+ */
+export async function paused(ctx: Context, receivers: Receivers, owner: string, ownTab: string | null) {
+  const now = Date.now();
+  const rows = ctx.db.all<{
+    id: string;
+    item: string;
+    name: string | null;
+    adding: number;
+    seen: number;
+    touched: number;
+    text: number;
+  }>(
+    `SELECT t.id, t.item, coalesce(i.name, (SELECT name FROM nodes WHERE item = t.item AND parent IS NULL ORDER BY position LIMIT 1)) AS name, i.created != t.created AS adding,
+       ${LAST_SEEN} AS seen, (SELECT max(u.touched) FROM uploads u WHERE u.transfer = t.id) AS touched,
+       EXISTS (SELECT 1 FROM nodes WHERE item = t.item AND kind = 'text' AND created = t.created) AS text
+     FROM transfers t JOIN tabs b ON b.id = t.tab JOIN items i ON i.id = t.item
+     WHERE t.principal = ? AND t.state = 'open' AND t.tab != ? AND (b.closed IS NOT NULL OR b.lease_expires <= ?)
+       AND i.trashed IS NULL
+     ORDER BY t.created DESC LIMIT 10`,
+    `user:${owner}`,
+    ownTab ?? "",
+    now,
+  );
+  const result: PausedTransfer[] = [];
+  for (const row of rows) {
+    const uploads = ctx.db.all<{ id: string; node: string | null; size: number; offset: number; completed: number | null }>(
+      "SELECT id, node, size, offset, completed FROM uploads WHERE transfer = ? ORDER BY rowid",
+      row.id,
+    );
+    const paths = nodePaths(ctx, row.item);
+    const files: PausedTransfer["files"] = [];
+    for (const upload of uploads) {
+      // A file skipped earlier is no longer part of the transfer.
+      if (upload.node === null && upload.completed === null) continue;
+      const done = upload.completed !== null;
+      files.push({
+        upload: upload.id,
+        path: (upload.node && paths.get(upload.node)) ?? "",
+        size: upload.size,
+        offset: done ? upload.size : upload.offset,
+        done,
+        ...(!done && upload.offset > 0 ? { sample: await receivers.sample(upload.id, upload.offset) } : {}),
+      });
+    }
+    result.push({
+      id: row.id,
+      itemId: row.item,
+      name: row.name ?? "",
+      adding: !!row.adding,
+      text: !!row.text,
+      // Whichever comes first: the paused limit, or a day without any of its bytes arriving.
+      keptUntil: Math.min(row.seen + ctx.config.pausedUploadMs, row.touched + STALLED_MEMBER_MS),
+      files,
+    });
+  }
+  return result;
+}
+
+/** Each node's path in an item, by id. */
+function nodePaths(ctx: Context, item: string) {
+  const nodes = ctx.db.all<{ id: string; parent: string | null; name: string }>(
+    "SELECT id, parent, name FROM nodes WHERE item = ?",
+    item,
+  );
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const paths = new Map<string, string>();
+  const pathOf = (id: string): string => {
+    const known = paths.get(id);
+    if (known !== undefined) return known;
+    const node = byId.get(id)!;
+    const path = node.parent && byId.has(node.parent) ? `${pathOf(node.parent)}/${node.name}` : node.name;
+    paths.set(id, path);
+    return path;
+  };
+  for (const node of nodes) pathOf(node.id);
+  return paths;
+}
+
+/**
+ * Moves a paused transfer to the caller's page, which sends the rest of it. The page that started
+ * it is closed, so it cannot send the same files at the same time.
+ */
+export function adopt(ctx: Context, transfer: TransferRow, principal: Principal, tab: string) {
+  if (transfer.state === "cancelled") fail(410, CANCELLED);
+  if (transfer.state === "complete") fail(409, "This transfer has already finished.");
+  ctx.db.tx(() => {
+    if (!renewTab(ctx, tab, principal)) fail(409, TAB_CLOSED);
+    if (transfer.tab !== tab) {
+      ctx.db.run("UPDATE tabs SET closed = ? WHERE id = ? AND closed IS NULL", Date.now(), transfer.tab);
+      ctx.db.run("UPDATE transfers SET tab = ? WHERE id = ? AND state = 'open'", tab, transfer.id);
+    }
+  });
+}
 
 export async function sweep(ctx: Context, receivers: Receivers, now: number) {
   for (const t of ctx.db.all<{ id: string }>(
@@ -332,10 +446,14 @@ export async function sweep(ctx: Context, receivers: Receivers, now: number) {
     const transfer = transferRow(ctx, t.id);
     if (transfer?.state === "open") abandon(ctx, receivers, transfer);
   }
+  // A page that slept, reloaded or closed leaves its uploads paused, not cancelled: they continue
+  // when it wakes or the same files are chosen again. Only one gone this long gives them up. A
+  // guest's pause is shorter: it holds the request's room, and a guest cannot find it after a reload.
   for (const t of ctx.db.all<{ id: string }>(
     `SELECT t.id FROM transfers t JOIN tabs b ON b.id = t.tab
-     WHERE t.state = 'open' AND (b.closed IS NOT NULL OR b.lease_expires <= ?)`,
-    now,
+     WHERE t.state = 'open' AND ${LAST_SEEN} <= (CASE WHEN t.principal LIKE 'grant:%' THEN ? ELSE ? END)`,
+    now - Math.min(ctx.config.pausedUploadMs, GUEST_PAUSE_MS),
+    now - ctx.config.pausedUploadMs,
   )) {
     const transfer = transferRow(ctx, t.id);
     if (transfer?.state === "open") abandon(ctx, receivers, transfer);

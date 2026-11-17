@@ -591,6 +591,30 @@ export class Receivers {
     }
   }
 
+  /**
+   * Up to 4 KiB from the start of a paused upload's committed bytes and up to 4 KiB ending at its
+   * committed offset, so a page continuing it can check it chose the same file. Undefined if the part
+   * is missing or shorter than its offset.
+   */
+  async sample(id: string, offset: number): Promise<{ head: string; tail: string } | undefined> {
+    const SAMPLE = 4096;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(this.partPath(id), "r");
+      const head = Buffer.alloc(Math.min(SAMPLE, offset));
+      const tail = Buffer.alloc(Math.min(SAMPLE, offset));
+      const a = await handle.read(head, 0, head.length, 0);
+      const b = await handle.read(tail, 0, tail.length, offset - tail.length);
+      if (a.bytesRead !== head.length || b.bytesRead !== tail.length) return undefined;
+      return { head: head.toString("base64"), tail: tail.toString("base64") };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    } finally {
+      await handle?.close();
+    }
+  }
+
   private count(bytes: number) {
     const minute = Math.floor(Date.now() / 60_000);
     this.perMinute.set(minute, (this.perMinute.get(minute) ?? 0) + bytes);
