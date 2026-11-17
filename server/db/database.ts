@@ -84,11 +84,40 @@ export class Database {
     }
     try {
       this.initialize(schema);
+      this.checkStoredTypes();
     } catch (error) {
       this.sqlite.close();
       if (isDamage(error)) throw new DatabaseDamaged(String((error as Error).message));
       throw error;
     }
+  }
+
+  /** True when stored_types was rebuilt at startup. */
+  rebuiltStoredTypes = false;
+
+  /**
+   * stored_types is kept by triggers, like users.bytes_used. When the two disagree (the table is
+   * new to this database, or something changed one without the other), it is rebuilt from the nodes:
+   * one pass over every file, only then.
+   */
+  private checkStoredTypes() {
+    const differs = this.get(
+      `SELECT 1 FROM users u
+       WHERE u.bytes_used <> (SELECT ifnull(sum(bytes), 0) FROM stored_types s WHERE s.owner = u.id)
+          OR (u.bytes_used = 0 AND NOT EXISTS (SELECT 1 FROM stored_types s WHERE s.owner = u.id)
+              AND EXISTS (SELECT 1 FROM nodes n WHERE n.owner = u.id AND n.state = 'ready' AND n.kind = 'file'))
+       LIMIT 1`,
+    );
+    if (!differs) return;
+    this.tx(() => {
+      this.run("DELETE FROM stored_types");
+      this.run(
+        `INSERT INTO stored_types(owner, mime, bytes, files)
+         SELECT owner, mime, sum(size), sum(kind = 'file') FROM nodes
+         WHERE state = 'ready' AND kind <> 'folder' GROUP BY owner, mime`,
+      );
+    });
+    this.rebuiltStoredTypes = true;
   }
 
   /** Notes storage failures so health can report them; every statement passes through here. */

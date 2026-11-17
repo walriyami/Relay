@@ -67,9 +67,10 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     const limits = limitsOf(ctx);
     const disk = await statfs(ctx.config.root);
     const hourAgo = Date.now() - 3_600_000;
+    const integrity = ctx.blobs.status();
     return {
       operations: ctx.operations.snapshot(),
-      integrity: ctx.blobs.status(),
+      integrity,
       usageBuffer: ctx.usage.status(),
       database: { failure: ctx.db.storageFailure },
       codeLength: preferredCodeLengthOf(ctx.db),
@@ -81,7 +82,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         capacity: limits.capacity,
         diskFree: disk.bavail * disk.bsize,
         diskTotal: disk.blocks * disk.bsize,
-        blobBytes: ctx.db.value<number>("SELECT ifnull(SUM(size), 0) FROM blobs")!,
+        blobBytes: integrity.storedBytes,
         // From trashed items to their nodes, so the cost follows Trash rather than the whole library.
         trashBytes: ctx.db.value<number>(
           "SELECT ifnull(SUM(n.size), 0) FROM items i CROSS JOIN nodes n ON n.item = i.id WHERE i.trashed IS NOT NULL AND n.state = 'ready'",

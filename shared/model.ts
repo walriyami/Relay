@@ -582,6 +582,8 @@ export type BlobStatus = {
    */
   affected: { userId: Id; username: string; files: number; items: number }[];
   total: number;
+  /** Bytes of every stored copy, each counted once however many files share it. */
+  storedBytes: number;
   healthy: number;
   missing: number;
   corrupt: number;

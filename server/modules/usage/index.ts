@@ -208,8 +208,14 @@ function storedAtEnds(ctx: Context, starts: number[], end: number, userId: strin
   const first = hourOf(starts[0]);
   const owner = userId === null ? "" : "AND user_id = ?";
   const args = userId === null ? [] : [userId];
+  // Each member's last sample before the range is found from the end of their own rows, not by
+  // reading the whole history.
   const samples = ctx.db.all<{ user_id: string; hour: number; stored: number }>(
-    `SELECT user_id, max(hour) AS hour, stored FROM usage WHERE stored IS NOT NULL AND hour < ? ${owner} GROUP BY user_id
+    `SELECT s.user_id, s.hour, s.stored FROM users u CROSS JOIN usage s
+     ON s.user_id = u.id AND s.hour = (
+       SELECT max(hour) FROM usage WHERE user_id = u.id AND hour < ? AND stored IS NOT NULL
+     )
+     WHERE 1 ${userId === null ? "" : "AND u.id = ?"}
      UNION ALL
      SELECT user_id, hour, stored FROM usage WHERE stored IS NOT NULL AND hour >= ? AND hour < ? ${owner}
      ORDER BY hour`,
@@ -253,49 +259,63 @@ export function kindOf(mime: string): StorageKind {
 }
 const KINDS: StorageKind[] = ["images", "videos", "audio", "documents", "archives", "other"];
 
-function storageOf(ctx: Context, userId: string | null): StorageSummary {
-  const owner = userId === null ? "" : "AND n.owner = ?";
+/**
+ * What is stored by kind, and how many files are outside Trash. Everything stored comes from the
+ * totals the node triggers keep (stored_types); Trash is read from the trashed items alone, so the
+ * cost follows what is in Trash rather than the whole library.
+ */
+function storageOf(ctx: Context, userId: string | null): { storage: StorageSummary; files: number } {
   const args = userId === null ? [] : [userId];
+  type Row = { mime: string; bytes: number; files: number };
+  const stored = ctx.db.all<Row>(
+    `SELECT mime, sum(bytes) AS bytes, sum(files) AS files FROM stored_types
+     ${userId === null ? "" : "WHERE owner = ?"} GROUP BY mime`,
+    ...args,
+  );
+  const trashed = ctx.db.all<Row>(
+    `SELECT n.mime, sum(n.size) AS bytes, sum(n.kind = 'file') AS files
+     FROM items i CROSS JOIN nodes n ON n.item = i.id
+     WHERE i.trashed IS NOT NULL ${userId === null ? "" : "AND i.owner = ?"} AND n.state = 'ready' AND n.kind <> 'folder'
+     GROUP BY n.mime`,
+    ...args,
+  );
   const kinds = new Map(KINDS.map((kind) => [kind, { kind, bytes: 0, files: 0 }]));
   let trash = 0;
-  for (const row of ctx.db.all<{ mime: string; trashed: number; bytes: number; files: number }>(
-    `SELECT n.mime, i.trashed IS NOT NULL AS trashed, sum(n.size) AS bytes, sum(n.kind = 'file') AS files
-     FROM nodes n JOIN items i ON i.id = n.item
-     WHERE n.state = 'ready' AND n.kind != 'folder' ${owner}
-     GROUP BY n.mime, i.trashed IS NOT NULL`,
-    ...args,
-  )) {
-    if (row.trashed) trash += row.bytes;
-    else {
+  let files = 0;
+  for (const [rows, sign] of [
+    [stored, 1],
+    [trashed, -1],
+  ] as const)
+    for (const row of rows) {
       const kind = kinds.get(kindOf(row.mime))!;
-      kind.bytes += row.bytes;
-      kind.files += row.files;
+      kind.bytes += sign * row.bytes;
+      kind.files += sign * row.files;
+      files += sign * row.files;
+      if (sign < 0) trash += row.bytes;
     }
-  }
   return {
-    used: ctx.db.value<number>(
-      `SELECT ifnull(sum(bytes_used), 0) FROM users ${userId === null ? "" : "WHERE id = ?"}`,
-      ...args,
-    )!,
-    reserved: ctx.db.value<number>(
-      `SELECT ifnull(sum(size), 0) FROM nodes n WHERE state = 'pending' ${owner}`,
-      ...args,
-    )!,
-    trash,
-    kinds: [...kinds.values()],
+    storage: {
+      used: ctx.db.value<number>(
+        `SELECT ifnull(sum(bytes_used), 0) FROM users ${userId === null ? "" : "WHERE id = ?"}`,
+        ...args,
+      )!,
+      reserved: ctx.db.value<number>(
+        `SELECT ifnull(sum(size), 0) FROM nodes n WHERE state = 'pending' ${userId === null ? "" : "AND n.owner = ?"}`,
+        ...args,
+      )!,
+      trash,
+      kinds: [...kinds.values()],
+    },
+    files,
   };
 }
 
-function countsOf(ctx: Context, userId: string | null, now: number) {
+function countsOf(ctx: Context, userId: string | null, now: number, files: number) {
   const where = (column: string) => (userId === null ? "" : `AND ${column} = ?`);
   const args = userId === null ? [] : [userId];
   return {
     items: ctx.db.value<number>(`SELECT count(*) FROM items WHERE trashed IS NULL ${where("owner")}`, ...args)!,
-    files: ctx.db.value<number>(
-      `SELECT count(*) FROM nodes n JOIN items i ON i.id = n.item
-       WHERE n.kind = 'file' AND n.state = 'ready' AND i.trashed IS NULL ${where("n.owner")}`,
-      ...args,
-    )!,
+    files,
     links: ctx.db.value<number>(
       `SELECT count(*) FROM links l JOIN items i ON i.id = l.item
        WHERE l.revoked IS NULL AND (l.expires IS NULL OR l.expires > ?)
@@ -331,6 +351,7 @@ function reportOf(ctx: Context, userId: string | null, range: UsageRange, tz: nu
   storedAtEnds(ctx, starts, end, userId, now).forEach((stored, i) => (buckets[i].stored = stored));
   const totals = zero();
   for (const bucket of buckets) for (const k of COUNTS) totals[k] += bucket[k];
+  const held = storageOf(ctx, userId);
   const before = ctx.db.get<UsageCounts>(
     `SELECT ${SUMS} FROM usage WHERE hour >= ? AND hour < ? ${owner}`,
     hourOf(previous),
@@ -342,8 +363,8 @@ function reportOf(ctx: Context, userId: string | null, range: UsageRange, tz: nu
     buckets,
     totals,
     previous: before,
-    storage: storageOf(ctx, userId),
-    counts: countsOf(ctx, userId, now),
+    storage: held.storage,
+    counts: countsOf(ctx, userId, now, held.files),
     periods: { starts, end },
   };
 }

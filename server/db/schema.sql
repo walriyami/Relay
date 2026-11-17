@@ -227,15 +227,31 @@ CREATE INDEX nodes_blob ON nodes(blob) WHERE blob IS NOT NULL;
 CREATE INDEX nodes_pending ON nodes(owner) WHERE state = 'pending';
 CREATE INDEX nodes_name ON nodes(owner, name COLLATE NOCASE);
 
+-- What each member stores, by MIME type: the bytes of ready files and texts, and how many files.
+-- The node triggers keep it, so usage pages read a few rows instead of adding up every file. At
+-- startup Relay compares it with users.bytes_used and rebuilds it from the nodes if they differ.
+CREATE TABLE stored_types (
+  owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  files INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner, mime)
+) STRICT, WITHOUT ROWID;
+
 -- Rows that would not change are left alone: a folder of thousands of files marks its item once,
 -- not once per file, and a change that moves no bytes does not rewrite its owner.
 CREATE TRIGGER nodes_insert AFTER INSERT ON nodes BEGIN
   UPDATE users SET bytes_used = bytes_used + NEW.size WHERE id = NEW.owner AND NEW.state = 'ready' AND NEW.size <> 0;
   UPDATE items SET summary_dirty = 1 WHERE id = NEW.item AND summary_dirty = 0;
+  INSERT INTO stored_types(owner, mime, bytes, files)
+    SELECT NEW.owner, NEW.mime, NEW.size, NEW.kind = 'file' WHERE NEW.state = 'ready' AND NEW.kind <> 'folder'
+    ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files;
 END;
 CREATE TRIGGER nodes_delete AFTER DELETE ON nodes BEGIN
   UPDATE users SET bytes_used = bytes_used - OLD.size WHERE id = OLD.owner AND OLD.state = 'ready' AND OLD.size <> 0;
   UPDATE items SET summary_dirty = 1 WHERE id = OLD.item AND summary_dirty = 0;
+  UPDATE stored_types SET bytes = bytes - OLD.size, files = files - (OLD.kind = 'file')
+    WHERE owner = OLD.owner AND mime = OLD.mime AND OLD.state = 'ready' AND OLD.kind <> 'folder';
 END;
 CREATE TRIGGER nodes_update AFTER UPDATE ON nodes BEGIN
   UPDATE users SET bytes_used = bytes_used
@@ -245,6 +261,15 @@ CREATE TRIGGER nodes_update AFTER UPDATE ON nodes BEGIN
       AND (CASE WHEN OLD.state = 'ready' THEN OLD.size ELSE 0 END)
        <> (CASE WHEN NEW.state = 'ready' THEN NEW.size ELSE 0 END);
   UPDATE items SET summary_dirty = 1 WHERE id IN (OLD.item, NEW.item) AND summary_dirty = 0;
+END;
+CREATE TRIGGER nodes_update_type AFTER UPDATE OF owner, state, kind, size, mime ON nodes
+WHEN NOT (OLD.owner = NEW.owner AND OLD.state = NEW.state AND OLD.kind = NEW.kind AND OLD.size = NEW.size AND OLD.mime = NEW.mime)
+BEGIN
+  UPDATE stored_types SET bytes = bytes - OLD.size, files = files - (OLD.kind = 'file')
+    WHERE owner = OLD.owner AND mime = OLD.mime AND OLD.state = 'ready' AND OLD.kind <> 'folder';
+  INSERT INTO stored_types(owner, mime, bytes, files)
+    SELECT NEW.owner, NEW.mime, NEW.size, NEW.kind = 'file' WHERE NEW.state = 'ready' AND NEW.kind <> 'folder'
+    ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files;
 END;
 
 -- One browser page load. Its event stream renews the lease; an expired or closed tab abandons its transfers.

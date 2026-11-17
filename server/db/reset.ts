@@ -10,6 +10,7 @@ export const CONTENT_TABLES = [
   "requests",
   "items",
   "nodes",
+  "stored_types",
   "blobs",
   "blob_cleanup",
   "tabs",

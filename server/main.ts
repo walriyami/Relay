@@ -25,6 +25,7 @@ try {
 }
 const { app, ctx } = built;
 if (ctx.db.upgraded.length) app.log.info({ changes: ctx.db.upgraded }, "database brought up to date with schema.sql");
+if (ctx.db.rebuiltStoredTypes) app.log.info("storage totals by file type rebuilt from the stored files");
 const port = Number(process.env.PORT || 3090);
 await app.listen({ port, host: process.env.HOST || "127.0.0.1" });
 if (setupStateOf(ctx) !== "done") {

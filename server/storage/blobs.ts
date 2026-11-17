@@ -528,18 +528,21 @@ export function createBlobStore(ctx: Context): BlobStore {
     },
 
     status() {
-      const counts = ctx.db.get<{
-        total: number;
-        healthy: number;
-        missing: number;
-        corrupt: number;
-        errors: number;
-        lastChecked: number | null;
-      }>(
-        `SELECT count(*) AS total, coalesce(sum(integrity = 'ok'), 0) AS healthy,
-         coalesce(sum(integrity = 'missing'), 0) AS missing, coalesce(sum(integrity = 'corrupt'), 0) AS corrupt,
-         coalesce(sum(integrity = 'unreadable'), 0) AS errors, max(checked_at) AS lastChecked FROM blobs`,
+      // One pass over every blob for the totals; damaged ones are few and come from their index.
+      const totals = ctx.db.get<{ total: number; storedBytes: number; lastChecked: number | null }>(
+        "SELECT count(*) AS total, ifnull(sum(size), 0) AS storedBytes, max(checked_at) AS lastChecked FROM blobs",
       )!;
+      const damaged = new Map(
+        ctx.db
+          .all<{ integrity: string; count: number }>(
+            "SELECT integrity, count(*) AS count FROM blobs WHERE integrity <> 'ok' GROUP BY integrity",
+          )
+          .map((row) => [row.integrity, row.count]),
+      );
+      const missing = damaged.get("missing") ?? 0;
+      const corrupt = damaged.get("corrupt") ?? 0;
+      const errors = damaged.get("unreadable") ?? 0;
+      const counts = { ...totals, healthy: totals.total - missing - corrupt - errors, missing, corrupt, errors };
       const affected = ctx.db.all<{ userId: string; username: string; files: number; items: number }>(
         `SELECT u.id AS userId, u.username, count(*) AS files, count(DISTINCT n.item) AS items
          FROM blobs b CROSS JOIN nodes n ON n.blob = b.sha256 JOIN users u ON u.id = n.owner
