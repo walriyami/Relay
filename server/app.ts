@@ -37,6 +37,8 @@ import { registerCompression } from "./lib/compress.ts";
 import { ProxyTrust } from "./lib/proxies.ts";
 import { registerSharedSignIn } from "./modules/auth/sso.ts";
 import { build } from "./build-info.ts";
+import { createPush, registerPush } from "./modules/push/index.ts";
+import { registerShareTarget } from "./modules/push/share-target.ts";
 
 export type App = { app: FastifyInstance; ctx: Context; sweep: () => Promise<void> };
 
@@ -81,6 +83,7 @@ export async function buildApp(config: Config): Promise<App> {
     ctx.links = createLinks(ctx);
     ctx.deliveries = createDeliveries(ctx);
     ctx.activity = createActivity(ctx);
+    ctx.push = createPush(ctx);
     ctx.usage = createUsageMeter(ctx);
 
     let sweeping: Promise<void> | null = null;
@@ -209,6 +212,8 @@ export async function buildApp(config: Config): Promise<App> {
     registerAdmin(app, ctx);
     registerSetup(app, ctx);
     registerActivity(app, ctx);
+    registerPush(app, ctx);
+    registerShareTarget(app);
     registerUsage(app, ctx);
     registerLocal(app, ctx);
     registerNearby(app, ctx);

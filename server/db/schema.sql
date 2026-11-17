@@ -455,3 +455,20 @@ CREATE TABLE external_sessions (
 CREATE TABLE sso_flows (
  state_hash TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL
 ) STRICT;
+
+-- Web Push (server/modules/push): one subscription per signed-in device that turned notifications
+-- on. `endpoint` is the browser's push service address, `p256dh` and `auth` its encryption keys.
+-- A device's subscription goes when its last session does (sign-out, password change, expiry).
+CREATE TABLE push_subscriptions (
+  device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX push_subscriptions_user ON push_subscriptions(user_id);
+CREATE TRIGGER push_subscription_after_sign_out AFTER DELETE ON sessions
+WHEN NOT EXISTS (SELECT 1 FROM sessions WHERE device_id = OLD.device_id) BEGIN
+  DELETE FROM push_subscriptions WHERE device_id = OLD.device_id;
+END;

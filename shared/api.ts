@@ -444,6 +444,24 @@ export const api = {
     }),
   },
 
+  /**
+   * Push notifications for the signed-in device (server/modules/push). A device has at most one
+   * subscription; signing it out removes it.
+   */
+  push: {
+    status: endpoint<M.PushStatus>()("GET", "/api/push", { auth: "member" }),
+    subscribe: ok("POST", "/api/push", {
+      auth: "member",
+      body: z.object({
+        endpoint: text(10, 2048),
+        keys: z.object({ p256dh: text(80, 100), auth: text(16, 32) }),
+      }),
+    }),
+    unsubscribe: ok("DELETE", "/api/push", { auth: "member" }),
+    /** Sends a test notice to this device, so people can see notifications work. */
+    test: endpoint<{ sent: boolean }>()("POST", "/api/push/test", { auth: "member" }),
+  },
+
   requests: {
     list: endpoint<M.UploadRequest[]>()("GET", "/api/requests", { auth: "member" }),
     create: endpoint<M.UploadRequest>()("POST", "/api/requests", {

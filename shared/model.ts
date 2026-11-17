@@ -497,7 +497,11 @@ export type SessionEnded = {
 export type SignInMethod = "sso" | "password" | "passkey" | "code" | "invitation" | "setup";
 /** Something that happened on the account. Device and request names are as they were then. */
 export type ActivityEvent =
-  | { kind: "signin"; deviceId: Id; device: string; method: SignInMethod }
+  /**
+   * `familiar`: the account already had a device like this one (same kind and browser name), so a
+   * sign-in there is routine. Missing on entries from before it was recorded, which count as familiar.
+   */
+  | { kind: "signin"; deviceId: Id; device: string; method: SignInMethod; familiar?: boolean }
   /** `device` is where it was changed; null when the administrator set it. */
   | { kind: "password"; device: string | null }
   | { kind: "passkey"; change: "added" | "removed"; name: string }
@@ -515,8 +519,11 @@ export type ActivityEvent =
   /** Someone opened a link, or downloaded from it, for the first time. `item` is its name then. */
   | { kind: "link"; linkId: Id; itemId: Id; item: string; action: "opened" | "downloaded"; device: string };
 export type ActivityKind = ActivityEvent["kind"];
-/** `self`: the device reading the feed caused it, so it is never news there. */
-export type ActivityEntry = ActivityEvent & { id: Id; created: Time; self: boolean };
+/**
+ * `self`: the device reading the feed caused it. `news`: worth the bell's badge on this device: not
+ * caused here, and not routine (a sign-in from a familiar device, someone only opening a link).
+ */
+export type ActivityEntry = ActivityEvent & { id: Id; created: Time; self: boolean; news: boolean };
 /** The newest entries the member wants to see, and until when any device of theirs has seen them. */
 export type ActivityFeed = { entries: ActivityEntry[]; seen: Time };
 export const ACTIVITY_GROUPS: Record<ActivityKind, ActivityGroup> = {
@@ -527,6 +534,11 @@ export const ACTIVITY_GROUPS: Record<ActivityKind, ActivityGroup> = {
   link: "links",
   joined: "members",
 };
+
+/** Web Push for this device: the server's public (VAPID) key, and whether this device gets notices. */
+export type PushStatus = { key: string; subscribed: boolean };
+/** A push subscription as the browser gives it (PushSubscription.toJSON()). */
+export type PushSubscriptionInput = { endpoint: string; keys: { p256dh: string; auth: string } };
 
 /** Explicit storage integrity checks, exposed only to administrators. */
 export type ScrubResult = {

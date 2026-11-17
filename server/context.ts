@@ -212,6 +212,23 @@ export interface Deliveries {
 }
 
 /** The account activity feed. */
+/** Push notifications (server/modules/push). Sending happens in the background and never throws. */
+export interface Push {
+  /** The public key browsers subscribe with. */
+  keys(): string;
+  /** Devices of `owner` with notifications on and a live session; only `device` when given. */
+  subscribers(owner: string, device?: string): { device_id: string; endpoint: string; p256dh: string; auth: string }[];
+  deliver(
+    row: { device_id: string; endpoint: string; p256dh: string; auth: string },
+    message: { title: string; body: string; url: string; tag: string },
+    urgency: "normal" | "high",
+  ): Promise<"sent" | "gone" | "failed">;
+  /** Call after the delivery's transaction commits: tells the receiving device. */
+  delivered(deliveryId: string): void;
+  /** Call after an activity entry commits: notifies the owner when it is one of the things that do. */
+  recorded(owner: string, entryId: string, event: M.ActivityEvent): void;
+}
+
 export interface Activity {
   /**
    * Records an event for the owner. `by` is the owner's device that caused it, if one did. Synchronous,
@@ -246,6 +263,7 @@ export type Context = {
   links: Links;
   deliveries: Deliveries;
   activity: Activity;
+  push: Push;
   usage: UsageMeter;
   /** The direct-transfer helper, when direct transfers are on. */
   local: LocalHelper | null;

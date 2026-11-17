@@ -43,6 +43,11 @@ export type Config = {
    * helper announces the private addresses it finds.
    */
   local?: { port: number; addresses?: string[] };
+  /**
+   * Push services Relay may post notifications to: host names (https, subdomains included) or exact
+   * origins. Unset, the browsers' own services (server/modules/push). Tests point it at a local one.
+   */
+  pushServices?: string[];
 };
 
 export function configFromEnv(env = process.env): Config {

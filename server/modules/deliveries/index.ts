@@ -75,6 +75,7 @@ export function createDeliveries(ctx: Context): Deliveries {
           Date.now(),
         );
         ctx.events.publish(owner, "deliveries");
+        ctx.db.afterCommit(() => ctx.push.delivered(input.id));
         return one(ctx, input.id);
       });
     },

@@ -23,9 +23,11 @@ export const ACTIVITY_LIMIT = 100;
 export function createActivity(ctx: Context): Activity {
   return {
     record(owner, event, by = null) {
+      const id = uuidv7();
+      if (event.kind === "signin") event = { ...event, familiar: familiarDevice(ctx, owner, event.deviceId) };
       ctx.db.run(
         "INSERT INTO activity(id, owner, kind, by_device, created, data) VALUES(?, ?, ?, ?, ?, ?)",
-        uuidv7(),
+        id,
         owner,
         event.kind,
         by,
@@ -33,11 +35,49 @@ export function createActivity(ctx: Context): Activity {
         JSON.stringify(event),
       );
       ctx.events.publish(owner, "activity");
+      const recorded = event;
+      ctx.db.afterCommit(() => ctx.push.recorded(owner, id, recorded));
     },
     sweep(now) {
       return ctx.db.deleteBatched("activity", "created <= ?", now - ACTIVITY_DAYS * DAY_MS);
     },
   };
+}
+
+/**
+ * Whether an entry deserves the bell's badge. Routine things stay in the list without one, so the
+ * badge keeps meaning "look": a sign-in from a kind of device the account hasn't used before, a
+ * password or passkey change, files sent to a request, a download through a link, a new member.
+ */
+export function isNews(event: ActivityEvent) {
+  switch (event.kind) {
+    case "signin":
+      // Recorded before `familiar` existed: treated as routine rather than flooding the badge.
+      return event.familiar === false && event.method !== "setup" && event.method !== "invitation";
+    case "link":
+      return event.action === "downloaded";
+    default:
+      return true;
+  }
+}
+
+/**
+ * A new sign-in is familiar when the account has signed in before on the same kind of device with
+ * the same browser name ("Chrome on Mac", ignoring the " 2" that tells open ones apart), or when it
+ * is the account's very first device. Renamed devices are not matched; at worst that badges once.
+ */
+function familiarDevice(ctx: Context, owner: string, deviceId: string) {
+  const device = ctx.db.get<{ name: string; kind: string }>("SELECT name, kind FROM devices WHERE id = ?", deviceId);
+  if (!device) return true;
+  const others = ctx.db.all<{ name: string }>(
+    "SELECT name FROM devices WHERE user_id = ? AND id != ? AND kind = ?",
+    owner,
+    deviceId,
+    device.kind,
+  );
+  const base = (name: string) => name.replace(/ \d+$/, "").toLowerCase();
+  if (!ctx.db.get("SELECT 1 FROM devices WHERE user_id = ? AND id != ?", owner, deviceId)) return true;
+  return others.some((other) => base(other.name) === base(device.name));
 }
 
 export function registerActivity(app: FastifyInstance, ctx: Context) {
@@ -57,12 +97,11 @@ export function registerActivity(app: FastifyInstance, ctx: Context) {
             ...kinds,
             ACTIVITY_LIMIT,
           )
-          .map((row): ActivityEntry => ({
-            ...(JSON.parse(row.data) as ActivityEvent),
-            id: row.id,
-            created: row.created,
-            self: row.by_device === member.deviceId,
-          }))
+          .map((row): ActivityEntry => {
+            const event = JSON.parse(row.data) as ActivityEvent;
+            const self = row.by_device === member.deviceId;
+            return { ...event, id: row.id, created: row.created, self, news: !self && isNews(event) };
+          })
       : [];
     return { entries, seen: user.activity_seen };
   });
