@@ -1,17 +1,18 @@
 // Lanes: one connection made of several WebRTC peer connections, for bulk bytes on the local network.
 // A browser receiving on a peer connection lets only a few dozen kilobytes arrive per round trip,
 // however fast the network is, so over Wi-Fi's round trips one connection carries a few megabits a
-// second. Each further peer connection carries as much again. Nearby (browser to browser) and direct
-// transfers (browser to Relay's helper) both spread their bytes over lanes this way.
+// second. Each further peer connection carries as much again. Nearby (browser to browser) spreads its
+// bytes over lanes this way.
 //
 // Every lane is a peer connection with one data channel (negotiated, id 0), ordered and reliable:
 //
 //   text     a JSON control message. Only the first lane carries them, so they stay in order; one too
 //            long for a single message goes in pieces, "+" for each piece but the last, which is "=".
-//   binary   a frame: u32 stream | f64 offset | bytes, big-endian. Any lane carries frames.
+//   binary   a frame: u32 stream | f64 offset | bytes, big-endian. The other lanes carry frames; the
+//            first carries them only while it's the only lane (see Mux.expect).
 //
-// A stream is one run of bytes in one direction (an entry of a Nearby transfer, the body of a direct
-// request or response), numbered by the protocol above. Its receiver puts frames back in order,
+// A stream is one run of bytes in one direction (an entry of a Nearby transfer), numbered by the
+// protocol above. Its receiver puts frames back in order,
 // whichever lanes they came on, and hands the bytes on; the sender sends no further ahead than the
 // receiver has credited: a window, then {s, credit} for each run of bytes the receiver has handed on.
 //
@@ -72,6 +73,8 @@ export class Mux {
   private turn = 0;
   private pieces: string[] = [];
   private pieceChars = 0;
+  /** Other lanes are on their way: frames wait for them rather than going on the first. */
+  private expecting = false;
   closed = false;
 
   /** `first` carries control messages. `maxMessage` bounds a control message put back together. */
@@ -81,15 +84,32 @@ export class Mux {
     this.maxMessage = maxMessage;
   }
 
-  /** Lanes carrying frames now. */
+  /** Lanes in use, the first included. */
   get width() {
     return this.lanes.length;
+  }
+
+  /**
+   * Other lanes are being set up: until they join, or `settle` says none will, frames wait. Bulk on
+   * the first lane would hold up the control messages behind it, the offer of the other lanes among
+   * them, and a new peer connection's first burst often stalls for seconds in loss recovery.
+   */
+  expect() {
+    if (!this.closed && this.lanes.length === 1) this.expecting = true;
+  }
+
+  /** No more lanes are on their way: frames go on whichever there are, the first if it's alone. */
+  settle() {
+    if (!this.expecting) return;
+    this.expecting = false;
+    this.flush();
   }
 
   /** Another lane is open, or one taken out of use found its path again. */
   add(lane: Lane) {
     if (this.closed || this.lanes.includes(lane)) return;
     this.lanes.push(lane);
+    this.expecting = false;
     this.flush();
   }
 
@@ -105,8 +125,7 @@ export class Mux {
     const index = this.lanes.indexOf(lane);
     if (this.closed || index < 1) return false;
     this.lanes.splice(index, 1);
-    if (this.turn > index) this.turn--;
-    this.turn %= this.lanes.length;
+    if (this.turn >= this.lanes.length) this.turn = 0;
     const again = [...this.outbound.values()].flatMap((out) => out.carried(lane));
     this.queue.splice(this.head, 0, ...again);
     for (const { frame } of again) this.queued += frame.byteLength;
@@ -233,16 +252,22 @@ export class Mux {
     if (map.get(out.id) === out) map.delete(out.id);
   }
 
-  /** Hands waiting frames to the emptiest lane with room, and wakes streams once there's room for more. */
+  /**
+   * Hands waiting frames to the emptiest lane with room, and wakes streams once there's room for more.
+   * The first lane carries frames only while it's alone and no others are expected: kept for control
+   * messages, it gets credits and offers through at once, whatever bulk the other lanes hold.
+   */
   private flush() {
     const wasRoomy = this.roomy;
-    while (!this.closed && this.head < this.queue.length) {
+    while (!this.closed && !this.expecting && this.head < this.queue.length) {
       // Ties go to each lane in turn: a library that hands frames straight to its transport
       // reports every lane empty until that fills.
+      const from = this.lanes.length > 1 ? 1 : 0;
+      const count = this.lanes.length - from;
       let lane: Lane | null = null;
       let least: number = LANES.laneBytes;
-      for (let i = 0; i < this.lanes.length; i++) {
-        const candidate = this.lanes[(this.turn + i) % this.lanes.length];
+      for (let i = 0; i < count; i++) {
+        const candidate = this.lanes[from + ((this.turn + i) % count)];
         const buffered = candidate.buffered();
         if (buffered < least) {
           lane = candidate;
@@ -250,7 +275,7 @@ export class Mux {
         }
       }
       if (!lane) break;
-      this.turn = (this.lanes.indexOf(lane) + 1) % this.lanes.length;
+      this.turn = (this.lanes.indexOf(lane) - from + 1) % count;
       const next = this.queue[this.head++];
       this.queued -= next.frame.byteLength;
       if (next.out.closed) continue;

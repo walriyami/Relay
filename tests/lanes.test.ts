@@ -6,15 +6,17 @@ import { LANES, Mux, type Lane } from "../shared/lanes.ts";
 // Two ends of a connection made of lanes, in memory: each lane delivers what's sent on it in order,
 // unless it's stalled, as a lane that lost its path is.
 
-type Wire = Lane & { stalled: boolean; held: (string | Uint8Array)[]; release(): void };
+type Wire = Lane & { stalled: boolean; held: (string | Uint8Array)[]; frames: number; release(): void };
 
-function pair(count: number) {
+function pair(count: number, expect = false) {
   const ends: { a: Mux | null; b: Mux | null } = { a: null, b: null };
   const wire = (to: () => Mux): Wire => {
     const w: Wire = {
       stalled: false,
       held: [],
+      frames: 0,
       send(data) {
+        if (typeof data !== "string") w.frames++;
         const copy = typeof data === "string" ? data : data.slice();
         if (w.stalled) w.held.push(copy);
         else queueMicrotask(() => to().receive(copy));
@@ -32,6 +34,10 @@ function pair(count: number) {
   const events = { control: () => {}, broken: () => assert.fail("The connection broke.") };
   ends.a = new Mux(ab[0], events, 1 << 20);
   ends.b = new Mux(ba[0], events, 1 << 20);
+  if (expect) {
+    ends.a.expect();
+    ends.b.expect();
+  }
   for (let i = 1; i < count; i++) {
     ends.a.add(ab[i]);
     ends.b.add(ba[i]);
@@ -103,4 +109,57 @@ test("lanes: a lane that throws when sent on is taken out of use, and its frame 
   };
   assert.ok((await carry(a, b, data)).equals(data));
   assert.equal(a.width, 2);
+});
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+test("lanes: with other lanes, the first carries only control messages and credits", async () => {
+  const { a, b, ab, ba } = pair(4);
+  const data = randomBytes(8 * LANES.creditBytes);
+  assert.ok((await carry(a, b, data)).equals(data));
+  assert.equal(ab[0].frames, 0);
+  assert.ok(ab[1].frames > 0 && ab[2].frames > 0 && ab[3].frames > 0);
+  assert.equal(ba[0].frames, 0);
+});
+
+test("lanes: frames wait for the lanes a connection expects, then go on them, not the first", async () => {
+  const { a, b, ab } = pair(1, true);
+  const data = randomBytes(3 * LANES.creditBytes);
+  const arrived = carry(a, b, data);
+  await tick();
+  // Nothing went on the first lane while the others were on their way.
+  assert.equal(ab[0].frames, 0);
+  const late = Object.assign({}, ab[0], { frames: 0, held: [] });
+  late.send = (frame) => {
+    if (typeof frame !== "string") late.frames++;
+    ab[0].send(frame);
+    if (typeof frame !== "string") ab[0].frames--;
+  };
+  a.add(late);
+  assert.ok((await arrived).equals(data));
+  assert.equal(ab[0].frames, 0);
+  assert.ok(late.frames > 0);
+});
+
+test("lanes: once no other lanes are coming, the first carries frames", async () => {
+  const { a, b, ab } = pair(1, true);
+  const data = randomBytes(2 * LANES.creditBytes);
+  const arrived = carry(a, b, data);
+  await tick();
+  assert.equal(ab[0].frames, 0);
+  a.settle();
+  b.settle();
+  assert.ok((await arrived).equals(data));
+  assert.ok(ab[0].frames > 0);
+});
+
+test("lanes: when every other lane is gone, the first carries frames again", async () => {
+  const { a, b, ab } = pair(2);
+  ab[1].stalled = true;
+  const data = randomBytes(4 * LANES.creditBytes);
+  const arrived = carry(a, b, data);
+  await tick();
+  a.remove(ab[1]);
+  assert.ok((await arrived).equals(data));
+  assert.ok(ab[0].frames > 0);
 });

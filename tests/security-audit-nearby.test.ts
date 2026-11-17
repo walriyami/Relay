@@ -123,6 +123,8 @@ test("Nearby rejects malformed controls and revokes established peers", async (t
     engine.receiveSignal(other.id, { kind: "offer", session: "fixture-session", sdp: "local fixture" });
     const pc = LocalPeerConnection.created.at(-1)!;
     pc.channel.onopen?.();
+    // The other side makes no more lanes, so this one carries frames at once.
+    pc.channel.control({ lanes: [] });
     engine.watch(true);
     context.after(() => {
       engine.watch(false);

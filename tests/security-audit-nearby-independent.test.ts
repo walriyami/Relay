@@ -203,7 +203,11 @@ test("Nearby independent cancellation, introduction and resume verification", as
       sdp: "disposable",
     });
     const pc = PeerConnection.created.at(-1)!;
-    if (opened) pc.channel.onopen?.();
+    if (opened) {
+      pc.channel.onopen?.();
+      // The other side makes no more lanes, so this one carries frames at once.
+      pc.channel.control({ lanes: [] });
+    }
     engine.watch(true);
     return { pc, channel: pc.channel };
   };
