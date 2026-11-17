@@ -6,6 +6,7 @@ import { api, headers, urls } from "../shared/api.ts";
 import { NO_LIMITS } from "../shared/model.ts";
 import type { TransferInput } from "../server/context.ts";
 import { ApiError, admin, Client, member, patchUpload, send, start } from "./support/harness.ts";
+import { STALLED_MEMBER_MS } from "../server/modules/transfers/lifecycle.ts";
 
 type Files = TransferInput["files"];
 const body = (client: Client, files: Partial<Files[number]>[], extra: Partial<TransferInput> = {}) => ({
@@ -385,11 +386,13 @@ test("an expired tab lease pauses its transfers until pausedUploadMs; PATCHes re
     await patchUpload(client, kept.uploads[0].id, 0, Buffer.alloc(10)); // renews
     const renewed = instance.ctx.db.value<number>("SELECT lease_expires FROM tabs WHERE id = ?", client.tab)!;
     assert.ok(renewed > beforePatch, "PATCH renews the lease");
-    const paused = instance.ctx.config.pausedUploadMs;
-    await instance.ctx.transfers.sweep(renewed + paused - 1);
+    // Kept until the paused limit, or a day without bytes arriving, whichever comes first.
+    const touched = instance.ctx.db.value<number>("SELECT max(touched) FROM uploads WHERE transfer = ?", kept.id)!;
+    const until = Math.min(renewed + instance.ctx.config.pausedUploadMs, touched + STALLED_MEMBER_MS);
+    await instance.ctx.transfers.sweep(until - 1);
     assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", kept.id), "open");
 
-    await instance.ctx.transfers.sweep(renewed + paused);
+    await instance.ctx.transfers.sweep(until + 1);
     assert.equal(await status(client.call(api.items.get, { params: { id: kept.itemId } })), 404);
     assert.equal((await patchUpload(client, kept.uploads[0].id, 10, Buffer.alloc(10))).statusCode, 404);
     assert.equal(instance.ctx.transfers.activeUploads(), 0);
