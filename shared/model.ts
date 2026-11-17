@@ -36,7 +36,7 @@ export const LIMITS = {
   displayNameLength: 60,
   /** A note shown to whoever opens a link. */
   linkNoteLength: 500,
-  linkPasswordMin: 4,
+  linkPasswordMin: 8,
   linkPasswordMax: 128,
   /** The most people one link can be limited to. */
   linkVisitorsMax: 100,

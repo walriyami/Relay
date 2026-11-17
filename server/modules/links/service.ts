@@ -6,7 +6,7 @@ import { uuidv7 } from "../../../shared/ids.ts";
 import { authOf, cookieOptions, visitorCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
-import { FailureLog } from "../auth/limits.ts";
+import { FailureLog, wideNetworkOf } from "../auth/limits.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
@@ -103,8 +103,14 @@ export function linkVisits(ctx: Context, owner: string, id: string): LinkVisit[]
 
 type VisitRow = { id: string; unlocked: string | null; last: number };
 
-/** Wrong passwords per link within the window: enough for typos, too few to guess. */
+/**
+ * Wrong link passwords one network (an IPv4 /24 or IPv6 /48) may try per link in the window: enough
+ * for typos, too few to guess. Counting per network means a stranger guessing can't lock out the
+ * person the link was meant for.
+ */
 const UNLOCK_FAILURES = { max: 10, windowMs: 15 * 60_000 };
+/** Wrong passwords per link from everyone together in an hour: a ceiling on guessing from many networks. */
+const UNLOCK_FAILURES_PER_LINK = { max: 100, windowMs: 60 * 60_000 };
 
 /**
  * Who is asking for a link's content: "owner" for its owner, signed in, who is never counted or
@@ -188,6 +194,7 @@ export function createLinks(ctx: Context): Links {
   });
   const ownerAccess = (row: LinkRow): ShareAccess => ({ ...granted(row, null), byOwner: true });
   const failures = new FailureLog(UNLOCK_FAILURES.windowMs);
+  const linkFailures = new FailureLog(UNLOCK_FAILURES_PER_LINK.windowMs);
 
   function open(token: string, req: FastifyRequest, reply: FastifyReply): ShareAccess {
     const row = find(token);
@@ -225,19 +232,30 @@ export function createLinks(ctx: Context): Links {
       const visitor = visitorOf(ctx, req, reply, row);
       if (visitor === "owner" || row.password_hash === null) return open(token, req, reply);
       const now = Date.now();
-      if (!failures.reserve(row.id, now, UNLOCK_FAILURES.max))
+      const pair = `${row.id}\n${wideNetworkOf(req.ip)}`;
+      if (!failures.reserve(pair, now, UNLOCK_FAILURES.max))
         fail(429, "Too many wrong passwords. Wait a few minutes and try again.");
       try {
-        if (!(await verifyPassword(password, row.password_hash))) {
-          failures.add(row.id, Date.now());
-          fail(403, "That password isn’t right.");
+        if (!linkFailures.reserve(row.id, now, UNLOCK_FAILURES_PER_LINK.max))
+          fail(
+            429,
+            "This link has had too many wrong passwords. Try again in an hour, or ask the person who shared it for a new link.",
+          );
+        try {
+          if (!(await verifyPassword(password, row.password_hash))) {
+            failures.add(pair, Date.now());
+            linkFailures.add(row.id, Date.now());
+            fail(403, "That password isn’t right.");
+          }
+          // The owner may have changed the link while the password was being checked.
+          const current = find(token);
+          if (current.password_hash !== row.password_hash) fail(409, "This link’s password just changed. Try again.");
+          return granted(current, admit(ctx, req, current, visitor!, current.password_hash));
+        } finally {
+          linkFailures.release(row.id);
         }
-        // The owner may have changed the link while the password was being checked.
-        const current = find(token);
-        if (current.password_hash !== row.password_hash) fail(409, "This link’s password just changed. Try again.");
-        return granted(current, admit(ctx, req, current, visitor!, current.password_hash));
       } finally {
-        failures.release(row.id);
+        failures.release(pair);
       }
     },
 

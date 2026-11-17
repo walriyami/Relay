@@ -117,7 +117,7 @@ test("a password locks the content until entered; changing it locks everyone out
     assert.equal((await download(visitor, link.token, node)).statusCode, 200);
     assert.equal(await status(unlock(new Client(instance), "open sesame")), 200, "no visit is needed first");
 
-    await owner.call(api.links.update, { params: { id: link.id }, body: { password: "new one" } });
+    await owner.call(api.links.update, { params: { id: link.id }, body: { password: "a new one" } });
     assert.equal((await visitor.call(api.links.open, { params: { token: link.token } })).locked, true);
     assert.equal((await download(visitor, link.token, node)).statusCode, 401);
 
@@ -125,8 +125,8 @@ test("a password locks the content until entered; changing it locks everyone out
     assert.equal(removed.locked, false);
     assert.equal((await openShare(new Client(instance), link.token)).name, "Photos");
 
-    // Guessing is bounded per link, whichever browser tries: ten wrong tries (one was above).
-    await owner.call(api.links.update, { params: { id: link.id }, body: { password: "again" } });
+    // Guessing is bounded per link and network, whichever browser tries: ten wrong tries (one was above).
+    await owner.call(api.links.update, { params: { id: link.id }, body: { password: "once again" } });
     const codes = [];
     for (let i = 0; i < 10; i++) codes.push(await status(unlock(new Client(instance), `guess ${i}`)));
     assert.deepEqual(codes, [...Array<number>(9).fill(403), 429]);
@@ -184,7 +184,7 @@ test("a link can be kept until it is turned off, and a transfer can finish as on
   try {
     const owner = await member(instance, "sara");
     const { result } = await send(owner, [{ path: "a.txt", data: "alpha" }], {
-      destination: { kind: "link", days: null, password: "secret", visitorLimit: 3, note: "hi" },
+      destination: { kind: "link", days: null, password: "secret-password", visitorLimit: 3, note: "hi" },
     });
     const link = result.link!;
     assert.equal(link.expires, null);
@@ -196,7 +196,7 @@ test("a link can be kept until it is turned off, and a transfer can finish as on
 
     const share = await new Client(instance).call(api.links.unlock, {
       params: { token: link.token },
-      body: { password: "secret" },
+      body: { password: "secret-password" },
     });
     assert.equal(share.expires, null, "neither the link nor the item ends");
 
@@ -251,6 +251,48 @@ test("parallel link password guesses share the same attempt budget", async () =>
     assert.ok(results.filter((r) => r.statusCode === 429).length >= 2);
     assert.ok(results.every((r) => [403, 429, 503].includes(r.statusCode)));
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM link_visits"), 0);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a stranger guessing a link's password can't lock out the person it was meant for", async () => {
+  const { instance, owner, itemId, link } = await setup({ password: "correct secret" });
+  try {
+    const unlock = (address: string, password: string) =>
+      instance.app.inject({
+        method: "POST",
+        url: `/api/s/${link.token}/unlock`,
+        headers: { host: "relay.test" },
+        remoteAddress: address,
+        payload: { password },
+      });
+    // One network spends its ten wrong tries and is asked to wait…
+    const guesses = await Promise.all(Array.from({ length: 10 }, (_, i) => unlock(`203.0.113.${i + 1}`, `guess ${i}`)));
+    assert.deepEqual(new Set(guesses.map((response) => response.statusCode)), new Set([403]));
+    assert.equal((await unlock("203.0.113.50", "correct secret")).statusCode, 429);
+    // …while the recipient, elsewhere, gets straight in.
+    assert.equal((await unlock("198.51.100.7", "correct secret")).statusCode, 200);
+
+    // Guessing from many networks still meets a ceiling for the link as a whole.
+    // Thirty at a time, within the password queue.
+    for (let batch = 0; batch < 3; batch++)
+      await Promise.all(Array.from({ length: 30 }, (_, i) => unlock(`10.${batch}.${i}.1`, "wrong guess")));
+    const capped = await unlock("192.0.2.200", "correct secret");
+    assert.equal(capped.statusCode, 429);
+    assert.match(capped.json<{ error: string }>().error, /ask the person who shared it for a new link/);
+
+    // New link passwords need eight characters.
+    assert.equal(
+      await status(
+        owner.call(api.links.create, { body: { id: crypto.randomUUID(), item: itemId, days: 1, password: "seven77" } }),
+      ),
+      400,
+    );
+    assert.equal(
+      await status(owner.call(api.links.update, { params: { id: link.id }, body: { password: "short" } })),
+      400,
+    );
   } finally {
     await instance.close();
   }
