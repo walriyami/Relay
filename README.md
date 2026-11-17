@@ -74,7 +74,7 @@ Ask someone without an account to send you files. They open a link, drop files i
 
 ### 🔐 Private by design
 
-Accounts are invite-only. Sign in with a password, a passkey, or a code from a device where you're already signed in. Administrators manage accounts and limits. Their dashboard does not browse members’ files, but administrators are trusted: resetting a member’s password lets them sign in as that member.
+Accounts are invite-only. Sign in with a password, a passkey, or a code from a device where you're already signed in. Administrators manage accounts, limits and who else is an administrator, and see at a glance whether anything needs attention, how storage and activity change over time, and a history of what happened. Each member sees their own space in Settings, and can download everything they keep as one ZIP. The admin dashboard does not browse members’ files, but administrators are trusted: resetting a member’s password lets them sign in as that member.
 
 </td>
 </tr>

@@ -39,7 +39,7 @@ npx playwright install --with-deps
 
 ## Tests
 
-- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
+- **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, the admin history, account removal and recovery, ZIP64 layout, links, requests and pickup codes.
 - **Resources** (`npm run test:resources`, or `test:resources:all` for Firefox and WebKit too). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe. The Nearby journeys connect two browsers by their local addresses, which only Chromium can be told to reveal, so they run in Chromium and the mobile viewport only.
 
@@ -74,7 +74,7 @@ Each script's header comment lists its options, for example `--size 80MiB --file
 
 Commit the change, then deploy that commit as described in [Hosting](hosting.md#updating):
 `walctl deploy relay-production --commit main`. A build from uncommitted files stops with an error, because the
-image must record the commit it holds; `/api/health` and **Admin → Service health** then show it. To build an
+image must record the commit it holds; `/api/health` and **Admin → Overview → Server details** then show it. To build an
 image locally, name the commit: `docker build --build-arg RELAY_COMMIT=$(git rev-parse HEAD) .`
 
 `npm run bench:transfers` measures Direct transfers, Nearby and plain HTTP the way they run on real devices: each browser and the server in a container of its own, sending over links shaped like fast, typical and weak Wi-Fi (`--profiles wifi6,wifi7` go past what a 400 Mbit/s connection carries), with phones given one or two CPUs. Numbers from one computer talking to itself only show the best case, so judge changes to either path with this. It needs Docker; `--source <checkout>` measures another checkout, such as `main`, to compare with, and results also go to `bench-results.jsonl`. A transfer that doesn't finish leaves each page's text, console and a screenshot in `bench-failures/`.
