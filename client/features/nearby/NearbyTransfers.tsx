@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ArrowDownLeft, ArrowUpRight, Check, Download, RotateCcw, Share, X } from "lucide-react";
 import { Thumbnail } from "../../components/Thumbnail";
 import { Button, CopyButton, IconButton, ProgressBar, toast } from "../../components/ui";
@@ -21,6 +21,31 @@ import { navigate } from "../../lib/router";
 import { startTransfer } from "../../lib/transfers";
 
 type Payload = { files: { file: File; path: string }[]; folders: string[]; text: string };
+
+// Arrivals saved from this tab (downloaded or shared). Anything else that arrived lives only in this
+// tab's memory, so leaving the page is guarded while there is some.
+const saved = new Set<string>();
+const savedListeners = new Set<() => void>();
+let savedVersion = 0;
+function markSaved(id: string) {
+  saved.add(id);
+  savedVersion++;
+  savedListeners.forEach((fn) => fn());
+}
+function useSavedVersion() {
+  return useSyncExternalStore(
+    (fn) => {
+      savedListeners.add(fn);
+      return () => void savedListeners.delete(fn);
+    },
+    () => savedVersion,
+  );
+}
+/** Received files not saved anywhere yet: closing the tab would lose them. */
+export const unsaved = (transfers: NearbyTransfer[]) =>
+  transfers.filter(
+    (t) => t.direction === "in" && t.state === "done" && (t.received?.length ?? 0) > 0 && !saved.has(t.id),
+  );
 
 /** Sends through Relay as Send would, to one of the member's own devices, and shows it there. */
 export function sendThroughRelay(payload: Payload, device: { id: string; name: string }) {
@@ -49,8 +74,10 @@ export function TransferList({
   relay?: boolean;
 }) {
   const { transfers } = useNearby();
+  useSavedVersion();
   if (!transfers.length) return null;
-  const finished = transfers.filter(isOver);
+  // What arrived but isn't saved stays until it is: clearing it would lose it.
+  const finished = transfers.filter((t) => isOver(t) && !unsaved([t]).length);
   return (
     <section className="section" aria-labelledby="nearby-transfers-title">
       <div className="section-head">
@@ -105,7 +132,14 @@ function statusOf(t: NearbyTransfer) {
     case "reconnecting":
       return <span className="waiting">Connection dropped. Reconnecting…</span>;
     case "done":
-      return t.direction === "out" ? "Sent" : "Received";
+      // Only once the receiving device has every byte: it says so after putting the files back together.
+      return t.direction === "out"
+        ? `Delivered to ${t.peerName} · no copy kept on Relay`
+        : saved.has(t.id)
+          ? "Received · saved"
+          : touch
+            ? "Received · save it before you close this page"
+            : "Received · download it before you close this page";
     default:
       return t.reason;
   }
@@ -119,11 +153,12 @@ function archiveName(t: NearbyTransfer) {
   return `From ${t.peerName} ${new Date(t.started).toISOString().slice(0, 10)}`;
 }
 
-async function save(t: NearbyTransfer) {
+export async function save(t: NearbyTransfer) {
   const files = t.received ?? [];
   if (!files.length) return;
   // Photos and videos go to the share sheet, which saves them to the library.
-  if (canShare(files) && (await share(files))) return;
+  if (canShare(files) && (await share(files))) return markSaved(t.id);
+  markSaved(t.id);
   if (files.length === 1) downloadFile(files[0], files[0].name);
   else
     await downloadZip(
@@ -155,7 +190,11 @@ function Received({ t }: { t: NearbyTransfer }) {
                   size="sm"
                   label={`Download ${file.name}`}
                   icon={<Download size={15} aria-hidden />}
-                  onClick={() => downloadFile(file, file.name)}
+                  onClick={() => {
+                    downloadFile(file, file.name);
+                    // The only file, downloaded, is the whole arrival saved.
+                    if (files.length === 1) markSaved(t.id);
+                  }}
                 />
               )}
             </li>

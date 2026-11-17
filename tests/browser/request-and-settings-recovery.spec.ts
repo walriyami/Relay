@@ -75,7 +75,7 @@ test("a guest can retry a request after an initial network failure", async ({ pa
     await guest.unroute(`**/api/r/${request.token}`);
     await guest.getByRole("button", { name: "Try again" }).click();
     await expect(guest.getByRole("heading", { name })).toBeVisible();
-    await expect(guest.getByRole("button", { name: /Browse files/ })).toBeEnabled();
+    await expect(guest.getByRole("button", { name: "Choose files" })).toBeEnabled();
   } finally {
     await context.close();
   }
@@ -246,11 +246,23 @@ test("two manual accepts download once, and a later explicit Download still work
     const filename = `${unique("manual-claim")}.txt`;
     await fileInput(page).setInputFiles(textFile(filename));
     await destinations(page).getByRole("button", { name: receiver.name, exact: true }).click();
-    const popups = [receiver.page, second].map((tab) => tab.getByRole("dialog", { name: filename }));
-    for (const [index, tab] of [receiver.page, second].entries()) {
-      await tab.bringToFront();
-      await expect(popups[index].getByRole("button", { name: "Accept and download" })).toBeVisible();
-    }
+    const tabs = [receiver.page, second];
+    const popups = tabs.map((tab) => tab.getByRole("dialog", { name: filename }));
+    // One tab of a device announces an arrival; the other has it waiting in Activity.
+    await expect.poll(async () => (await popups[0].count()) + (await popups[1].count())).toBe(1);
+    const shown = (await popups[0].count()) ? 0 : 1;
+    const popup = popups[shown];
+    const other = tabs[1 - shown];
+    await expect(popup.getByRole("button", { name: "Accept and download" })).toBeVisible();
+    await other.bringToFront();
+    await other.getByRole("button", { name: /^Activity/ }).click();
+    const waiting = other
+      .getByRole("dialog", { name: "Activity" })
+      .getByRole("region", { name: "Waiting for you" })
+      .getByRole("listitem")
+      .filter({ hasText: filename });
+    await expect(waiting.getByRole("button", { name: "Accept" })).toBeVisible();
+    await expect(popups[1 - shown]).toHaveCount(0);
     const bothAnswers = gate();
     let answers = 0;
     await receiver.context.route("**/api/deliveries/*", async (route) => {
@@ -262,15 +274,14 @@ test("two manual accepts download once, and a later explicit Download still work
     const downloads: string[] = [];
     for (const tab of [receiver.page, second])
       tab.on("download", (download) => downloads.push(download.suggestedFilename()));
-    await popups[0].getByRole("button", { name: "Accept and download" }).click();
-    await popups[1].getByRole("button", { name: "Accept and download" }).click();
+    await popup.getByRole("button", { name: "Accept and download" }).click();
+    await waiting.getByRole("button", { name: "Accept" }).click();
     await bothAnswers.promise;
     releaseAnswers.open();
-    for (const popup of popups)
-      await expect(popup.getByRole("button", { name: "Download", exact: true })).toBeEnabled();
+    await expect(popup.getByRole("button", { name: "Download", exact: true })).toBeEnabled();
     await expect.poll(() => downloads).toEqual([filename]);
-    const again = second.waitForEvent("download");
-    await popups[1].getByRole("button", { name: "Download", exact: true }).click();
+    const again = tabs[shown].waitForEvent("download");
+    await popup.getByRole("button", { name: "Download", exact: true }).click();
     expect((await again).suggestedFilename()).toBe(filename);
     expect(downloads).toEqual([filename, filename]);
   } finally {

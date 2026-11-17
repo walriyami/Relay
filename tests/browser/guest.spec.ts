@@ -136,7 +136,7 @@ test("a full request says so, hides the picker and never offers to send more", a
   await expect(guest.locator(".guest-full")).toContainText(
     "This request is full. admin has received the 18 B it allows.",
   );
-  await expect(guest.getByRole("button", { name: /Add files|Browse files/ })).toHaveCount(0);
+  await expect(guest.getByRole("button", { name: /Add files|Choose files/ })).toHaveCount(0);
   await expect(guest.getByTestId("guest-file-input")).toHaveCount(0);
   await visitor.close();
 

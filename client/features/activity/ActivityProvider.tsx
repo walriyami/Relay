@@ -100,48 +100,58 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     return () => setWaitingCount(0);
   }, [waiting]);
 
-  // Arrivals: anything that wasn't there when this tab first looked.
+  // Arrivals: anything that reached this device and no tab of it has shown yet, including what was
+  // sent while Relay was closed here. Telling the server it was shown lets the sender say
+  // "delivered", and makes sure only one tab announces it.
   const known = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (deliveries.loading) return;
     if (!known.current) {
       // A failed first load isn't a baseline: everything would look new once it loads.
-      if (!deliveries.error) known.current = new Set(deliveries.data.map((d) => d.id));
-      return;
+      if (deliveries.error) return;
+      known.current = new Set(deliveries.data.filter((d) => d.delivered !== null).map((d) => d.id));
     }
-    const fresh = deliveries.data.filter((d) => !known.current!.has(d.id) && isPending(d));
+    const fresh = deliveries.data.filter((d) => !known.current!.has(d.id) && isPending(d) && d.delivered === null);
     for (const d of deliveries.data) known.current.add(d.id);
     if (!fresh.length) return;
+    // A tab in the background gives a visible tab of the same browser the first chance.
+    setTimeout(() => void claim(fresh), document.hidden ? BACKGROUND_GRACE : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- announce arrivals only when the delivery list changes.
+  }, [deliveries.data, deliveries.loading, deliveries.error]);
+
+  async function claim(fresh: Delivery[]) {
+    let mine = fresh;
+    try {
+      const { ids } = await call(api.deliveries.received, { body: { ids: fresh.map((d) => d.id) } });
+      mine = fresh.filter((d) => ids.includes(d.id));
+    } catch {
+      // Announcing twice beats not announcing at all.
+    }
+    if (!mine.length) return;
     const prefs = getLocalPrefs();
-    const first = fresh[0];
+    const first = mine[0];
     const message =
-      fresh.length > 1
-        ? `${plural(fresh.length, "item")} arrived`
+      mine.length > 1
+        ? `${plural(mine.length, "item")} arrived`
         : `${first.from?.name || "Another device"} sent “${itemName(first)}”`;
     if (prefs.sound) chime();
     notifySystem(message, `delivery:${first.id}`);
-    for (const d of [...fresh].reverse()) arrive(d);
+    for (const d of [...mine].reverse()) arrive(d);
     offerPushAfterArrival();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- announce arrivals only when the delivery list changes.
-  }, [deliveries.data, deliveries.loading, deliveries.error]);
+  }
 
   function arrive(d: Delivery) {
     const prefs = getLocalPrefs();
     const show = () => (prefs.popups ? setQueue((q) => [...q, d.id]) : announce(d, prefs.autoAccept));
     if (!prefs.autoAccept) return show();
-    // Accepting is claimed on the server, so with several tabs open only one downloads it; a tab
-    // in the background gives a visible one the first chance.
-    setTimeout(
-      () =>
-        void answerDelivery(d, "accepted")
-          .then(async (won) => {
-            if (!won) return;
-            if (d.item && hasDownloads(d.item)) await downloadItem(d.item);
-            show();
-          })
-          .catch(errorToast),
-      document.hidden ? BACKGROUND_GRACE : 0,
-    );
+    // Accepting is claimed on the server too, so only one tab downloads it.
+    void answerDelivery(d, "accepted")
+      .then(async (won) => {
+        if (!won) return;
+        if (d.item && hasDownloads(d.item)) await downloadItem(d.item);
+        show();
+      })
+      .catch(errorToast);
   }
 
   function announce(d: Delivery, accepted: boolean) {

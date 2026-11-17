@@ -12,27 +12,35 @@ import {
   writeText,
 } from "./helpers";
 
-test("only live devices are offered, and they disappear when closed", async ({ page, browser }) => {
+test("a device that isn't open is offered, and gets what was sent the next time it opens Relay", async ({
+  page,
+  browser,
+}) => {
   const laptop = await signedIn(page, "Laptop");
   const targets = destinations(page);
-  // Signed in, but Relay isn't open on it: not offered.
-  const destination = targets.getByRole("button", { name: await deviceName("Phone"), exact: true });
-  await expect(destination).toHaveCount(0);
+  const phoneName = await deviceName("Phone");
+  // Signed in, but Relay isn't open on it: still a place to send, and it says when it will get it.
+  const destination = targets.getByRole("button", { name: phoneName, exact: true });
+  await expect(destination).toBeEnabled({ timeout: 20_000 });
+  await expect(destination).toHaveAccessibleDescription(/Away · gets it when it opens Relay/);
+  await expect(targets.getByRole("button", { name: laptop, exact: true })).toHaveCount(0);
+  const name = unique("queued");
+  await fileInput(page).setInputFiles([textFile(`${name}.txt`, "for later")]);
+  await destination.click();
+  const card = page.locator(".transfer").first();
+  // Never "sent" while nothing has it: it waits, and it is safe in Files meanwhile.
+  await expect(card.getByRole("status")).toHaveText(
+    endingWith(`: Waiting for ${phoneName} to open Relay · copy kept in Files`),
+  );
+  await expect(destination).toHaveAccessibleDescription("Waiting for it to open Relay");
+  // Opening Relay on the phone later is enough: it arrives, and the laptop is told.
   const phone = await deviceContext(browser, "Phone");
   try {
-    await expect(destination).toBeVisible({ timeout: 20_000 });
-    await expect(destination).toBeDisabled();
-    await expect(targets.getByRole("button", { name: laptop, exact: true })).toHaveCount(0);
-    await writeText(page, "something to send");
-    await expect(destination).toBeEnabled();
-    await composer(page).getByRole("button", { name: "Clear", exact: true }).click();
-    await expect(destination).toBeVisible();
-    await expect(destination).toBeDisabled();
+    await expect(phone.page.getByRole("dialog", { name: `${name}.txt` })).toContainText("Accepted on this device");
+    await expect(card.getByRole("status")).toHaveText(endingWith(`: Downloaded on ${phoneName} · copy kept in Files`));
   } finally {
     await phone.context.close();
   }
-  await expect(destination).toHaveCount(0, { timeout: 45_000 });
-  await expect(targets.getByText("Devices show up here while Relay is open on them.")).toBeVisible();
 });
 
 test("a device accepts what your others send it: it downloads and opens in a popup, no new tabs", async ({
@@ -65,7 +73,7 @@ test("a device accepts what your others send it: it downloads and opens in a pop
   await expect(phone.page).toHaveURL(/\/$/);
 
   // The sender is told exactly that, and nothing more.
-  await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
+  await expect(card.getByRole("status")).toHaveText(endingWith(`: Downloaded on ${phone.name} · copy kept in Files`));
   await phone.context.close();
 });
 
@@ -101,7 +109,7 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     await fileInput(page).setInputFiles([textFile(`${second}.txt`, "for later")]);
     await destinations(page).getByRole("button", { name: phone.name, exact: true }).click({ timeout: 20_000 });
     const card = page.locator(".transfer").first();
-    await expect(card.getByRole("status")).toHaveText(endingWith(`: Sent to ${phone.name} · not accepted yet`));
+    await expect(card.getByRole("status")).toHaveText(endingWith(`: Delivered to ${phone.name} · copy kept in Files`));
     const popup = phone.page.getByRole("dialog", { name: `${second}.txt` });
     await expect(phone.page.getByRole("button", { name: /^Activity, \d+ new$/ })).toBeVisible();
     await expect(popup).toHaveCount(0);
@@ -124,7 +132,7 @@ test("with auto-accept off, a device answers from the popup or from Activity", a
     await expect(
       activity.getByRole("region", { name: "Recent activity" }).getByText(endingWith(`“${second}.txt” from ${laptop}`)),
     ).toBeVisible();
-    await expect(card.getByRole("status")).toHaveText(endingWith(`: Accepted on ${phone.name}`));
+    await expect(card.getByRole("status")).toHaveText(endingWith(`: Downloaded on ${phone.name} · copy kept in Files`));
     await expect(phone.page).toHaveTitle("Relay");
     await expect(phone.page.getByRole("button", { name: "Activity", exact: true })).toBeVisible();
 

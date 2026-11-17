@@ -19,13 +19,18 @@ export function LinkPanel({ share: made }: { share: Link }) {
         This share has expired. Create a new link from Files to share this item again.
       </p>
     );
+  const url = shareUrl(share.token);
   return (
     <ShareAccess
-      url={shareUrl(share.token)}
+      url={url}
       code={share.code}
       compact
       detail={
         <>
+          {/* The link itself, so you can see what you are about to paste, and select it by hand. */}
+          <span className="link-panel-url" title={url}>
+            {url.replace(/^https?:\/\//, "")}
+          </span>
           <span>{linkSummary(share, now)}</span>
           <LinkReach link={share} />
         </>

@@ -33,7 +33,7 @@ Resumable uploads of any size, streamed downloads, and nothing stored anywhere y
 
 ### 📤 Send anything, decide later
 
-Drop or paste files, whole folders and text into one draft. Nothing uploads until you pick a destination: **Save to Files**, **Create link**, or **send to one of your online devices**.
+Drop or paste files, whole folders and text into one draft. Nothing uploads until you pick a destination: **Save to Files**, **Create link**, or **send to one of your devices**. A copy is kept in Files, and a device that’s away gets it the next time it opens Relay.
 
 </td>
 <td width="50%" valign="top">
@@ -67,7 +67,7 @@ Every completed upload is saved first, whether you shared it or not. Search, sor
 
 Ask someone without an account to send you files. They open a link, drop files in, and the files land in your library, counted as your storage.
 
-**Nearby** sends files and text straight between devices on the same network, such as your iPad and iPhone at work, without going through the server or into your library. Your own devices take it without asking; other members and guests with a Nearby code accept first.
+**Nearby** sends files and text straight between devices on the same network, such as your iPad and iPhone at work, without going through the server or into your library. Both devices need Relay open; nothing is kept, so save what arrives. Your own devices take it without asking; other members and guests with a Nearby code accept first.
 
 </td>
 <td valign="top">

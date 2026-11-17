@@ -32,6 +32,7 @@ flowchart LR
 ## Current behavior and constraints
 
 - **Saving comes first.** Every completed upload is saved to the owner's library before anything else happens. A link or a delivery to a device only points at saved content, so it never moves or deletes the original.
+- **Deliveries wait.** Sending to one of the owner's devices doesn't need Relay open there. The delivery waits until the device next opens Relay, which records that it arrived (`delivery_receipts`), and the sender's card moves from waiting to delivered, then downloaded or declined. Nothing is called sent before the device has it.
 - **Honest states.** A file counts as saved only after it's flushed to disk and recorded in the database. An interrupted upload never looks saved, and Relay never claims a download reached someone's disk.
 - **One process, one disk.** Relay makes no attempt at clustering. SQLite holds an exclusive lock on the data directory, so a second process fails immediately instead of corrupting data.
 - **Bounded transfer buffers.** Uploads, downloads and archives stream instead of buffering whole files. Preview decoding has separate pixel, concurrency and lifecycle limits; source complexity can still affect decoder memory.
