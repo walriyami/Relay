@@ -87,7 +87,7 @@ If recovery fails, restore the snapshot walctl took before the last deploy. That
 
 ### Resetting content
 
-walctl resets a stopped Relay with `node server/control-reset.ts --content`, which deletes every transfer, file, link, request, delivery and statistic but keeps accounts, devices, invitations, every code ever given out and settings, or `--clone`, which signs everyone out and removes the keys tied to this copy's address before it runs somewhere else. The tables each clears are listed in `server/db/reset.ts`; a new table is kept until someone adds it there.
+walctl resets a stopped Relay with `node server/control-reset.ts --content`, which deletes every transfer, file, link, request, delivery and statistic but keeps accounts, devices, invitations, every code ever given out and settings, or `--clone`, which signs everyone out and removes the keys and notification subscriptions tied to this copy's address before it runs somewhere else. The tables each clears are listed in `server/db/reset.ts`; a new table is kept until someone adds it there.
 
 Run one Relay per data storage, and never point a test copy at production's data. `walctl duplicate relay-production --definition <test.yaml> --copy-data` makes an independent copy with its own secrets.
 

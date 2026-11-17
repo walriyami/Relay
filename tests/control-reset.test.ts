@@ -66,16 +66,24 @@ test("a clone reset signs everyone out and removes address-bound keys, keeping c
   try {
     const owner = await member(instance, "sara");
     await send(owner, [{ path: "a.txt", data: "alpha" }]);
+    const device = instance.ctx.db.value<string>("SELECT id FROM devices LIMIT 1")!;
+    instance.ctx.db.run(
+      "INSERT INTO push_subscriptions(device_id, user_id, endpoint, p256dh, auth, created) SELECT ?, user_id, 'https://fcm.googleapis.com/x', 'k', 'a', 0 FROM devices WHERE id = ?",
+      device,
+      device,
+    );
     await stop(instance);
     // Tests pass the key in configuration; a real install keeps these files in the data folder.
-    for (const file of ["secret.key", "setup.key"]) writeFileSync(join(root, file), "key\n");
+    for (const file of ["secret.key", "setup.key", "push-keys.json"]) writeFileSync(join(root, file), "key\n");
 
     assert.match(reset(root, "--clone"), /Clone sessions/);
-    for (const file of ["secret.key", "setup.key"]) assert.equal(existsSync(join(root, file)), false, file);
+    for (const file of ["secret.key", "setup.key", "push-keys.json"])
+      assert.equal(existsSync(join(root, file)), false, file);
 
     restarted = await start({}, root);
     const { db } = restarted.ctx;
     assert.equal(db.value("SELECT COUNT(*) FROM sessions"), 0);
+    assert.equal(db.value("SELECT COUNT(*) FROM push_subscriptions"), 0);
     assert.equal(db.value("SELECT COUNT(*) FROM items"), 1);
     await new Client(restarted).signIn("admin", ADMIN_PASSWORD);
   } finally {

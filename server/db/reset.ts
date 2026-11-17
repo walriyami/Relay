@@ -29,9 +29,11 @@ export const CONTENT_TABLES = [
 
 /**
  * Sign-ins tied to this copy's address and devices. A clone gets its own; accounts, passwords and
- * content stay. Deleting sessions also ends their shared sign-in links.
+ * content stay. Deleting sessions also ends their shared sign-in links. Push subscriptions go too, with
+ * the key they were made for, so a copy never notifies the original's phones.
  */
 export const CLONE_TABLES = [
+  "push_subscriptions",
   "login_codes",
   "sessions",
   "devices",
@@ -56,6 +58,7 @@ export const KEPT_TABLES = [
   "external_sessions",
   "sso_flows",
   "pickup_codes",
+  "push_subscriptions",
 ] as const;
 
 /** Clears content and its files. Run only with Relay stopped. */
@@ -87,5 +90,5 @@ export function resetClone(root: string) {
   } finally {
     db.close();
   }
-  for (const file of ["secret.key", "setup.key"]) rmSync(join(root, file), { force: true });
+  for (const file of ["secret.key", "setup.key", "push-keys.json"]) rmSync(join(root, file), { force: true });
 }
