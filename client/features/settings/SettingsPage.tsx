@@ -11,7 +11,7 @@ import { fromSegment, keepOptions, limitHint, linkLifeOptions, toSegment, trashO
 import { scrollMotion } from "../../lib/router";
 import { setTransferPrefs } from "../../lib/transfers";
 import { setLocalPrefs, useLocalPrefs } from "../../lib/local-prefs";
-import { StorageMeter } from "../../components/StorageMeter";
+import { StorageSummary } from "../storage/StorageSummary";
 import { AddDevice } from "./AddDevice";
 import { PasskeysSection } from "./Passkeys";
 import { Section } from "./Section";
@@ -24,7 +24,6 @@ import {
   Field,
   Menu,
   Modal,
-  PageLink,
   Segmented,
   Toggle,
   confirmDialog,
@@ -240,13 +239,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         />
       </Section>
       <Section id="s-storage" title="Storage" saved={savedIn("s-storage")}>
-        <div className="stack-sm">
-          <StorageMeter me={me} />
-          <p className="field-hint">
-            Items in Trash still count until deleted. <PageLink to="/usage">See your usage</PageLink> ·{" "}
-            <PageLink to="/trash">Open Trash</PageLink>
-          </p>
-        </div>
+        <StorageSummary me={me} />
         <div className="setting-row">
           <span className="setting-label">
             <strong>Auto-delete new items after</strong>

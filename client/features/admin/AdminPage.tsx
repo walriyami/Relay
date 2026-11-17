@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, UserPlus } from "lucide-react";
+import { Pencil, UserMinus, UserPlus } from "lucide-react";
 import {
   ApiError,
   api,
@@ -16,7 +16,7 @@ import { USERNAME } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { ago, bytes, dateTime, plural } from "../../lib/format";
 import { storageSummary } from "../../components/StorageMeter";
-import { useLive } from "../../lib/live";
+import { notifyChange, useLive } from "../../lib/live";
 import { usePeriodicRefresh } from "../../lib/refresh";
 import { navigate, useRoute } from "../../lib/router";
 import { days } from "../../lib/options";
@@ -32,10 +32,11 @@ import {
   Spinner,
   Toggle,
   confirmDialog,
+  promptDialog,
   toast,
 } from "../../components/ui";
 import { ByteSizeField, changedBytes, toDraft } from "./ByteSize";
-import { AdminOverview, HealthNotice, showHealth } from "./AdminOverview";
+import { AdminOverview, HealthNotice } from "./AdminOverview";
 import { InviteDialog, LimitsFields, limitsSummary, useLimitsForm } from "./Limits";
 
 const errorToast = (e: unknown) => toast((e as Error).message, { tone: "error" });
@@ -86,11 +87,9 @@ export function AdminPage() {
         !error && <Spinner />
       ) : (
         <>
-          <HealthNotice
-            data={data}
-            onShow={() => (tab?.to === "/admin" ? showHealth() : navigate("/admin#admin-health"))}
-          />
-          {tab?.to === "/admin" && <AdminOverview data={data} />}
+          {/* The overview says it in full; other tabs point back to it. */}
+          {tab?.to !== "/admin" && <HealthNotice data={data} />}
+          {tab?.to === "/admin" && <AdminOverview data={data} invites={invites.data.length} />}
           {tab?.to === "/admin/members" && (
             <>
               <Members data={data} onChanged={reload} />
@@ -171,14 +170,15 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
                 {displayName(u)[0]?.toUpperCase()}
               </span>
               <span className="list-text static">
-                <strong>
-                  {displayName(u)}
-                  {u.name && <span className="member-username muted">{u.username}</span>}
-                  {u.admin && <span className="pill">Admin</span>}
+                <span className="member-name">
+                  <strong>{displayName(u)}</strong>
+                  {u.id === me.user.id && <span className="muted"> (you)</span>}
+                  {u.admin && <span className="pill">Administrator</span>}
                   {u.disabled && <span className="pill danger">Suspended</span>}
                   {u.walriyami && <span className="pill">Walriyami</span>}
-                </strong>
+                </span>
                 <span className="muted">
+                  {u.name && `${u.username} · `}
                   {storageSummary(u.usage, u.limits.storage)}
                   {" · "}
                   {u.lastActive ? `active ${ago(u.lastActive)}` : "never signed in on a device"}
@@ -208,6 +208,7 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
         <ManageMember
           member={member}
           self={member.id === me.user.id}
+          lastAdmin={member.admin && data.members.filter((m) => m.admin).length === 1}
           onClose={() => setManaging(null)}
           onChanged={onChanged}
           onSaved={() => {
@@ -406,12 +407,15 @@ function appliedMessage(applied: LimitsApplied) {
 function ManageMember({
   member,
   self,
+  lastAdmin,
   onClose,
   onChanged,
   onSaved,
 }: {
   member: AdminMember;
   self: boolean;
+  /** Relay always keeps one administrator, so the only one can't stop being one. */
+  lastAdmin: boolean;
   onClose: () => void;
   /** Something was saved but the dialog stays open. */
   onChanged: () => void;
@@ -421,6 +425,10 @@ function ManageMember({
   const [username, setUsername] = useState(member.username);
   const limits = useLimitsForm(member.limits);
   const [disabled, setDisabled] = useState(member.disabled);
+  const [admin, setAdmin] = useState(member.admin);
+  // A role change saves on its own: Relay clears limits with it, and an administrator can't be suspended.
+  const roleChange = admin !== member.admin ? admin : undefined;
+  const limited = !member.admin && roleChange === undefined;
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -433,8 +441,10 @@ function ManageMember({
   const changes = {
     name: name.trim() !== (member.name ?? "") ? name.trim() || null : undefined,
     username: cleanUsername !== member.username ? cleanUsername : undefined,
-    limits: !member.admin && limits.changed && limits.limits ? limits.limits : undefined,
-    disabled: !member.admin && disabled !== member.disabled ? disabled : undefined,
+    limits: limited && limits.changed && limits.limits ? limits.limits : undefined,
+    // Making a suspended member an administrator lifts the suspension in the same step.
+    disabled: roleChange && member.disabled ? false : limited && disabled !== member.disabled ? disabled : undefined,
+    admin: roleChange,
   };
   const changed = Object.values(changes).some((v) => v !== undefined) || limits.limits === null || !!password;
   function fail(message: string, field?: keyof typeof inputs) {
@@ -447,14 +457,16 @@ function ManageMember({
       return setError("Limits changed while this dialog was open. Review the current limits before saving your draft.");
     if (changes.username !== undefined && !USERNAME.test(changes.username))
       return fail("Use 3 to 32 lowercase letters, numbers, - or _, starting with a letter or number.", "username");
-    if (!member.admin && limits.limits === null)
-      return setError("Enter a storage limit more than zero, or choose No limit.");
+    if (limited && limits.limits === null) return setError("Enter a storage limit more than zero, or choose No limit.");
     if (password && password.length < LIMITS.passwordMin) {
       return fail(`The new password needs at least ${LIMITS.passwordMin} characters.`, "password");
     }
     const suspending = changes.disabled === true;
     const effects = changes.limits ? tighteningEffects(changes.limits, member.limits) : [];
-    if (suspending || password || effects.length) {
+    if (roleChange !== undefined) {
+      const ok = await confirmDialog(roleConfirmation(member, roleChange, self, !!password));
+      if (!ok) return;
+    } else if (suspending || password || effects.length) {
       const title = suspending
         ? password
           ? `Suspend ${member.username} and set a new password?`
@@ -493,13 +505,22 @@ function ManageMember({
       if (password) await call(api.admin.resetPassword, { params: { id: member.id }, body: { password } });
       const now = changes.username ?? member.username;
       toast(
-        suspending
-          ? `${now} is suspended`
-          : changes.username
-            ? `Saved. ${self ? "You sign" : "They sign"} in as ${now} from now on.`
-            : appliedMessage(applied),
+        roleChange !== undefined
+          ? self
+            ? "You’re no longer an administrator"
+            : `${now} is ${roleChange ? "now an administrator" : "no longer an administrator"}`
+          : suspending
+            ? `${now} is suspended`
+            : changes.username
+              ? `Saved. ${self ? "You sign" : "They sign"} in as ${now} from now on.`
+              : appliedMessage(applied),
       );
       onSaved();
+      // Admin is closed to members, so leave it rather than land on "Page not found".
+      if (self && roleChange === false) {
+        notifyChange("account");
+        navigate("/", true);
+      }
     } catch (e) {
       if (saved) {
         // The member's other changes are in; only the password is left to retry.
@@ -573,10 +594,26 @@ function ManageMember({
             />
           </Field>
         </div>
-        {member.admin ? (
+        <Toggle
+          label="Administrator"
+          description={
+            lastAdmin
+              ? `${self ? "You’re" : `${member.username} is`} the only administrator. Make someone else an administrator first to turn this off.`
+              : "Can manage members, storage and settings, and has no limits."
+          }
+          checked={admin}
+          disabled={lastAdmin}
+          onChange={setAdmin}
+        />
+        {roleChange !== undefined ? (
           <p className="field-hint">
-            {self ? "You have" : "The administrator has"} no limits: {self ? "you" : "they"} could lift any of them.
-            Storage is shared with everyone, up to the total storage in Settings.
+            {roleChange
+              ? "Administrators have no limits, so saving removes any limits set for this member."
+              : "Saving leaves them with no limits. Open Manage again afterwards to set some."}
+          </p>
+        ) : member.admin ? (
+          <p className="field-hint">
+            Administrators have no limits. Storage is shared with everyone, up to the total storage in Settings.
           </p>
         ) : (
           <div className="limits-panel">
@@ -601,7 +638,7 @@ function ManageMember({
             />
           </div>
         )}
-        {!member.admin && (
+        {limited && (
           <Toggle
             label="Suspend access"
             description="Signs the member out and pauses their share and request tokens. Turning suspension off resumes tokens that are still valid. Expiry clocks continue during suspension."
@@ -635,6 +672,112 @@ function ManageMember({
           </p>
         )}
       </form>
+      {!self && <RemoveMember member={member} onRemoved={onSaved} />}
     </Modal>
+  );
+}
+
+/** Granting the role hands over everything; taking it away from yourself locks you out of Admin. */
+function roleConfirmation(member: AdminMember, admin: boolean, self: boolean, password: boolean) {
+  const also = password ? " The new password is saved too, and they’re signed out everywhere." : "";
+  if (admin)
+    return {
+      title: `Make ${member.username} an administrator?`,
+      body: `They’ll be able to invite and remove members, set passwords, change storage and every Admin setting, including taking this role away from you. Administrators have no limits, so their limits are removed.${member.disabled ? " Their suspension is lifted." : ""}${also}`,
+      confirm: "Make administrator",
+      danger: true,
+    };
+  if (self)
+    return {
+      title: "Stop being an administrator?",
+      body: "You’ll lose Admin straight away and become a member with no limits. Only another administrator can give the role back.",
+      confirm: "Stop being administrator",
+      danger: true,
+    };
+  return {
+    title: `Remove ${member.username}’s administrator role?`,
+    body: `They keep their account and files, and lose Admin straight away. They’ll have no limits until you set some.${also}`,
+    confirm: "Remove role",
+    danger: true,
+  };
+}
+
+/**
+ * Deleting an account is the one thing here that can't be taken back, so the confirmation says in
+ * numbers what goes with it and asks for the username, the way a careful person would double-check.
+ */
+function RemoveMember({ member, onRemoved }: { member: AdminMember; onRemoved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function remove() {
+    setBusy(true);
+    let removal;
+    try {
+      removal = await call(api.admin.removal, { params: { id: member.id } });
+    } catch (e) {
+      return errorToast(e);
+    } finally {
+      setBusy(false);
+    }
+    const name = member.username;
+    const removed = await promptDialog({
+      title: `Remove ${name}?`,
+      body: (
+        <div className="stack-sm removal-body">
+          <ul className="removal-list">
+            <li>
+              {removal.items
+                ? `${plural(removal.items, "item")} in their Files and Trash ${removal.items === 1 ? "is" : "are"} deleted, freeing ${bytes(removal.bytes)} for everyone.`
+                : "They have no files, so no space is freed."}
+            </li>
+            {removal.links + removal.requests > 0 && (
+              <li>
+                {[
+                  removal.links && plural(removal.links, "shared link"),
+                  removal.requests && plural(removal.requests, "upload request"),
+                ]
+                  .filter(Boolean)
+                  .join(" and ")}{" "}
+                stop working. Anyone opening them sees that they’re gone.
+              </li>
+            )}
+            <li>
+              {removal.devices
+                ? `They’re signed out on ${plural(removal.devices, "device")} at once.`
+                : "They aren’t signed in anywhere right now."}
+            </li>
+          </ul>
+          <p>
+            <strong>This can’t be undone.</strong> If they want a copy, ask them to use Download all my files in
+            Settings › Storage first. Someone who signs in through Walriyami and still has access there would come back
+            as a new, empty account.
+          </p>
+        </div>
+      ),
+      label: `Type ${name} to confirm`,
+      value: "",
+      confirm: "Remove member",
+      danger: true,
+      apply: async (typed) => {
+        if (typed.trim().toLowerCase() !== name) throw new Error(`Type ${name} exactly to remove this member.`);
+        await call(api.admin.removeMember, { params: { id: member.id } });
+      },
+    });
+    if (removed === null) return;
+    toast(`${name} was removed`, {
+      detail: removal.bytes ? `${bytes(removal.bytes)} freed` : undefined,
+    });
+    notifyChange("items");
+    onRemoved();
+  }
+  return (
+    <div className="setting-row danger-zone">
+      <span className="setting-label">
+        <strong>Remove member</strong>
+        <span className="field-hint">Deletes their account, files and links, and frees their space.</span>
+      </span>
+      <Button className="danger-text" icon={<UserMinus size={16} />} busy={busy} onClick={() => void remove()}>
+        Remove member…
+      </Button>
+    </div>
   );
 }

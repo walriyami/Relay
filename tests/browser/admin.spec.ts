@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { api } from "../../shared/api.ts";
 import type { User } from "../../shared/model.ts";
-import { copyShareUrl, BASE, composer, signedIn, unique } from "./helpers";
+import { copyShareUrl, BASE, composer, destinations, fileInput, signedIn, unique } from "./helpers";
 
 const MB = 1024 ** 2;
 
@@ -146,6 +146,68 @@ test("setting a member's password asks first and names what it signs out", async
   }
 });
 
+test("an administrator can share the role, and removing a member says what goes with them", async ({
+  page,
+  browser,
+}) => {
+  await signedIn(page);
+  const token = await inviteToken(page);
+  const username = unique("erin").toLowerCase();
+  const memberContext = await browser.newContext({ baseURL: BASE });
+  try {
+    await join(memberContext, token, username, "Erin laptop");
+    const member = await memberContext.newPage();
+    await member.goto("/");
+    await expect(composer(member)).toBeVisible();
+    await fileInput(member).setInputFiles([
+      { name: `${unique("notes")}.txt`, mimeType: "text/plain", buffer: Buffer.alloc(MB, 65) },
+    ]);
+    await destinations(member).getByRole("button", { name: "Save to Files" }).click();
+    await expect(member.locator(".transfer").first()).toContainText("Saved to Files");
+
+    // Making someone an administrator says what it gives them, and the list shows it.
+    await page.goto("/admin/members");
+    const row = page.getByRole("listitem").filter({ hasText: username });
+    const dialog = page.getByRole("dialog", { name: `Manage ${username}` });
+    await page.getByRole("button", { name: `Manage ${username}` }).click();
+    await dialog.getByRole("switch", { name: /^Administrator/ }).check();
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    const promote = page.getByRole("dialog", { name: `Make ${username} an administrator?` });
+    await expect(promote).toContainText("including taking this role away from you");
+    await promote.getByRole("button", { name: "Make administrator" }).click();
+    await expect(page.getByText(`${username} is now an administrator`)).toBeVisible();
+    await expect(row.getByText("Administrator", { exact: true })).toBeVisible();
+
+    // And the role can be taken back.
+    await page.getByRole("button", { name: `Manage ${username}` }).click();
+    await dialog.getByRole("switch", { name: /^Administrator/ }).uncheck();
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await page
+      .getByRole("dialog", { name: `Remove ${username}’s administrator role?` })
+      .getByRole("button", { name: "Remove role" })
+      .click();
+    await expect(row.getByText("Administrator", { exact: true })).toHaveCount(0);
+
+    // Removal names what goes, in numbers, and needs the username typed.
+    await page.getByRole("button", { name: `Manage ${username}` }).click();
+    await dialog.getByRole("button", { name: "Remove member…" }).click();
+    const removal = page.getByRole("dialog", { name: `Remove ${username}?` });
+    await expect(removal).toContainText("1 item in their Files and Trash is deleted, freeing 1 MB for everyone.");
+    await expect(removal).toContainText("signed out on 1 device");
+    await expect(removal).toContainText("can’t be undone");
+    await removal.getByLabel(`Type ${username} to confirm`).fill("someone-else");
+    await removal.getByRole("button", { name: "Remove member" }).click();
+    await expect(removal.getByText(`Type ${username} exactly to remove this member.`)).toBeVisible();
+    await removal.getByLabel(`Type ${username} to confirm`).fill(username);
+    await removal.getByRole("button", { name: "Remove member" }).click();
+    await expect(page.getByText(`${username} was removed`)).toBeVisible();
+    await expect(row).toHaveCount(0);
+    expect((await memberContext.request.get(api.session.get.path)).status()).toBe(401);
+  } finally {
+    await memberContext.close();
+  }
+});
+
 test("open invitations are listed and can be withdrawn", async ({ page, browser }) => {
   await signedIn(page);
   const token = await inviteToken(page);
@@ -172,21 +234,54 @@ test("open invitations are listed and can be withdrawn", async ({ page, browser 
   }
 });
 
-test("the overview shows what is stored and moving, without exposing recovery controls", async ({ page }) => {
+test("the overview says whether anything is wrong, shows trends and a filterable history, without recovery controls", async ({
+  page,
+  browser,
+}) => {
   await signedIn(page);
+  const token = await inviteToken(page);
+  const username = unique("hana").toLowerCase();
+  const memberContext = await browser.newContext({ baseURL: BASE });
+  await join(memberContext, token, username, "Hana phone").finally(() => memberContext.close());
   await page.goto("/admin");
   const tabs = page.getByRole("navigation", { name: "Admin" });
   await expect(tabs.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("listitem").filter({ hasText: "Saved" }).first()).toBeVisible();
-  const storage = page.getByRole("region", { name: "Storage", exact: true });
-  await expect(storage.getByText(/^(None|\d+ uploads?)$/)).toBeVisible();
-  await expect(page.getByRole("group", { name: /^Data moved each day, by everyone/ })).toBeVisible();
-  await expect(page.getByRole("region", { name: "By member" })).toContainText("admin");
-  await expect(page.getByRole("region", { name: "Service health" })).toBeVisible();
 
-  // Periods switch in place; the other tabs keep their own addresses.
+  // First, in plain words: is anything wrong, and how much space is left.
+  const status = page.getByRole("region", { name: "Everything looks fine" });
+  await expect(status).toContainText(/\d+ members?/);
+  await expect(status).toContainText(/ left · /);
+  await expect(status.getByRole("progressbar", { name: "Storage used on this Relay" })).toBeVisible();
+
+  // Then trends over a period that switches in place.
+  await expect(page.getByRole("heading", { name: "Over the last 30 days" })).toBeVisible();
+  const storage = page.getByRole("region", { name: "Storage", exact: true });
+  await expect(storage.getByRole("group", { name: /^What everyone kept at the end of each day/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Uploads and downloads" })).toContainText(
+    /without a server error|went wrong/,
+  );
+  await expect(page.getByRole("region", { name: "By member" })).toContainText("admin");
   await page.getByRole("radio", { name: "12 months" }).click();
-  await expect(page.getByRole("group", { name: /^Data moved each month, by everyone/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Over the last 12 months" })).toBeVisible();
+  await expect(storage.getByRole("group", { name: /^What everyone kept at the end of each month/ })).toBeVisible();
+
+  // Then what happened, newest first, which can be narrowed down.
+  const history = page.getByRole("region", { name: "History" });
+  const joined = history.getByText(new RegExp(`^${username} joined with an invitation from `));
+  await expect(joined).toBeVisible();
+  await history.getByRole("radio", { name: "Problems", exact: true }).click();
+  await expect(joined).toHaveCount(0);
+  await history.getByRole("radio", { name: "Everything" }).click();
+  await page.getByRole("button", { name: `${username}: show history` }).click();
+  await expect(history.getByRole("combobox", { name: "Member" })).toHaveValue(/.+/);
+  await expect(history.getByRole("radio", { name: "Everything" })).toHaveAttribute("aria-checked", "true");
+  await expect(joined).toBeVisible();
+
+  // A healthy server keeps its details folded away until asked for.
+  await expect(page.getByText("Library retention", { exact: true })).toBeHidden();
+  await page.getByText("Server details", { exact: true }).click();
+  await expect(page.getByRole("list", { name: "Cleanup jobs" })).toContainText("Library retention");
+
   await tabs.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/admin\/settings$/);
   await expect(page.getByRole("region", { name: "Total storage" })).toBeVisible();
@@ -223,12 +318,13 @@ test("the administrator can continue bounded integrity checks and retry a failed
     };
     await route.fulfill({ status: 202, json: { running: true } });
   });
+  await page.getByText("Server details", { exact: true }).click();
   await page.getByRole("button", { name: "Check stored files", exact: true }).click();
-  await expect(page.getByText(/Last batch:.*More files remain/)).toBeVisible();
+  await expect(page.getByText(/Last part:.*More files remain/)).toBeVisible();
   await page.getByRole("button", { name: "Continue file check" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Storage is temporarily unavailable." })).toBeVisible();
   await page.getByRole("button", { name: "Continue file check" }).click();
-  await expect(page.getByText(/Last batch:.*Check finished/)).toBeVisible();
+  await expect(page.getByText(/Last part:.*Finished\./)).toBeVisible();
   expect(bodies).toEqual([{}, { after: cursor }, { after: cursor }]);
   await expect(page.getByRole("button", { name: "Check stored files", exact: true })).toBeEnabled();
 });
@@ -248,17 +344,16 @@ test("an accepted integrity scan failure stays visible until a successful retry"
     await route.fulfill({ status: 202, json: { running: true } });
   });
   await page.goto("/admin");
+  await page.getByText("Server details", { exact: true }).click();
   await page.getByRole("button", { name: "Check stored files", exact: true }).click();
-  const failure = page.getByRole("alert").filter({ hasText: "The file check could not finish." });
+  const failure = page.getByRole("alert").filter({ hasText: "The file check couldn’t finish." });
   await expect(failure).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "Service health" }).getByText("Needs attention", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Relay needs attention" })).toContainText(
+    "The last file check couldn’t finish.",
+  );
   await page.getByRole("button", { name: "Check stored files", exact: true }).click();
   await expect(failure).toHaveCount(0);
-  await expect(
-    page.getByRole("region", { name: "Service health" }).getByText("No active alerts", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Everything looks fine" })).toBeVisible();
   expect(attempts).toBe(2);
 });
 
