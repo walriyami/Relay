@@ -266,7 +266,7 @@ test("a new member is welcomed, makes Relay theirs and adds a device, picking up
   }
 });
 
-test("a new member can leave devices for later and keep every default", async ({ page, browser }) => {
+test("a new member can leave devices for later and keep every default", async ({ page, browser, isMobile }) => {
   await signedIn(page);
   const token = await inviteToken(page);
   const context = await browser.newContext({ baseURL: BASE });
@@ -298,7 +298,8 @@ test("a new member can leave devices for later and keep every default", async ({
     await guest.getByRole("button", { name: "I’ll do this later" }).click();
     await revoked;
     await expect(guest.getByRole("heading", { name: "You’re all set" })).toBeVisible();
-    await expect(guest.getByText("Add your phone")).toBeVisible();
+    // The next device to add is the other kind: a phone from a computer, a computer from a phone.
+    await expect(guest.getByText(isMobile ? "Add your computer" : "Add your phone")).toBeVisible();
     expect(updates).toBe(0);
     const phone = await browser.newContext({ baseURL: BASE });
     try {
