@@ -24,6 +24,9 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 ### Changed
 
 - The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
+- Editing `server/db/schema.sql` no longer locks Relay out of existing data. At startup Relay adds new tables, columns and indexes itself, ignores comments and formatting, and refuses only an edit that would remove or reshape stored data, with a message naming it. The one-off upgrade from the first schema is gone.
+- A damaged database stops Relay at startup with a plain explanation and recovery steps instead of a stack trace. Startup errors Relay understands are printed the same way.
+- `control-reset --content` keeps invitations' codes and every code ever given out, so a printed code is never reused. The tables each reset clears are listed explicitly; a new table is kept until someone decides otherwise.
 
 - Relay runs as one container. The Caddy gateway, its Unix socket and `RELAY_SOCKET` are gone: Relay serves HTTP itself on port 3090.
 - Relay is hosted with walctl, which builds, runs, health-checks and rolls back the container. [Hosting](docs/hosting.md) replaces the Self-hosting guide.

@@ -10,7 +10,7 @@ import { start } from "./support/harness.ts";
 import { buildApp } from "../server/app.ts";
 import { testConfig } from "./support/config.ts";
 
-test("schema guard accepts only fresh or exact current databases and releases rejected locks", async () => {
+test("schema guard accepts only Relay's own databases, restores missing tables and releases rejected locks", async () => {
   const root = await mkdtemp(join(tmpdir(), "relay-schema-"));
   const path = join(root, "db.sqlite");
   try {
@@ -34,7 +34,11 @@ test("schema guard accepts only fresh or exact current databases and releases re
     const raw = new DatabaseSync(path);
     raw.exec("PRAGMA user_version=2; DROP TABLE traffic");
     raw.close();
-    assert.throws(() => new Database(path), { code: "RELAY_SCHEMA_INCOMPATIBLE" });
+    // A table schema.sql has and the database lacks holds no data yet: it is simply added.
+    db = new Database(path);
+    assert.deepEqual(db.upgraded, ["added table traffic"]);
+    assert.equal(db.setting("preserved"), "value");
+    db.close();
     const partial = join(root, "partial.sqlite");
     const old = new DatabaseSync(partial);
     old.exec("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)");

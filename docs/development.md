@@ -82,7 +82,7 @@ image locally, name the commit: `docker build --build-arg RELAY_COMMIT=$(git rev
 ## Conventions
 
 - **One API contract.** Add or change endpoints in `shared/api.ts` first. The server routes and client calls pick up its types.
-- **Database changes** go in `server/db/schema.sql`. Incompatible prerelease schemas fail startup. Preserve any wanted data and use a new empty data directory after a schema change.
+- **Database changes** go in `server/db/schema.sql`, edited in place; there are no migration files. At startup Relay compares the live database with that file, ignoring comments, formatting and column order. It adds new tables, new columns (nullable or with a default) and new or changed indexes, triggers and views in one transaction, and logs what it added. It refuses, without touching the data, any edit that removes or reshapes stored data: a removed table or column, or a changed column or table constraint. `tests/schema-upgrade.test.ts` covers both. Such a change needs a deliberate, one-off plan for the existing data.
 - **Formatting and linting.** Prettier formats with a 120-character line width, and ESLint checks types, promises and React Hooks. Run `npm run check` before you open a pull request. It runs everything CI runs except the browser tests.
 - **Lint exceptions** are rare, and each one says why on the same line: `// eslint-disable-next-line <rule> -- <reason>`.
 - **Authorization** is required on every content and archive route, and every new route needs a test that proves outsiders are refused.

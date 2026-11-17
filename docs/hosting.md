@@ -43,7 +43,7 @@ Every image records the commit it holds, shown under **Admin → Service health 
 
 Before deploying, check that `npm run check` passes on that commit and that `npm audit --omit=dev` reports no vulnerabilities.
 
-Relay checks the database against `server/db/schema.sql` before opening it. If the new version can't open the existing data, it doesn't start, and walctl keeps the previous version running.
+Relay checks the database against `server/db/schema.sql` before opening it. An update that adds to the database (a new table, column or index) is applied when Relay starts, and the log says what was added. An update that would remove or reshape stored data is refused before anything changes, with a message naming the table, so Relay doesn't start and walctl keeps the previous version running. Going back to an earlier version after an update that added to the database is refused the same way, because the earlier version doesn't know the additions.
 
 ## Going back to an earlier version
 
@@ -73,6 +73,21 @@ The image itself sets `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=3090` and `RE
 Everything Relay keeps is in the `data` storage, which walctl keeps across updates and moves. walctl saves a snapshot of it before every deploy and on `walctl backup relay-production`, and `walctl restore relay-production --backup <id> --confirm relay-production` puts one back. These snapshots stay on the Pi's own disk, so they protect against a bad update, not against losing the Pi or its disk.
 
 The storage is marked `resettable: false`: Relay holds real people's files, so walctl's reset that empties the storage leaves it alone. Never use `walctl reset` on `relay-production`. (walctl's narrower "content" reset still removes every transfer, request and file through Relay's own reset command, `server/control-reset.ts`; it's meant for test copies made with `walctl duplicate`.) After a reset, whoever opens Relay first becomes its administrator, so finish setup straight away.
+
+### If the database is damaged
+
+If the disk filled up mid-write, power was lost on a disk that ignores flushes, or the file was copied while Relay was running, Relay may stop at startup with **Relay could not start. Relay's database file … is damaged.** Stored files are separate from the database and are not touched. To recover:
+
+1. Stop Relay and copy the whole data storage somewhere safe before trying anything.
+2. With the `sqlite3` command-line tool, recover what can be read into a new file: `sqlite3 relay.sqlite ".recover" | sqlite3 recovered.sqlite`.
+3. Move the damaged `relay.sqlite` (and any `relay.sqlite-wal` and `relay.sqlite-shm`) aside, rename `recovered.sqlite` to `relay.sqlite`, and start Relay. It checks the recovered file the same way.
+4. Run **Admin → Service health → Check stored files** to confirm every file the database lists is present.
+
+If recovery fails, restore the snapshot walctl took before the last deploy. That loses whatever changed since.
+
+### Resetting content
+
+walctl resets a stopped Relay with `node server/control-reset.ts --content`, which deletes every transfer, file, link, request, delivery and statistic but keeps accounts, devices, invitations, every code ever given out and settings, or `--clone`, which signs everyone out and removes the keys tied to this copy's address before it runs somewhere else. The tables each clears are listed in `server/db/reset.ts`; a new table is kept until someone adds it there.
 
 Run one Relay per data storage, and never point a test copy at production's data. `walctl duplicate relay-production --definition <test.yaml> --copy-data` makes an independent copy with its own secrets.
 

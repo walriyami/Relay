@@ -1,29 +1,38 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectedObjects, planUpgrade, sameSchema, SchemaRefused, schemaObjects } from "./schema.ts";
 
 export type Value = SQLInputValue;
 
+/** Marks a database as Relay's. Schema changes themselves are found by comparing with schema.sql. */
 const SCHEMA_VERSION = 2;
 /** Distinct SQL strings kept prepared; the application uses fewer, so dynamic SQL cannot grow it unboundedly. */
 const STATEMENT_CACHE = 256;
 /** Rows a batched delete removes per transaction. */
 const DELETE_BATCH = 500;
-const schema = readFileSync(join(import.meta.dirname, "schema.sql"), "utf8");
-const schemaQuery =
-  "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name";
-let expectedSchema: string | undefined;
-function schemaDefinition(sqlite: DatabaseSync) {
-  return JSON.stringify(sqlite.prepare(schemaQuery).all());
-}
-function currentSchema() {
-  if (expectedSchema) return expectedSchema;
-  const reference = new DatabaseSync(":memory:");
-  try {
-    reference.exec(schema);
-    return (expectedSchema = schemaDefinition(reference));
-  } finally {
-    reference.close();
+const schemaFile = readFileSync(join(import.meta.dirname, "schema.sql"), "utf8");
+
+/** SQLite's primary result codes for a storage that cannot be trusted or written. */
+const STORAGE_FAILURES = new Set([8 /* READONLY */, 10 /* IOERR */, 11 /* CORRUPT */, 13 /* FULL */, 14, 26]);
+const DAMAGED = new Set([11 /* CORRUPT */, 26 /* NOTADB */]);
+const resultCode = (error: unknown) => Number((error as { errcode?: number })?.errcode) & 0xff;
+const isDamage = (error: unknown) =>
+  DAMAGED.has(resultCode(error)) || /malformed|not a database/i.test(String((error as Error)?.message));
+
+export const DAMAGED_MESSAGE =
+  "Relay's database file (relay.sqlite in the data folder) is damaged, so Relay has stopped rather than risk " +
+  "making it worse. The stored files themselves are kept separately and have not been touched. " +
+  'To recover, follow "If the database is damaged" in docs/hosting.md: stop Relay, keep a copy of the ' +
+  "data folder, rebuild the database with SQLite's .recover command, and start Relay again.";
+
+/** The database file failed SQLite's own checks. `detail` is SQLite's description, for the log. */
+export class DatabaseDamaged extends Error {
+  readonly code = "RELAY_DATABASE_DAMAGED";
+  readonly detail: string;
+  constructor(detail: string) {
+    super(DAMAGED_MESSAGE);
+    this.detail = detail;
   }
 }
 
@@ -43,8 +52,16 @@ export class Database {
   readonly sqlite: DatabaseSync;
   private committed: (() => void)[] | null = null;
   private readonly statements = new Map<string, StatementSync>();
+  /** What opening this database changed to match schema.sql, for the startup log. */
+  upgraded: string[] = [];
+  /**
+   * The last time the database refused a write or read because of its storage (full, read-only,
+   * I/O error, damaged), until a later write succeeds. Health reports Relay unready meanwhile.
+   */
+  storageFailure: { at: number; message: string; damaged: boolean } | null = null;
 
-  constructor(file: string) {
+  /** `schema` replaces schema.sql, for tests of upgrades. */
+  constructor(file: string, { schema = schemaFile }: { schema?: string } = {}) {
     this.sqlite = new DatabaseSync(file, { timeout: 0 });
     try {
       this.sqlite.exec(`
@@ -62,54 +79,64 @@ export class Database {
         throw Object.assign(new Error("Another Relay process is using this data directory."), {
           code: "RELAY_LOCKED",
         });
+      if (isDamage(error)) throw new DatabaseDamaged(String((error as Error).message));
       throw error;
     }
     try {
-      this.initialize();
+      this.initialize(schema);
     } catch (error) {
       this.sqlite.close();
+      if (isDamage(error)) throw new DatabaseDamaged(String((error as Error).message));
       throw error;
     }
   }
 
-  /** This unreleased product supports one schema. Never silently open incompatible or partial data. */
-  private initialize() {
-    this.migrateKnownV1();
-    const version = this.value<number>("PRAGMA user_version");
+  /** Notes storage failures so health can report them; every statement passes through here. */
+  private watch<T>(work: () => T): T {
+    try {
+      return work();
+    } catch (error) {
+      if (STORAGE_FAILURES.has(resultCode(error)) || isDamage(error))
+        this.storageFailure = { at: Date.now(), message: String((error as Error).message), damaged: isDamage(error) };
+      throw error;
+    }
+  }
+
+  /**
+   * Creates an empty database from schema.sql, or brings an existing one up to it (see schema.ts).
+   * A damaged file or a refused change stops here, before anything is written.
+   */
+  private initialize(schema: string) {
+    const version = this.value<number>("PRAGMA user_version")!;
     const empty = !this.get("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1");
     if (empty && version === 0) {
       this.tx(() => this.sqlite.exec(`${schema}\nPRAGMA user_version = ${SCHEMA_VERSION};`));
       return;
     }
-    if (version !== SCHEMA_VERSION || schemaDefinition(this.sqlite) !== currentSchema())
-      throw Object.assign(
-        new Error(
-          "This data directory has an incompatible Relay schema. Relay has not changed your data. " +
-            "Use the matching build to export it, or preserve a backup and start with a new empty directory. " +
-            "Unreleased database formats are not migrated automatically.",
-        ),
-        { code: "RELAY_SCHEMA_INCOMPATIBLE" },
+    if (version < 1 || version > SCHEMA_VERSION)
+      throw new SchemaRefused(
+        version > SCHEMA_VERSION
+          ? "This data folder was last used by a newer version of Relay. Relay has not changed your data. " +
+              "Run that newer version again."
+          : "This data folder holds a database that Relay did not create. Relay has not changed it. " +
+              "Point Relay at its own data folder, or at a new empty one.",
       );
-  }
-
-  /** Back up and migrate only the exact verified v1 schema; unknown formats remain untouched. */
-  private migrateKnownV1() {
-    if (this.value<number>("PRAGMA user_version") !== 1) return;
-    const legacy = new DatabaseSync(":memory:");
-    let matches: boolean;
-    try {
-      legacy.exec(readFileSync(join(import.meta.dirname, "schema.v1.sql"), "utf8"));
-      matches = schemaDefinition(legacy) === schemaDefinition(this.sqlite);
-    } finally {
-      legacy.close();
-    }
-    if (!matches) return;
-    const location = this.sqlite.prepare("PRAGMA database_list").get() as { file: string };
-    if (location.file) this.sqlite.prepare("VACUUM INTO ?").run(`${location.file}.before-sso-${Date.now()}.sqlite`);
+    // A quick structural check of every page: cheap next to a full integrity check, and it finds
+    // the damage a failing SD card or an interrupted copy leaves before Relay builds on it.
+    const problems = this.all<{ quick_check: string }>("PRAGMA quick_check(5)").map((r) => r.quick_check);
+    if (problems.join() !== "ok") throw new DatabaseDamaged(problems.join("; "));
+    const plan = planUpgrade(schemaObjects(this.sqlite), expectedObjects(schema));
+    if (!plan.statements.length && version === SCHEMA_VERSION) return;
     this.tx(() => {
-      const additions = schema.slice(schema.indexOf("-- Optional shared identity links."));
-      this.sqlite.exec(additions + "\nPRAGMA user_version = 2;");
+      for (const statement of plan.statements) this.sqlite.exec(statement);
+      this.sqlite.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      // An addition SQLite accepted but that still differs (a column it rewrote) must not half-apply.
+      if (!sameSchema(schemaObjects(this.sqlite), expectedObjects(schema)))
+        throw new SchemaRefused(
+          `Relay couldn't bring the database up to date (${plan.changes.join(", ")}). Relay has not changed your data.`,
+        );
     });
+    this.upgraded = plan.changes;
   }
 
   /**
@@ -128,13 +155,15 @@ export class Database {
   }
 
   get<T>(sql: string, ...args: Value[]): T | undefined {
-    return this.prepare(sql).get(...args) as T | undefined;
+    return this.watch(() => this.prepare(sql).get(...args) as T | undefined);
   }
   all<T>(sql: string, ...args: Value[]): T[] {
-    return this.prepare(sql).all(...args) as T[];
+    return this.watch(() => this.prepare(sql).all(...args) as T[]);
   }
   run(sql: string, ...args: Value[]): { changes: number } {
-    const result = this.prepare(sql).run(...args);
+    const result = this.watch(() => this.prepare(sql).run(...args));
+    // A write outside a transaction commits by itself.
+    if (!this.sqlite.isTransaction && this.storageFailure && !this.storageFailure.damaged) this.storageFailure = null;
     return { changes: Number(result.changes) };
   }
   /**
@@ -147,21 +176,22 @@ export class Database {
   }
   /** A scalar from the first column of the first row. */
   value<T extends Value>(sql: string, ...args: Value[]): T | undefined {
-    const row = this.prepare(sql).get(...args) as Record<string, T> | undefined;
+    const row = this.watch(() => this.prepare(sql).get(...args) as Record<string, T> | undefined);
     return row ? Object.values(row)[0] : undefined;
   }
 
   /** Runs `fn` atomically. Nested calls join the outer transaction. `fn` must be synchronous. */
   tx<T>(fn: () => T): T {
     if (this.committed) return fn();
-    this.sqlite.exec("BEGIN IMMEDIATE");
+    this.watch(() => this.sqlite.exec("BEGIN IMMEDIATE"));
     const committed: (() => void)[] = [];
     this.committed = committed;
     let result: T;
     try {
       result = fn();
       if (result instanceof Promise) throw new Error("Database.tx callbacks must be synchronous.");
-      this.sqlite.exec("COMMIT");
+      this.watch(() => this.sqlite.exec("COMMIT"));
+      if (this.storageFailure && !this.storageFailure.damaged) this.storageFailure = null;
     } catch (error) {
       // SQLite can already have rolled back after FULL/IOERR. Preserve the original failure.
       if (this.sqlite.isTransaction) this.sqlite.exec("ROLLBACK");
