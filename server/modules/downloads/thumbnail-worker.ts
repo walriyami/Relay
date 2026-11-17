@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { parentPort, workerData } from "node:worker_threads";
 import sharp from "sharp";
+import { ALLOWED_LOADERS, imageSignature } from "./image-signature.ts";
 
 type WorkerInput = {
   source: string;
@@ -25,8 +26,14 @@ async function render() {
   // Reading and writing are separate from decoding so filesystem failures cannot be mistaken
   // for a deterministic invalid-image result from the decoder.
   const buffer = await readFile(data.source);
+  // Only the formats Relay previews, judged by their bytes rather than the name or type the uploader gave.
+  const signature = imageSignature(buffer.subarray(0, 16));
+  if (!signature || (data.format === "heif" && signature !== "heif"))
+    throw Object.assign(new Error("This image format cannot be previewed."), { code: "INVALID_IMAGE" });
   sharp.cache(false);
   sharp.concurrency(1);
+  sharp.block({ operation: ["VipsForeignLoad"] });
+  sharp.unblock({ operation: ALLOWED_LOADERS });
   if (data.format === "image") {
     const image = sharp(buffer, {
       limitInputPixels: data.maxPixels,
