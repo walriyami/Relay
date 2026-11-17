@@ -10,7 +10,7 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { ownedReadable } from "../library/items.ts";
 import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send } from "./serve.ts";
 import { createThumbnails } from "./thumbnails.ts";
-import { zipLayout, type ZipEntry } from "./zip.ts";
+import { validTimeZone, zipLayout, type ZipContent } from "./zip.ts";
 
 type NodeRow = {
   id: string;
@@ -28,16 +28,15 @@ type TreeRow = Omit<NodeRow, "item" | "name" | "mime" | "text"> & {
   crc32: number | null;
 };
 
-// ZIP assembly keeps each entry's path and central-directory record in memory. Bound an archive
-// independently of how many transfers have been appended to an item over its lifetime.
-export const MAX_ZIP_ENTRIES = 20_000;
+// An archive holds every entry of an item, however many transfers added to it; its headers are
+// written as they are sent. Texts are held in memory while it is sent, so their total is bounded.
 export const MAX_ZIP_TEXT_BYTES = LIMITS.manifestBytes;
 
 const NODE = "SELECT id, item, name, kind, size, mime, blob, text FROM nodes WHERE id = ? AND state = 'ready'";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 type Params = { id: string; token: string; node: string };
-type Query = { inline?: string; folder?: string };
+type Query = { inline?: string; folder?: string; tz?: string };
 
 export function registerDownloads(app: FastifyInstance, ctx: Context) {
   const thumbnail = createThumbnails(ctx);
@@ -118,7 +117,6 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
          UNION ALL
          SELECT n.id, tree.path || '/' || n.name, n.kind, n.size, n.blob, n.created
          FROM nodes n JOIN tree ON n.parent = tree.id WHERE n.state = 'ready'
-         LIMIT ${MAX_ZIP_ENTRIES + 1}
        )
        SELECT tree.id, tree.path, tree.kind, tree.size, tree.blob, tree.created, b.crc32
        FROM tree LEFT JOIN blobs b ON b.sha256 = tree.blob
@@ -126,7 +124,6 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
       folderId ?? itemId,
     );
     if (!rows.length) fail(404, "There is nothing here to download.");
-    if (rows.length > MAX_ZIP_ENTRIES) fail(413, "This folder has too many entries to download as a ZIP.");
     const textBytes = rows.reduce((sum, row) => sum + (row.kind === "text" ? row.size : 0), 0);
     if (textBytes > MAX_ZIP_TEXT_BYTES) fail(413, "This folder has too much text to download as a ZIP.");
     // Do not fan out a stat for every file in a large archive; many simultaneous filesystem
@@ -143,14 +140,17 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
             .map((row) => [row.id, row.text ?? ""])
         : [],
     );
-    const entries = rows.map((r): ZipEntry => {
-      const base = { path: r.path, created: r.created };
-      if (r.kind === "folder") return { ...base, kind: "folder" };
-      if (r.kind === "text") return { ...base, kind: "text", data: Buffer.from(texts.get(r.id) ?? "", "utf8") };
-      return { ...base, kind: "file", size: r.size, crc32: r.crc32!, file: ctx.blobs.path(r.blob!) };
-    });
-    const layout = zipLayout(entries);
-    const etag = hash(JSON.stringify(rows.map((r) => [r.id, r.path, r.kind, r.blob, r.size, r.created])));
+    const data = new Map(textRows.map((row) => [row.id, Buffer.from(texts.get(row.id) ?? "", "utf8")]));
+    const content = (index: number): ZipContent => {
+      const row = rows[index];
+      return row.kind === "text" ? { data: data.get(row.id)! } : { file: ctx.blobs.path(row.blob!) };
+    };
+    // MS-DOS times have no time zone, so they are written in the downloader's, as their unzip expects.
+    const timeZone = validTimeZone((req.query as Query).tz);
+    const layout = zipLayout(rows, content, timeZone);
+    const digest = createHash("sha256").update(timeZone ?? "");
+    for (const r of rows) digest.update(JSON.stringify([r.id, r.path, r.kind, r.blob, r.size, r.created]));
+    const etag = digest.digest("hex");
     const name =
       folder?.name ??
       ctx.library.summaries([itemId]).get(itemId)?.name ??

@@ -53,6 +53,8 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Moving an item to Trash pauses its links and codes instead of turning them off for good. Restoring it, or **Undo**, makes them work again, including links an earlier version turned off this way.
 - Deleting forever, emptying Trash and the automatic purge no longer freeze Relay for everyone while files are removed (about 15 ms per file before). Items go at once and their files are deleted in the background in small batches; left-over clean-up from before is worked through right away instead of 100 files a minute, and at startup without holding it up.
 - Opening a share page no longer counts as a download or tells the owner “Someone downloaded”. Only saving a whole file or a ZIP counts.
+- Any item downloads as a ZIP, however many files it has collected. Archives used to stop at 20,000 entries, fewer than one upload may hold, and now use a fraction of the memory.
+- File times in a ZIP are no longer shifted by the time zone. They show as the time the file was added, in the downloader's own zone.
 - Members now see when one of their files is damaged or missing on disk: Files says how many, the item shows a red warning, and the item window marks each damaged file and explains that uploading the same file again repairs it. Admin lists which members are affected and how many files, without naming the files.
 
 ## [1.0.0] - 2026-09-27

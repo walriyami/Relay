@@ -604,12 +604,13 @@ export const urls = {
   nodeContent: (node: M.Id, o: { inline?: boolean } = {}) =>
     `/api/nodes/${node}/content${q({ inline: o.inline ? "1" : undefined })}`,
   nodeThumbnail: (node: M.Id, size: "s" | "l" = "s") => `/api/nodes/${node}/thumbnail${q({ size })}`,
-  itemZip: (item: M.Id, folder?: M.Id) => `/api/items/${item}/zip${q({ folder })}`,
+  /** `tz`, an IANA time zone, sets the zone of the archive's MS-DOS times (UTC otherwise). */
+  itemZip: (item: M.Id, folder?: M.Id, tz?: string) => `/api/items/${item}/zip${q({ folder, tz })}`,
   shareContent: (token: string, node: M.Id, o: { inline?: boolean } = {}) =>
     `/api/s/${token}/nodes/${node}/content${q({ inline: o.inline ? "1" : undefined })}`,
   shareThumbnail: (token: string, node: M.Id, size: "s" | "l" = "s") =>
     `/api/s/${token}/nodes/${node}/thumbnail${q({ size })}`,
-  shareZip: (token: string, folder?: M.Id) => `/api/s/${token}/zip${q({ folder })}`,
+  shareZip: (token: string, folder?: M.Id, tz?: string) => `/api/s/${token}/zip${q({ folder, tz })}`,
   /** tus 1.0 core protocol: HEAD and PATCH. Created by transfers.create / requests.transfer. */
   upload: (upload: M.Id) => `/uploads/${upload}`,
   /** Member event stream. Holding it open keeps `tab`'s transfers alive and the device online. */

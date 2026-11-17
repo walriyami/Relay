@@ -9,16 +9,24 @@ export type ContentSource = {
   thumb(nodeId: string, size: "s" | "l"): string;
   zip(itemId: string, folderId?: string): string;
 };
+/** File times in a ZIP are shown in this zone by most unzip tools, so the archive uses it. */
+const timeZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+};
 export const ownerSource: ContentSource = {
   file: (id, inline) => urls.nodeContent(id, { inline }),
   thumb: (id, size) => urls.nodeThumbnail(id, size),
-  zip: (item, folder) => urls.itemZip(item, folder),
+  zip: (item, folder) => urls.itemZip(item, folder, timeZone()),
 };
 export const shareSource = (token: string): ContentSource => ({
   token,
   file: (id, inline) => urls.shareContent(token, id, { inline }),
   thumb: (id, size) => urls.shareThumbnail(token, id, size),
-  zip: (_item, folder) => urls.shareZip(token, folder),
+  zip: (_item, folder) => urls.shareZip(token, folder, timeZone()),
 });
 
 /** ZIPs stream straight from the server (with resumable ranges); nothing is prepared first. */

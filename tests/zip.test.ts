@@ -6,8 +6,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { api, urls } from "../shared/api.ts";
-import { MAX_ZIP_ENTRIES } from "../server/modules/downloads/index.ts";
-import { zipLayout } from "../server/modules/downloads/zip.ts";
+import { LIMITS } from "../shared/model.ts";
+import { zipLayout, type ZipBody } from "../server/modules/downloads/zip.ts";
 import { type Client, member, patchUpload, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
@@ -19,7 +19,15 @@ function inspect(zip: Buffer) {
     const file = join(dir, "archive.zip");
     writeFileSync(file, zip);
     const script = `
-import hashlib, json, sys, zipfile
+import hashlib, json, struct, sys, zipfile
+def modified(extra):
+    at = 0
+    while at + 4 <= len(extra):
+        tag, size = struct.unpack_from("<HH", extra, at)
+        if tag == 0x5455:
+            return struct.unpack_from("<I", extra, at + 5)[0]
+        at += 4 + size
+    return None
 with zipfile.ZipFile(sys.argv[1]) as z:
     bad = z.testzip()
     infos = z.infolist()
@@ -28,6 +36,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
         "names": [i.filename for i in infos],
         "hashes": {i.filename: hashlib.sha256(z.read(i)).hexdigest() for i in infos if not i.is_dir()},
         "dates": sorted({i.date_time[:3] for i in infos}),
+        "stamps": {i.filename: [list(i.date_time), modified(i.extra)] for i in infos},
     }))`;
     const result = JSON.parse(
       execFileSync("python3", ["-c", script, file], { maxBuffer: 64 * 1024 ** 2 }).toString(),
@@ -36,6 +45,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
       names: string[];
       hashes: Record<string, string>;
       dates: number[][];
+      /** MS-DOS date and time fields, and the extended timestamp's seconds since 1970. */
+      stamps: Record<string, [number[], number | null]>;
     };
     const unzip = spawnSync("unzip", ["-tqq", file]);
     return { ...result, unzip: unzip.error ? null : unzip.status };
@@ -47,62 +58,105 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 const fetchZip = async (client: Client, url: string, headers: Record<string, string> = {}) =>
   client.raw({ method: "GET", url, headers });
 
-test("zipLayout keeps ZIP64 sizes and offsets above 4 GiB", () => {
+/** Bytes start..end of a laid-out archive. */
+async function read(body: ZipBody, start: number, end = body.length - 1) {
+  const parts: Buffer[] = [];
+  for await (const chunk of body.chunks(start, end)) parts.push(chunk);
+  return Buffer.concat(parts);
+}
+
+test("zipLayout keeps ZIP64 sizes and offsets above 4 GiB", async () => {
   const hugeSize = 0x1_0000_0000;
-  const layout = zipLayout([
-    { path: "huge.bin", created: Date.UTC(2026, 0, 1), kind: "file", size: hugeSize, crc32: 0, file: "/dev/null" },
-    { path: "tail.txt", created: Date.UTC(2026, 0, 1), kind: "text", data: Buffer.from("tail") },
-  ]);
+  const tail = Buffer.from("tail");
+  const layout = zipLayout(
+    [
+      { path: "huge.bin", created: Date.UTC(2026, 0, 1), kind: "file", size: hugeSize, crc32: 0 },
+      { path: "tail.txt", created: Date.UTC(2026, 0, 1), kind: "text", size: 0, crc32: null },
+    ],
+    (i) => (i === 0 ? { file: "/dev/null" } : { data: tail }),
+  );
   assert(layout.length > hugeSize);
 
-  const local = layout.segments[0];
-  const tailLocal = layout.segments[2];
-  const tailData = layout.segments[3];
-  const central = layout.segments[4];
-  const end = layout.segments[5];
-  assert("data" in local && "data" in tailLocal && "data" in tailData && "data" in central && "data" in end);
-  assert.equal(local.data.readUInt32LE(0), 0x04034b50);
-  assert.equal(tailLocal.data.readUInt32LE(0), 0x04034b50);
-  assert.equal(central.data.readUInt32LE(0), 0x02014b50);
+  // Only the headers are read; the 4 GiB file in between never is.
+  const end = await read(layout, layout.length - 98);
+  assert.equal(end.readUInt32LE(0), 0x06064b50);
+  assert.equal(end.readBigUInt64LE(24), 2n);
+  const directoryLength = Number(end.readBigUInt64LE(40));
+  const directoryOffset = Number(end.readBigUInt64LE(48));
+  assert.equal(end.readUInt32LE(56), 0x07064b50);
+  assert.equal(end.readBigUInt64LE(64), BigInt(layout.length - 98));
+  assert.equal(directoryOffset + directoryLength, layout.length - 98);
+  const local = await read(layout, 0, 66);
+  assert.equal(local.readUInt32LE(0), 0x04034b50);
+  const tailLocal = await read(layout, local.length + hugeSize, local.length + hugeSize + 66);
+  assert.equal(tailLocal.readUInt32LE(0), 0x04034b50);
+  assert.equal(directoryOffset, local.length + hugeSize + tailLocal.length + tail.length);
+  assert.deepEqual(await read(layout, directoryOffset - 4, directoryOffset - 1), tail);
 
+  const central = await read(layout, directoryOffset, directoryOffset + directoryLength - 1);
   const centralEntry = (at: number) => {
-    assert.equal(central.data.readUInt32LE(at), 0x02014b50);
-    const nameLength = central.data.readUInt16LE(at + 28);
-    const extraLength = central.data.readUInt16LE(at + 30);
-    const name = central.data.subarray(at + 46, at + 46 + nameLength).toString();
+    assert.equal(central.readUInt32LE(at), 0x02014b50);
+    const nameLength = central.readUInt16LE(at + 28);
+    const extraLength = central.readUInt16LE(at + 30);
+    const name = central.subarray(at + 46, at + 46 + nameLength).toString();
     let extraAt = at + 46 + nameLength;
     const extraEnd = extraAt + extraLength;
     let size: bigint | undefined;
     let offset: bigint | undefined;
+    let modified: number | undefined;
     while (extraAt + 4 <= extraEnd) {
-      const id = central.data.readUInt16LE(extraAt);
-      const length = central.data.readUInt16LE(extraAt + 2);
+      const id = central.readUInt16LE(extraAt);
+      const length = central.readUInt16LE(extraAt + 2);
       extraAt += 4;
       if (id === 1) {
-        size = central.data.readBigUInt64LE(extraAt);
-        assert.equal(central.data.readBigUInt64LE(extraAt + 8), size);
-        offset = central.data.readBigUInt64LE(extraAt + 16);
+        size = central.readBigUInt64LE(extraAt);
+        assert.equal(central.readBigUInt64LE(extraAt + 8), size);
+        offset = central.readBigUInt64LE(extraAt + 16);
       }
+      if (id === 0x5455) modified = central.readUInt32LE(extraAt + 1);
       extraAt += length;
     }
-    return { name, size, offset, length: 46 + nameLength + extraLength };
+    return { name, size, offset, modified, length: 46 + nameLength + extraLength };
   };
   const first = centralEntry(0);
   const second = centralEntry(first.length);
+  assert.equal(first.length + second.length, directoryLength);
   assert.equal(first.name, "huge.bin");
   assert.equal(first.size, BigInt(hugeSize));
   assert.equal(first.offset, 0n);
+  assert.equal(first.modified, Date.UTC(2026, 0, 1) / 1000);
   assert.equal(second.name, "tail.txt");
   assert.equal(second.size, 4n);
-  assert.equal(second.offset, BigInt(local.data.length + hugeSize));
+  assert.equal(second.offset, BigInt(local.length + hugeSize));
+});
 
-  const directoryOffset = BigInt(local.data.length + hugeSize + tailLocal.data.length + tailData.data.length);
-  assert.equal(end.data.readUInt32LE(0), 0x06064b50);
-  assert.equal(end.data.readBigUInt64LE(24), 2n);
-  assert.equal(end.data.readBigUInt64LE(40), BigInt(central.data.length));
-  assert.equal(end.data.readBigUInt64LE(48), directoryOffset);
-  assert.equal(end.data.readUInt32LE(56), 0x07064b50);
-  assert.equal(end.data.readBigUInt64LE(64), BigInt(layout.length - end.data.length));
+test("zipLayout: any range of an archive with a large directory is the same slice of the whole", async () => {
+  const texts = Array.from({ length: 50 }, (_, i) => Buffer.from(`text ${i} `.repeat(i)));
+  const entries = Array.from({ length: 3000 }, (_, i) => ({
+    path: `folder ${String(i).padStart(4, "0")} ✓/${i % 60 < 50 ? "note.txt" : "sub"}`,
+    created: Date.UTC(2026, 5, 1) + i * 1000,
+    kind: i % 60 < 50 ? ("text" as const) : ("folder" as const),
+    size: 0,
+    crc32: null,
+  }));
+  const layout = zipLayout(entries, (i) => ({ data: texts[(i % 60) % 50] }));
+  const whole = await read(layout, 0);
+  assert.equal(whole.length, layout.length);
+  const directoryOffset = Number(whole.readBigUInt64LE(whole.length - 98 + 48));
+  assert.ok(whole.length - directoryOffset > 4 * 64 * 1024, "the directory spans several batches");
+  const random = (below: number) => Math.floor(Math.random() * below);
+  const ranges = [
+    [0, 0],
+    [directoryOffset - 1, directoryOffset + 1],
+    [directoryOffset + 65_000, directoryOffset + 200_000],
+    [whole.length - 99, whole.length - 1],
+    ...Array.from({ length: 200 }, () => {
+      const start = random(whole.length);
+      return [start, start + random(Math.min(300_000, whole.length - start))];
+    }),
+  ];
+  for (const [start, end] of ranges)
+    assert.deepEqual(await read(layout, start, end), whole.subarray(start, end + 1), `${start}-${end}`);
 });
 
 test("item ZIP: folders, empty folders, text and Unicode names; valid for zipfile and unzip", async () => {
@@ -247,26 +301,59 @@ test("a ZIP of 2,100 entries", async () => {
   }
 });
 
-test("item ZIP: an accumulated tree above the archive bound is rejected before assembly", async () => {
+test("item ZIP: an item with more entries than one transfer allows still downloads", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "large-zip-owner");
     const { result } = await send(client, [{ path: "seed.txt", data: "seed" }]);
     const owner = instance.ctx.db.value<string>("SELECT owner FROM items WHERE id = ?", result.itemId)!;
+    // Items grow with every transfer added to them, so no per-transfer limit bounds an archive.
+    const folders = LIMITS.foldersPerTransfer + 1;
     instance.ctx.db.run(
       `WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
        INSERT INTO nodes(id, item, owner, parent, name, kind, state, size, mime, blob, text, created, position)
        SELECT lower(hex(randomblob(16))), ?, ?, NULL, printf('folder-%05d', n), 'folder', 'ready', 0, '', NULL, NULL,
          ?, n + 1 FROM seq`,
-      MAX_ZIP_ENTRIES + 1,
+      folders,
       result.itemId,
       owner,
       Date.now(),
     );
 
     const response = await fetchZip(client, urls.itemZip(result.itemId));
-    assert.equal(response.statusCode, 413);
-    assert.match(response.body, /too many entries/);
+    assert.equal(response.statusCode, 200);
+    const zip = inspect(response.rawPayload);
+    assert.equal(zip.bad, null);
+    assert.equal(zip.names.length, folders + 1);
+    assert.equal(zip.hashes["seed.txt"], sha("seed"));
+  } finally {
+    await instance.close();
+  }
+});
+
+test("ZIP times: MS-DOS fields in the downloader's time zone, and an exact UTC timestamp for every entry", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "zone-owner");
+    const { result } = await send(client, [{ path: "photos/a.txt", data: "alpha" }]);
+    const created = Date.UTC(2026, 0, 15, 22, 30, 10);
+    instance.ctx.db.run("UPDATE nodes SET created = ? WHERE item = ?", created, result.itemId);
+    const stamps = async (tz?: string) => {
+      const url = urls.itemZip(result.itemId) + (tz ? `?tz=${encodeURIComponent(tz)}` : "");
+      const response = await fetchZip(client, url);
+      assert.equal(response.statusCode, 200);
+      return { zip: inspect(response.rawPayload), etag: response.headers.etag };
+    };
+    // Muscat is four hours ahead of UTC all year; Los Angeles is eight behind in January.
+    const muscat = await stamps("Asia/Muscat");
+    assert.deepEqual(muscat.zip.stamps["photos/a.txt"], [[2026, 1, 16, 2, 30, 10], created / 1000]);
+    assert.deepEqual(muscat.zip.stamps["photos/"], [[2026, 1, 16, 2, 30, 10], created / 1000]);
+    const angeles = await stamps("America/Los_Angeles");
+    assert.deepEqual(angeles.zip.stamps["photos/a.txt"], [[2026, 1, 15, 14, 30, 10], created / 1000]);
+    assert.notEqual(angeles.etag, muscat.etag, "a resumed download never mixes two zones");
+    // Without a zone Relay knows, the MS-DOS fields are UTC.
+    for (const tz of [undefined, "Not/AZone", "x".repeat(100)])
+      assert.deepEqual((await stamps(tz)).zip.stamps["photos/a.txt"], [[2026, 1, 15, 22, 30, 10], created / 1000]);
   } finally {
     await instance.close();
   }

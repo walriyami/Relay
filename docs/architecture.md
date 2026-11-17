@@ -88,7 +88,7 @@ Administrators can run resumable integrity scans that hash stored files sequenti
 ## Downloads
 
 - Every file download supports HTTP byte ranges.
-- Folders and whole items download as uncompressed ZIP64 archives, streamed on demand. Relay computes each archive's layout from the stored sizes and checksums, so archives support exact byte ranges too, with nothing prepared or cached.
+- Folders and whole items download as uncompressed ZIP64 archives, streamed on demand. Relay computes each archive's layout from the stored sizes and checksums, so archives support exact byte ranges too, with nothing prepared or cached. There is no entry limit: headers are written as they are sent, so an archive costs a few numbers per entry (about 5 MB for 100,000) rather than a copy of its directory. Each entry's MS-DOS time is written in the time zone the browser names with `tz`, since unzip tools read it as local time, and each also carries an exact UTC timestamp (the `0x5455` extra field) for tools that read that.
 - Server thumbnails cover images, including HEIC. PDFs are rendered in the browser with pdf.js from byte ranges, so they preview on phones that can't show PDFs inline.
 
 ## Accounts and access

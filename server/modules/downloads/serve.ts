@@ -5,12 +5,17 @@ import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 export type Segment = { length: number } & ({ file: string } | { data: Buffer });
-export type Body = { segments: Segment[]; length: number; etag: string };
+export type Body = {
+  length: number;
+  etag: string;
+  /** Bytes start..end, inclusive. */
+  chunks(start: number, end: number): AsyncIterable<Buffer>;
+};
 
 export const bodyOf = (segments: Segment[], etag: string): Body => ({
-  segments,
   etag,
   length: segments.reduce((sum, s) => sum + s.length, 0),
+  chunks: (start, end) => slice(segments, start, end),
 });
 
 /** Only passive browser formats are served inline; active documents are shown as plain text. */
@@ -102,7 +107,7 @@ async function* slice(segments: Segment[], start: number, end: number) {
       continue;
     }
     if ("data" in segment) yield segment.data.subarray(from, to + 1);
-    else yield* createReadStream(segment.file, { start: from, end: to });
+    else yield* createReadStream(segment.file, { start: from, end: to }) as AsyncIterable<Buffer>;
   }
 }
 
@@ -134,6 +139,6 @@ export function send(req: FastifyRequest, reply: FastifyReply, body: Body, onSen
   if (range) reply.code(206).header("Content-Range", `bytes ${start}-${end}/${body.length}`);
   reply.header("Content-Length", end - start + 1);
   if (req.method === "HEAD" || end < start) return reply.send();
-  const chunks = slice(body.segments, start, end);
+  const chunks = body.chunks(start, end);
   return reply.send(Readable.from(onSent ? metered(chunks, onSent) : chunks, { objectMode: false }));
 }
