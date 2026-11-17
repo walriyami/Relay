@@ -6,6 +6,7 @@ import { registerHooks } from "node:module";
 import { setMaxListeners } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import type * as Engine from "../client/lib/nearby/engine.ts";
+import type * as Budget from "../client/lib/nearby/budget.ts";
 
 class LocalChannel {
   onopen: (() => void) | null = null;
@@ -515,4 +516,17 @@ test("receive reservations extend atomically and release idempotently", async ()
   assert.equal(budget.reserve({ bad: NaN }), null);
   assert.equal(budget.reserve({ one: Number.MAX_SAFE_INTEGER, two: 1 }), null);
   assert.ok(budget.reserve({ exact: 64 }));
+});
+
+test("a phone or tablet keeps far less of what it receives in memory than a computer", async (t) => {
+  // A copy of its own: the first test loaded one with a smaller limit.
+  const fresh = "../client/lib/nearby/budget.ts?limits";
+  const { ReceiveBudget } = (await import(fresh)) as typeof Budget;
+  assert.equal(new ReceiveBudget().limit, 2 * 1024 ** 3);
+  Object.defineProperty(globalThis, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({ matches: query === "(pointer: coarse)" }),
+  });
+  t.after(() => Reflect.deleteProperty(globalThis, "matchMedia"));
+  assert.equal(new ReceiveBudget().limit, 512 * 1024 ** 2);
 });

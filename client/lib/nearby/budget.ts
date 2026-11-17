@@ -1,5 +1,12 @@
-/** Logical fallback payload bytes owned by this tab, including completed receipts. */
+/**
+ * Received bytes a tab may hold in memory, finished transfers included, where the browser can't
+ * write them to disk (Safari before 26, and some private windows).
+ */
 const MEMORY_BYTES = 2 * 1024 ** 3;
+/** Phones and tablets close a tab holding far less, losing what it received. */
+const TOUCH_MEMORY_BYTES = 512 * 1024 ** 2;
+
+const touch = () => typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
 
 export interface ReceiveReservation {
   /** Bytes it holds now. */
@@ -14,7 +21,7 @@ export class ReceiveBudget {
   private held = 0;
   readonly limit: number;
 
-  constructor(limit = MEMORY_BYTES) {
+  constructor(limit = Math.min(MEMORY_BYTES, touch() ? TOUCH_MEMORY_BYTES : Infinity)) {
     this.limit = limit;
   }
 
