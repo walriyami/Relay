@@ -8,7 +8,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
-import { MAX_QUEUED_RENDITIONS, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
+import { MAX_QUEUED_PER_PERSON, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { imageSignature } from "../server/modules/downloads/image-signature.ts";
 import { Client, member, send, start } from "./support/harness.ts";
 
@@ -229,32 +229,140 @@ test("thumbnails: a webp rendition keyed by blob hash, cached with ETag, removed
   }
 });
 
-test("thumbnails: unique rendition backlog is bounded and rejected with a retry hint", async () => {
+/** Distinct small photos, so each needs its own rendition. */
+const photos = (count: number, offset = 0) =>
+  Promise.all(
+    Array.from({ length: count }, async (_, i) => ({
+      path: `images/${offset + i}.png`,
+      mime: "image/png",
+      data: await sharp({
+        create: {
+          width: 64,
+          height: 64,
+          channels: 3,
+          background: { r: (offset + i) % 256, g: (offset + i) >> 8, b: 9 },
+        },
+      })
+        .png()
+        .toBuffer(),
+    })),
+  );
+
+async function sentPhotos(client: Client, count: number, offset = 0) {
+  const files = await photos(count, offset);
+  const { result } = await send(client, files);
+  const nodes = (await client.call(api.items.get, { params: { id: result.itemId } })).nodes;
+  return nodes
+    .filter((n) => n.kind === "file")
+    .map((n) => ({ ...n, blob: sha(files.find((f) => f.path.endsWith(`/${n.name}`))!.data) }));
+}
+
+/**
+ * Stands in for the render worker: holds each job until the test releases it, then renders it in
+ * this thread, so a test can fill the queue and watch the order jobs start in.
+ */
+function heldWorkers() {
+  const started: { job: { id: number; source: string; target: string; width: number }; worker: EventEmitter }[] = [];
+  const pending: typeof started = [];
+  class HeldWorker extends EventEmitter {
+    postMessage(job: (typeof started)[number]["job"]) {
+      started.push({ job, worker: this });
+      pending.push({ job, worker: this });
+    }
+    unref() {}
+    terminate() {
+      return Promise.resolve(0);
+    }
+  }
+  let rendition: Buffer | undefined;
+  const release = async () => {
+    const next = pending.shift();
+    if (!next) return false;
+    // Any small picture will do: what's tested is the order jobs start in, not the rendering.
+    rendition ??= await sharp({ create: { width: 8, height: 8, channels: 3, background: "#123" } })
+      .webp()
+      .toBuffer();
+    writeFileSync(next.job.target, rendition);
+    next.worker.emit("message", { id: next.job.id, ok: true });
+    return true;
+  };
+  return { HeldWorker, started, release };
+}
+
+test("thumbnails: a photo album opened all at once fills in completely", async () => {
   const instance = await start();
   try {
-    const client = await member(instance, "thumbnail-queue-owner");
-    const files = await Promise.all(
-      Array.from({ length: MAX_QUEUED_RENDITIONS + 2 }, async (_, index) => ({
-        path: `images/${index}.png`,
-        mime: "image/png",
-        data: await sharp({
-          create: { width: 64, height: 64, channels: 3, background: { r: index * 7, g: index * 3, b: index } },
-        })
-          .png()
-          .toBuffer(),
-      })),
-    );
-    const { result } = await send(client, files);
-    const nodes = (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.filter(
-      (node) => node.kind === "file",
-    );
-
+    const client = await member(instance, "album-owner");
+    const nodes = await sentPhotos(client, 60);
+    // A phone asks for every visible photo at once.
     const responses = await Promise.all(nodes.map((node) => get(client, urls.nodeThumbnail(node.id))));
+    assert.deepEqual(
+      responses.map((response) => response.statusCode),
+      nodes.map(() => 200),
+    );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("thumbnails: one person's backlog is bounded with a retry hint, and others still get their turn", async () => {
+  const instance = await start();
+  const original = workerThreads.Worker;
+  const held = heldWorkers();
+  try {
+    const flood = await member(instance, "thumbnail-flood");
+    const other = await member(instance, "thumbnail-other");
+    const many = await sentPhotos(flood, MAX_QUEUED_PER_PERSON + 4);
+    const [mine] = await sentPhotos(other, 1, 5000);
+    workerThreads.Worker = held.HeldWorker as unknown as typeof original;
+    syncBuiltinESMExports();
+
+    const flooding = many.map((node) => get(flood, urls.nodeThumbnail(node.id)));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const asking = get(other, urls.nodeThumbnail(mine.id));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The other person's photo is next in turn, not behind the whole backlog.
+    // Release jobs until every request is answered; the next job may start a moment after one ends.
+    let answered = false;
+    const all = Promise.all([...flooding, asking]).finally(() => (answered = true));
+    while (!answered) if (!(await held.release())) await new Promise((resolve) => setTimeout(resolve, 5));
+    const responses = (await all).slice(0, -1);
+    assert.equal((await asking).statusCode, 200);
+    const order = held.started.map((s) => s.job.source);
+    const theirs = order.findIndex((source) => source.endsWith(mine.blob));
+    assert.ok(theirs !== -1 && theirs <= 3, `the other person's photo started at position ${theirs}`);
+
     const overloaded = responses.filter((response) => response.statusCode === 503);
-    assert.ok(overloaded.length > 0, "excess distinct renditions are rejected rather than queued without bound");
+    assert.ok(overloaded.length >= 2, "a backlog past the limit is turned away rather than kept without bound");
     assert.ok(overloaded.every((response) => response.headers["retry-after"] === "1"));
     assert.ok(responses.every((response) => response.statusCode === 200 || response.statusCode === 503));
   } finally {
+    workerThreads.Worker = original;
+    syncBuiltinESMExports();
+    await instance.close();
+  }
+});
+
+test("thumbnails: render workers are reused instead of started for every photo", async () => {
+  const instance = await start();
+  const original = workerThreads.Worker;
+  let spawned = 0;
+  class CountedWorker extends original {
+    constructor(...args: ConstructorParameters<typeof original>) {
+      super(...args);
+      spawned++;
+    }
+  }
+  try {
+    const client = await member(instance, "thumbnail-reuse");
+    const nodes = await sentPhotos(client, 12);
+    workerThreads.Worker = CountedWorker;
+    syncBuiltinESMExports();
+    for (const node of nodes) assert.equal((await get(client, urls.nodeThumbnail(node.id))).statusCode, 200);
+    assert.equal(spawned, 1);
+  } finally {
+    workerThreads.Worker = original;
+    syncBuiltinESMExports();
     await instance.close();
   }
 });
@@ -337,9 +445,9 @@ for (const concurrent of [false, true]) {
     let began!: () => void;
     const rendering = new Promise<void>((resolve) => (began = resolve));
     class ObservedWorker extends original {
-      constructor(...args: ConstructorParameters<typeof original>) {
-        super(...args);
-        if ((args[1]?.workerData as { format?: string })?.format === "heif") began();
+      postMessage(job: { format?: string }) {
+        if (job.format === "heif") began();
+        super.postMessage(job);
       }
     }
     try {
@@ -388,6 +496,7 @@ test("thumbnail worker outages return 503 with bounded backoff and recover witho
       attempted++;
       queueMicrotask(() => this.emit("error", new Error("temporary worker I/O failure")));
     }
+    postMessage() {}
     terminate() {
       return Promise.resolve(1);
     }

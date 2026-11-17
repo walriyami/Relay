@@ -6,6 +6,7 @@ import { api, headers, urls } from "../shared/api.ts";
 import { NO_LIMITS } from "../shared/model.ts";
 import type { TransferInput } from "../server/context.ts";
 import { ApiError, admin, Client, member, patchUpload, send, start } from "./support/harness.ts";
+import { STALLED_MEMBER_MS } from "../server/modules/transfers/lifecycle.ts";
 
 type Files = TransferInput["files"];
 const body = (client: Client, files: Partial<Files[number]>[], extra: Partial<TransferInput> = {}) => ({
@@ -309,7 +310,7 @@ test("removeUpload skips one unfinished file so the rest can complete", async ()
   }
 });
 
-test("closing a tab abandons its transfers; late requests from it get 409", async () => {
+test("closing a member's tab pauses its transfers; late requests from it get 409", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
@@ -331,20 +332,32 @@ test("closing a tab abandons its transfers; late requests from it get 409", asyn
       payload: Buffer.alloc(10),
     });
     assert.equal(late.statusCode, 409);
-    assert.match(late.json<{ error: string }>().error, /tab was closed/);
-    assert.equal(
-      instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", created.id),
-      undefined,
-      "item and transfer removed",
-    );
-    assert.equal(await status(client.call(api.items.get, { params: { id: created.itemId } })), 404);
-    assert.equal(
-      (await patchUpload(client, created.uploads[0].id, 10, Buffer.alloc(10))).statusCode,
-      404,
-      "without the tab header",
-    );
+    assert.match(late.json<{ error: string }>().error, /page was closed/);
+    assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", created.id), "open", "paused");
+    assert.equal(instance.ctx.db.value("SELECT offset FROM uploads WHERE id = ?", created.uploads[0].id), 10);
     assert.equal(await status(client.call(api.transfers.create, { body: body(client, [{ size: 1 }]) })), 409);
     assert.equal(instance.ctx.transfers.renewTab(client.tab, { kind: "member", userId: "x" } as never), false);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("closing a guest's tab cancels its transfers", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "tia");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Drop", description: "", days: 7, maxBytes: 1000 },
+    });
+    const guest = new Client(instance);
+    await guest.call(api.requests.start, { params: { token: request.token } });
+    const created = await guest.call(api.requests.transfer, {
+      params: { token: request.token },
+      body: body(guest, [{ path: "x.bin", size: 100 }]),
+    });
+    await patchUpload(guest, created.uploads[0].id, 0, Buffer.alloc(10));
+    await guest.call(api.transfers.closeTab, { params: { id: guest.tab } });
+    assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", created.id), undefined);
     assert.deepEqual(readdirSync(join(instance.root, "uploads")), []);
   } finally {
     await instance.close();
@@ -363,7 +376,7 @@ test("closing an unknown tab prevents a later transfer from claiming it", async 
   }
 });
 
-test("an expired tab lease cancels its open transfers in the sweep; PATCHes renew the lease", async () => {
+test("an expired tab lease pauses its transfers until pausedUploadMs; PATCHes renew the lease", async () => {
   const instance = await start({ tabLeaseMs: 300 });
   try {
     const client = await member(instance, "tia");
@@ -373,10 +386,13 @@ test("an expired tab lease cancels its open transfers in the sweep; PATCHes rene
     await patchUpload(client, kept.uploads[0].id, 0, Buffer.alloc(10)); // renews
     const renewed = instance.ctx.db.value<number>("SELECT lease_expires FROM tabs WHERE id = ?", client.tab)!;
     assert.ok(renewed > beforePatch, "PATCH renews the lease");
-    await instance.ctx.transfers.sweep(renewed - 1);
+    // Kept until the paused limit, or a day without bytes arriving, whichever comes first.
+    const touched = instance.ctx.db.value<number>("SELECT max(touched) FROM uploads WHERE transfer = ?", kept.id)!;
+    const until = Math.min(renewed + instance.ctx.config.pausedUploadMs, touched + STALLED_MEMBER_MS);
+    await instance.ctx.transfers.sweep(until - 1);
     assert.equal(instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", kept.id), "open");
 
-    await instance.ctx.transfers.sweep(renewed);
+    await instance.ctx.transfers.sweep(until + 1);
     assert.equal(await status(client.call(api.items.get, { params: { id: kept.itemId } })), 404);
     assert.equal((await patchUpload(client, kept.uploads[0].id, 10, Buffer.alloc(10))).statusCode, 404);
     assert.equal(instance.ctx.transfers.activeUploads(), 0);
@@ -541,10 +557,12 @@ test("guest reservations survive short pauses while their tab is open, but not h
     assert.equal(instance.ctx.db.get("SELECT 1 FROM items WHERE id = ?", transfers[1].itemId), undefined);
     assert.equal(state(memberTransfer.id), "open", "members may pause for up to a day within their lease");
 
-    // A guest whose tab goes away loses their reservation sooner.
+    // A guest whose page goes quiet (a phone that slept) keeps the upload paused for half an hour.
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE principal LIKE 'grant:%'", now + 16 * minute);
     await instance.ctx.transfers.sweep(now + 17 * minute);
-    assert.notEqual(state(transfers[0].id), "open", "lease expiry cancels the guest's last submission");
+    assert.equal(state(transfers[0].id), "open", "a short sleep keeps the guest's upload");
+    await instance.ctx.transfers.sweep(now + 47 * minute);
+    assert.notEqual(state(transfers[0].id), "open", "half an hour gone gives the guest's room back");
     assert.equal(state(memberTransfer.id), "open");
   } finally {
     await instance.close();

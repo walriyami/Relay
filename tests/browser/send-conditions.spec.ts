@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Page, type Route } from "@playwright/test";
 import { api } from "../../shared/api.ts";
 import type { User } from "../../shared/model.ts";
 import { BASE, composer, destinations, fileInput, signedIn, unique } from "./helpers";
@@ -96,38 +96,135 @@ test("a page that couldn't load while offline loads by itself when the connectio
   await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
 });
 
-test("after a reload the drop box says what stopped and offers to choose it again", async ({ page }) => {
+test("after a reload the paused upload is offered back and the same file finishes it", async ({ page }) => {
   await signedIn(page);
-  let release = () => {};
-  const held = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/uploads/**", async (route) => {
-    if (route.request().method() !== "PATCH") return route.continue();
-    await held;
-    await route.abort().catch(() => {});
+  // The first chunk arrives; the rest hang until the page reloads.
+  let patches = 0;
+  let phase: "hold" | "cut" | "pass" = "hold";
+  const held: Route[] = [];
+  await page.route("**/uploads/**", (route) => {
+    if (route.request().method() !== "PATCH" || patches++ === 0 || phase === "pass") return route.continue();
+    if (phase === "cut") return route.abort();
+    held.push(route);
   });
   const name = unique("reloaded");
+  const bytes = Buffer.from(Array.from({ length: 3 * MB }, (_, i) => (i * 7) % 256));
+  const file = { name: `${name}.bin`, mimeType: "application/octet-stream", buffer: bytes };
+  await fileInput(page).setInputFiles([file]);
+  await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+  await expect(composer(page).locator(".transfer")).toContainText(/1 MB of 3 MB/, { timeout: 15_000 });
+  page.on("dialog", (d) => void d.accept());
+  // The reload cuts the held request off before any of it reaches Relay.
+  phase = "cut";
+  await Promise.all(held.map((route) => route.abort().catch(() => {})));
+  await page.reload();
+  phase = "pass";
+
+  const notice = composer(page)
+    .getByRole("status")
+    .filter({ hasText: `${name}.bin is paused` });
+  await expect(notice).toContainText("1 MB of 3 MB uploaded.");
+  await expect(notice).toContainText("what’s uploaded won’t be sent again");
+
+  // A different file under the same name and size is not stitched on.
+  let chooser = page.waitForEvent("filechooser");
+  await notice.getByRole("button", { name: "Choose files" }).click();
+  await (await chooser).setFiles([{ ...file, buffer: Buffer.alloc(3 * MB, 1) }]);
+  await expect(notice).toContainText(`${name}.bin isn’t the same as the one being uploaded`);
+
+  const sent: number[] = [];
+  await page.route("**/uploads/**", (route) => {
+    const r = route.request();
+    if (r.method() === "PATCH") sent.push(Number(r.headers()["upload-offset"]));
+    return route.continue();
+  });
+  chooser = page.waitForEvent("filechooser");
+  await notice.getByRole("button", { name: "Choose more" }).click();
+  await (await chooser).setFiles([file]);
+  await expect(composer(page).locator(".transfer")).toContainText("Saved to Files", { timeout: 15_000 });
+  await expect(notice).toHaveCount(0);
+  // Only what was missing was sent. The request the reload cut off may have left more than the first
+  // chunk on the server, which is kept too.
+  expect(Math.min(...sent)).toBeGreaterThanOrEqual(MB);
+  expect(Math.min(...sent)).toBeLessThan(3 * MB);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  const { items } = await (await page.request.get(`/api/items?q=${name}`)).json();
+  expect(items[0]).toMatchObject({ files: 1, bytes: 3 * MB, uploading: false });
+});
+
+test("waking after the phone slept restarts a stuck upload, and the screen is kept on while sending", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { wakeRequests: number; wakeReleases: number };
+    w.wakeRequests = 0;
+    w.wakeReleases = 0;
+    Object.defineProperty(navigator, "wakeLock", {
+      value: {
+        request: () => {
+          w.wakeRequests++;
+          const sentinel = new EventTarget() as EventTarget & { release: () => Promise<void> };
+          sentinel.release = () => Promise.resolve(void w.wakeReleases++);
+          return Promise.resolve(sentinel);
+        },
+      },
+    });
+  });
+  await signedIn(page);
+  // The connection died while the phone slept: the request in flight never answers.
+  let stuck = true;
+  await page.route("**/uploads/**", async (route) => {
+    if (route.request().method() === "PATCH" && stuck) return new Promise(() => {});
+    return route.continue();
+  });
+  const name = unique("slept");
+  await fileInput(page).setInputFiles([binary(`${name}.bin`, 2 * MB)]);
+  await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+  await expect(composer(page).locator(".transfer").getByRole("button", { name: "Pause" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { wakeRequests: number }).wakeRequests)).toBe(1);
+
+  stuck = false;
+  await page.evaluate(() => {
+    const hidden = (value: boolean) => {
+      Object.defineProperty(document, "hidden", { value, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    hidden(true);
+    // A minute passes asleep.
+    const now = Date.now.bind(Date);
+    Date.now = () => now() + 60_000;
+    hidden(false);
+  });
+  await expect(composer(page).locator(".transfer")).toContainText("Saved to Files", { timeout: 15_000 });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { wakeReleases: number }).wakeReleases)).toBe(1);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+test("a paused upload can be stopped from the notice", async ({ page }) => {
+  await signedIn(page);
+  await page.route("**/uploads/**", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    await new Promise(() => {});
+  });
+  const name = unique("stopped");
   await fileInput(page).setInputFiles([binary(`${name}.bin`, 2 * MB)]);
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   await expect(composer(page).locator(".transfer").getByRole("button", { name: "Cancel" })).toBeVisible();
   page.on("dialog", (d) => void d.accept());
-  await page.reload();
-
-  const notice = composer(page).getByRole("status").filter({ hasText: "stopped" });
-  await expect(notice).toContainText(`Your upload of ${name}.bin stopped when the page reloaded.`);
-  await expect(notice).toContainText("Choose it again to send it.");
-  // Nothing finished, so nothing is claimed to be in Files.
-  await expect(notice).not.toContainText("in Files");
-  const chooser = page.waitForEvent("filechooser");
-  await notice.getByRole("button", { name: "Choose again" }).click();
-  await chooser;
-  await notice.getByRole("button", { name: "Dismiss" }).click();
-  await expect(notice).toHaveCount(0);
-  release();
   await page.unrouteAll({ behavior: "ignoreErrors" });
-  // Said once: the next load starts clean.
+  await page.reload();
+  const notice = composer(page)
+    .getByRole("status")
+    .filter({ hasText: `${name}.bin is paused` });
+  await expect(notice).toBeVisible();
+  // Nothing finished, so nothing is claimed to be in Files.
+  await expect(notice.getByRole("button", { name: "View in Files" })).toHaveCount(0);
+  await notice.getByRole("button", { name: "Stop upload" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Stop upload" }).click();
+  await expect(notice).toHaveCount(0);
   await page.reload();
   await expect(composer(page)).toBeVisible();
-  await expect(composer(page).getByText(/stopped when/)).toHaveCount(0);
+  await expect(composer(page).getByText(`${name}.bin is paused`)).toHaveCount(0);
 });
 
 test("destinations are off when the selection doesn't fit the storage limit", async ({ page, browser }) => {

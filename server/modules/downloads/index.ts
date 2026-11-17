@@ -40,6 +40,7 @@ type Query = { inline?: string; folder?: string; tz?: string };
 
 export function registerDownloads(app: FastifyInstance, ctx: Context) {
   const thumbnail = createThumbnails(ctx);
+  app.addHook("onClose", () => thumbnail.close());
 
   const signedIn = (req: FastifyRequest) => currentMember(ctx, req) ?? fail(401, "Sign in to continue.");
   const ownedItem = (req: FastifyRequest, id: string) => ownedReadable(ctx, signedIn(req).userId, id);

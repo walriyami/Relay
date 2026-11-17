@@ -269,7 +269,10 @@ export class Receivers {
       ensureTransferAvailability(this.ctx, upload);
       if (upload.offset !== offset) return { conflict: upload.offset };
       authorize();
-      return { offset: await this.write(upload, receiver, body, signal, authorize) };
+      // Bytes that arrived before the connection dropped (or a retry replaced it) are kept.
+      const keepPartial = () =>
+        abort.signal.aborted && !this.closing.signal.aborted && !receiver.cancelled.signal.aborted;
+      return { offset: await this.write(upload, receiver, body, signal, authorize, keepPartial) };
     } finally {
       body.off("close", disconnected);
       if (receiver.inflight === inflight) receiver.inflight = null;
@@ -285,6 +288,7 @@ export class Receivers {
     body: Readable,
     signal: AbortSignal,
     authorize: () => void,
+    keepPartial: () => boolean = () => false,
   ): Promise<number> {
     const hash = receiver.hash.copy();
     let crc = receiver.crc;
@@ -322,11 +326,72 @@ export class Receivers {
       this.checkCurrent(upload.id, receiver, signal);
       authorize();
     } catch (error) {
+      // A phone that lost its connection mid-request resends only what never arrived: the bytes
+      // already written are synced and committed as if the request had ended there.
+      if (position > upload.offset && keepPartial()) {
+        let kept: Stats | null = null;
+        try {
+          await file.truncate(position);
+          await file.sync();
+          kept = await file.stat();
+        } catch {
+          await file.truncate(upload.offset).catch(() => {});
+        }
+        await file.close();
+        // Not committed (cancelled, or access ended meanwhile): the next request rehashes the prefix.
+        if (kept)
+          await this.commit(upload, receiver, position, hash, crc, kept, authorize).catch(() => {
+            receiver.rebuildRequired = true;
+          });
+        throw error;
+      }
       await file.truncate(upload.offset).catch(() => {});
-      throw error;
-    } finally {
       await file.close();
+      throw error;
     }
+    await file.close();
+    if (position < upload.size) {
+      await this.commit(upload, receiver, position, hash, crc, source, authorize);
+      return position;
+    }
+    // The whole file arrived. Publishing commits its offset with everything else in one transaction,
+    // so a small file costs one commit fewer.
+    const previous = { hash: receiver.hash, crc: receiver.crc, source: receiver.source };
+    Object.assign(receiver, { hash, crc, source });
+    try {
+      await this.publishOnce(upload.id, receiver, authorize);
+    } catch (error) {
+      // The bytes are synced and arrived while the request was allowed, so they are recorded as if
+      // publishing had never been tried. Whatever refused it (a suspended owner, storage that changed)
+      // is checked again when the file is next settled.
+      let recorded = false;
+      try {
+        const current = uploadRow(this.ctx, upload.id);
+        if (current && isActive(current) && current.offset === upload.offset) {
+          this.ctx.db.run("UPDATE uploads SET offset = ?, touched = ? WHERE id = ?", position, Date.now(), upload.id);
+          recorded = true;
+          this.counted(upload, position - upload.offset);
+        }
+      } catch {
+        // Unrecorded, the bytes past the old offset are simply received again.
+      }
+      if (!recorded) Object.assign(receiver, previous);
+      throw error;
+    }
+    this.counted(upload, position - upload.offset);
+    return position;
+  }
+
+  /** Records `position` as the upload's offset, once its bytes are on disk. */
+  private async commit(
+    upload: UploadRow,
+    receiver: Receiver,
+    position: number,
+    hash: Hash,
+    crc: number,
+    source: Stats,
+    authorize: () => void,
+  ) {
     // Commit only if nothing cancelled or superseded this upload while the bytes were arriving.
     const current = uploadRow(this.ctx, upload.id);
     if (!current || !isActive(current) || this.receivers.get(upload.id) !== receiver)
@@ -360,13 +425,16 @@ export class Receivers {
     receiver.hash = hash;
     receiver.crc = crc;
     receiver.source = source;
-    this.count(position - upload.offset);
+    this.counted(upload, position - upload.offset);
+  }
+
+  /** Counts bytes once their offset is committed. */
+  private counted(upload: UploadRow, bytes: number) {
+    this.count(bytes);
     // Bytes that came through someone's request link are what the owner received; the rest they sent.
     this.ctx.usage.add(upload.owner, {
-      [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: position - upload.offset,
+      [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: bytes,
     });
-    if (position === upload.size) await this.publishOnce(upload.id, receiver, authorize);
-    return position;
   }
 
   /**
@@ -443,7 +511,7 @@ export class Receivers {
     this.receivers.delete(upload.id);
     unlinkIfPresent(file);
     this.ctx.usage.add(upload.owner, { files: 1 });
-    publishItemChange(this.ctx, upload.owner, upload.item);
+    publishItemChange(this.ctx, upload.owner, upload.item, { sharedSpace: false });
   }
 
   /**
@@ -588,6 +656,30 @@ export class Receivers {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Up to 4 KiB from the start of a paused upload's committed bytes and up to 4 KiB ending at its
+   * committed offset, so a page continuing it can check it chose the same file. Undefined if the part
+   * is missing or shorter than its offset.
+   */
+  async sample(id: string, offset: number): Promise<{ head: string; tail: string } | undefined> {
+    const SAMPLE = 4096;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(this.partPath(id), "r");
+      const head = Buffer.alloc(Math.min(SAMPLE, offset));
+      const tail = Buffer.alloc(Math.min(SAMPLE, offset));
+      const a = await handle.read(head, 0, head.length, 0);
+      const b = await handle.read(tail, 0, tail.length, offset - tail.length);
+      if (a.bytesRead !== head.length || b.bytesRead !== tail.length) return undefined;
+      return { head: head.toString("base64"), tail: tail.toString("base64") };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    } finally {
+      await handle?.close();
     }
   }
 

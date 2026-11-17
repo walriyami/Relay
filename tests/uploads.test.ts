@@ -185,11 +185,17 @@ test("a new PATCH supersedes a stalled one for the same upload", async () => {
     stalled.write(data.subarray(0, 100_000));
     await new Promise((resolve) => setTimeout(resolve, 200));
 
+    // The retry cuts the stalled request off. What that request already wrote is kept, so the
+    // retry learns the server's offset and sends only the rest.
     const retry = await patchUpload(client, upload, 0, data);
-    assert.equal(retry.statusCode, 204);
-    assert.equal(retry.headers["upload-offset"], String(data.length));
+    assert.equal(retry.statusCode, 409);
     await ended;
     assert.equal(stalledError, true, "the stalled request was cut off");
+    const offset = Number(retry.headers["upload-offset"]);
+    assert.equal(offset, 100_000);
+    const rest = await patchUpload(client, upload, offset, data.subarray(offset));
+    assert.equal(rest.statusCode, 204);
+    assert.equal(rest.headers["upload-offset"], String(data.length));
 
     const result = await client.call(api.transfers.complete, {
       params: { id: created.id },
@@ -688,6 +694,32 @@ test("zero-byte files are complete as soon as the transfer is created", async ()
     assert.equal(content.rawPayload.length, 0);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM blobs"), 1, "one shared empty blob");
     assert.deepEqual(readdirSync(join(instance.root, "uploads")), []);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a file that arrives in one request is published with a single commit of its offset", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "tia");
+    const data = randomBytes(4096);
+    const { upload, created } = await createOne(client, data);
+    // Each commit is a synchronous disk sync on the server, so a small file pays for every one.
+    instance.ctx.db.sqlite.exec(`
+      CREATE TEMP TABLE offset_writes (offset INTEGER, completed INTEGER);
+      CREATE TEMP TRIGGER count_offset AFTER UPDATE OF offset ON uploads
+      BEGIN INSERT INTO offset_writes VALUES (NEW.offset, NEW.completed); END`);
+    assert.equal((await patchUpload(client, upload, 0, data)).statusCode, 204);
+    const writes = instance.ctx.db.all<{ offset: number; completed: number | null }>("SELECT * FROM offset_writes");
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].offset, data.length);
+    assert.ok(writes[0].completed);
+    const result = await client.call(api.transfers.complete, {
+      params: { id: created.id },
+      body: { destination: { kind: "save" } },
+    });
+    assert.equal(sha(await download(client, result.itemId)), sha(data));
   } finally {
     await instance.close();
   }

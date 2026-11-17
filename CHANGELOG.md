@@ -21,9 +21,17 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 - `RELAY_TRUST_PROXY` accepts host names, such as a tunnel connector's container name, which Relay follows as Docker readdresses it.
 - The web app's text files are Brotli- and gzip-compressed at build time and served precompressed.
+- Uploads survive a sleeping phone and a reloaded page. A member's unfinished upload is paused for 24 hours instead of being cancelled after five quiet minutes. The page picks it up again when the phone wakes. After a reload, **Send** offers it back, and choosing the same files sends only what's missing. The screen is kept on while sending, where the browser allows it.
 
 ### Changed
 
+- Restarting or updating Relay takes seconds. Requests still running get five seconds, then their connections close; downloads and uploads carry on afterwards. Before, one slow download could keep the site down for two minutes.
+- An upload whose connection drops partway through a chunk keeps what arrived, and the retry sends only the rest.
+- The interface font is cached for a year instead of being checked again on every page load.
+- Folders of many small files upload faster: each file that arrives in one request is saved with one disk-synced database write fewer.
+- Opening a large photo album shows every picture. Previews used to fail for good when more than about 30 were asked for at once. Now they wait their turn, one person's album can't hold up anyone else's, and a preview the server is too busy for is asked for again. Previews also render about three times faster, because the render workers are reused instead of started for each photo.
+- Opening Relay reads your account once instead of twice, and switching back to it (unlocking a phone, returning to the tab) no longer reloads everything on screen. Relay reloads only what changed while you were away.
+- While someone sends a folder, other members' open pages no longer reload their account details after every file. Only the sender and administrators hear about each finished file.
 - The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
 - Editing `server/db/schema.sql` no longer locks Relay out of existing data. At startup Relay adds new tables, columns and indexes itself, ignores comments and formatting, and refuses only an edit that would remove or reshape stored data, with a message naming it. The one-off upgrade from the first schema is gone.
 - A damaged database stops Relay at startup with a plain explanation and recovery steps instead of a stack trace. Startup errors Relay understands are printed the same way.

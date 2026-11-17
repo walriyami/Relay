@@ -17,12 +17,14 @@ import {
   displayName,
   setCsrf,
   setPrincipal,
+  stamped,
+  type ChangeStamp,
   type Me,
   type SessionEnded,
   type SetupState,
 } from "../api";
 import { navigate, useRoute, useSearch } from "../lib/router";
-import { connectLive, disconnectLive, onChange } from "../lib/live";
+import { connectLive, disconnectLive, onChangeSince } from "../lib/live";
 import { startLink, stopLink } from "../lib/local/link";
 import { isActive, nearbySnapshot } from "../lib/nearby/engine";
 import { startPresence, stopPresence } from "../lib/nearby/presence";
@@ -178,8 +180,12 @@ function Private() {
   const [notice, setNotice] = useState("");
   const previousPrincipal = useRef<string | null>(null);
   const sessionRevision = useRef(0);
-  const signedIn = useCallback((data: Me) => {
+  // Where changes stood when the session shown was read, or will once the read under way is;
+  // unknown after a sign-in's own answer.
+  const sessionRead = useRef<Promise<ChangeStamp | null>>(Promise.resolve(null));
+  const signedIn = useCallback((data: Me, read: ChangeStamp | null = null) => {
     sessionRevision.current++;
+    sessionRead.current = Promise.resolve(read);
     const principal = `${data.user.id}:${data.device.id}`;
     if (previousPrincipal.current && previousPrincipal.current !== principal) {
       // Another sign-in in this tab starts clean: it never inherits someone else's work or draft.
@@ -211,7 +217,7 @@ function Private() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Only the server saying "no session" means signed out; an outage keeps the cookie and retries.
-    const session = call(api.session.get).catch((error) => {
+    const session = stamped(api.session.get).catch((error) => {
       if (error instanceof ApiError && error.status === 401) return null;
       throw error;
     });
@@ -221,7 +227,7 @@ function Private() {
         setUnreachable(false);
         setSetup(status.state);
         setSetupProof({ keyRequired: status.keyRequired, sharedSignIn: status.sharedSignIn });
-        if (data) signedIn(data);
+        if (data) signedIn(data.data, data.changes);
         else setMe(null);
       })
       .catch(() => {
@@ -255,8 +261,14 @@ function Private() {
       coalesce(
         async () => {
           const revision = ++sessionRevision.current;
-          const data = await call(api.session.get);
-          if (revision === sessionRevision.current) signedIn(data);
+          const loading = stamped(api.session.get);
+          const before = sessionRead.current;
+          sessionRead.current = loading.then(
+            (loaded) => loaded.changes,
+            () => before,
+          );
+          const { data, changes } = await loading;
+          if (revision === sessionRevision.current) signedIn(data, changes);
         },
         { delay: 150, interval: 1000 },
       ),
@@ -269,7 +281,11 @@ function Private() {
     // This device is present for Nearby while Relay is open, whichever page shows.
     startPresence(me.device.id);
     // Preferences and usage can change from another device.
-    const offAccount = onChange("account", () => void sessionRefresh.request());
+    const offAccount = onChangeSince(
+      "account",
+      () => sessionRead.current,
+      () => void sessionRefresh.request(),
+    );
     // From a 401 on any request, or from the event stream with the server's reason.
     // Only the first report counts: requests failing right after the stream's reason must not replace it.
     let expired = false;

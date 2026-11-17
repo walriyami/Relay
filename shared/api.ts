@@ -119,6 +119,8 @@ const linkSettings = {
 };
 
 const nearbyTab = z.string().check(z.regex(/^[A-Za-z0-9_-]{16,64}$/));
+/** A page load's id (`X-Relay-Tab`). */
+const transferTab = nearbyTab;
 const nearbySession = z.string().check(z.regex(/^[A-Za-z0-9_-]{8,64}$/));
 const sdp = text(1, NEARBY.sdpBytes);
 const nearbySignalBody = z.object({
@@ -143,8 +145,8 @@ export const transferInput = z.object({
    * and its links show the additions once they finish. `name` and `retentionDays` are then ignored.
    */
   item: z.optional(id),
-  /** The page load that owns the transfer. Closing that tab abandons it. */
-  tab: z.string().check(z.regex(/^[A-Za-z0-9_-]{16,64}$/)),
+  /** The page load sending the transfer. Once no page sends it, it is paused (see `transfers.paused`). */
+  tab: transferTab,
   /** Null derives the name from the contents. */
   name: z.nullable(name),
   retentionDays: z.optional(retentionDays),
@@ -392,8 +394,15 @@ export const api = {
     cancel: endpoint<M.TransferCancelled>()("POST", "/api/transfers/:id/cancel", { auth: "any" }),
     /** Skips one unfinished file of a transfer. */
     removeUpload: ok("DELETE", "/api/uploads/:id", { auth: "any" }),
-    /** A page is going away: abandon its unfinished transfers now and refuse its late requests. */
+    /**
+     * A page is going away: refuse its late requests. A member's unfinished transfers stay paused
+     * (see `paused`); a guest's are abandoned.
+     */
     closeTab: ok("POST", "/api/tabs/:id/close", { auth: "any" }),
+    /** The member's transfers no open page is sending, most recent first. */
+    paused: endpoint<M.PausedTransfer[]>()("GET", "/api/transfers/paused", { auth: "member" }),
+    /** This page (`tab`) continues a paused transfer; the page that started it is closed. */
+    resume: ok("POST", "/api/transfers/:id/resume", { auth: "member", body: z.object({ tab: transferTab }) }),
   },
 
   links: {
@@ -653,4 +662,13 @@ export const headers = {
   tab: "X-Relay-Tab",
   /** On every API response: where changes stood before the server began reading for it. */
   changes: "X-Relay-Changes",
+} as const;
+/** Errors about a transfer as a whole, which a page must tell apart from a single file's failure. */
+export const transferErrors = {
+  /** The page sending it was closed, so it can no longer send it (409). */
+  tabClosed: "This page was closed. Reload it to continue.",
+  /** Another page took over the paused upload (409). */
+  moved: "This upload is continuing on another page.",
+  /** It was cancelled: on purpose, or after staying paused too long (410). */
+  cancelled: "This upload was stopped, and its unfinished files were removed.",
 } as const;

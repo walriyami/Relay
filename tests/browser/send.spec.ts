@@ -276,7 +276,7 @@ test("typed text is kept when the tab reloads, and is gone once sent", async ({ 
   await expect(box).toHaveValue("");
 });
 
-test("closing or reloading a tab abandons its uploads; nothing offers to resume", async ({ page }) => {
+test("reloading a tab pauses its uploads: offered back, never half-saved to Files", async ({ page }) => {
   // Hold the upload's data in the browser so it is unfinished when the tab reloads.
   let release = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -285,7 +285,7 @@ test("closing or reloading a tab abandons its uploads; nothing offers to resume"
     await held;
     await route.abort().catch(() => {});
   });
-  const name = unique("abandon");
+  const name = unique("paused");
   await fileInput(page).setInputFiles([
     { name: `${name}.bin`, mimeType: "application/octet-stream", buffer: Buffer.alloc(2 * 1024 * 1024, 2) },
   ]);
@@ -298,11 +298,16 @@ test("closing or reloading a tab abandons its uploads; nothing offers to resume"
   await page.reload();
   await expect(composer(page)).toBeVisible();
   await expect(page.locator(".transfer")).toHaveCount(0);
-  await expect(page.getByText(/unfinished|resume/i)).toHaveCount(0);
-  await expect
-    .poll(async () => (await (await page.request.get(`/api/items?q=${name}`)).json()).items.length, { timeout: 20_000 })
-    .toBe(0);
+  const notice = composer(page)
+    .getByRole("status")
+    .filter({ hasText: `${name}.bin is paused` });
+  await expect(notice).toBeVisible();
+  // Nothing of it is in Files until it finishes.
+  expect((await (await page.request.get(`/api/items?q=${name}`)).json()).items).toHaveLength(0);
   release();
+  await notice.getByRole("button", { name: "Stop upload" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Stop upload" }).click();
+  await expect(notice).toHaveCount(0);
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 

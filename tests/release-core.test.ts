@@ -169,14 +169,14 @@ test("app caches only fingerprinted assets and does not substitute HTML for miss
     await mkdir(join(root, "dist", "assets"), { recursive: true });
     await writeFile(join(root, "dist", "index.html"), "<html>Relay test fixture</html>");
     await writeFile(join(root, "dist", "assets", "index-Abc12345.js"), "export const value=1;");
+    // Fonts are bundled from client/styles, so their names carry a hash too (which may end in "-").
+    await writeFile(join(root, "dist", "assets", "albert-400-CnBMewH-.woff2"), "wOF2");
     await writeFile(join(root, "dist", "favicon.svg"), "<svg/>");
     process.chdir(root);
     instance = await start({ serveClient: true });
     const request = (url: string) => instance!.app.inject({ url, headers: { host: "relay.test" } });
-    assert.equal(
-      (await request("/assets/index-Abc12345.js")).headers["cache-control"],
-      "public, max-age=31536000, immutable",
-    );
+    for (const url of ["/assets/index-Abc12345.js", "/assets/albert-400-CnBMewH-.woff2"])
+      assert.equal((await request(url)).headers["cache-control"], "public, max-age=31536000, immutable", url);
     for (const url of ["/", "/settings", "/favicon.svg"])
       assert.equal((await request(url)).headers["cache-control"], "no-cache", url);
     assert.equal((await request("/assets/missing.js")).statusCode, 404);

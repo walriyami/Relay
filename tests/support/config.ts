@@ -13,6 +13,7 @@ export function testConfig(root: string, overrides: Partial<Config> = {}): Confi
     trustProxy: ["127.0.0.1"],
     setupKey: false,
     tabLeaseMs: 5 * 60_000,
+    pausedUploadMs: 24 * 60 * 60_000,
     sweepMs: 3_600_000,
     logger: false,
     serveClient: false,

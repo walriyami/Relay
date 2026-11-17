@@ -5,13 +5,20 @@ import { ensureTransferAvailability, settleTransferAvailability } from "./availa
 import { headers } from "../../../shared/api.ts";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
+import type { Auth } from "../../context.ts";
 import { currentAuth, currentPrincipalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
-import { TAB_CLOSED } from "./create.ts";
+import { CANCELLED, MOVED, TAB_CLOSED } from "./create.ts";
 import { uploadRow, type Receivers } from "./receivers.ts";
 
 const TUS_VERSION = "1.0.0";
 const TUS_TYPE = "application/offset+octet-stream";
+
+/** The member or guest grant among `auth`'s credentials that owns `key`. */
+const principalIn = (auth: Auth, key: string) =>
+  auth.member && key === `user:${auth.member.userId}`
+    ? auth.member
+    : (auth.grants.find((g) => key === `grant:${g.tokenHash}`) ?? null);
 
 export function registerTus(app: FastifyInstance, ctx: Context, receivers: Receivers) {
   // Leave the body unread: PATCH streams it straight to disk.
@@ -28,7 +35,7 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
     if (upload) settleTransferAvailability(ctx, upload);
     const auth = currentAuth(ctx, req);
     if (!auth.member && !auth.grants.length) fail(401, "Sign in to continue.");
-    const principal = upload ? currentPrincipalFor(ctx, req, upload.principal) : null;
+    const principal = upload ? principalIn(auth, upload.principal) : null;
     if (!upload || !principal) {
       const tab = req.headers[headers.tab.toLowerCase()];
       const row =
@@ -39,8 +46,11 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
       return notFound("That upload");
     }
     ensureTransferAvailability(ctx, upload);
+    // A page that names itself must still be the one sending: another may have continued the upload.
+    const tab = req.headers[headers.tab.toLowerCase()];
+    if (typeof tab === "string" && tab !== upload.tab && upload.state === "open") fail(409, MOVED);
     if (!ctx.transfers.renewTab(upload.tab, principal)) fail(409, TAB_CLOSED);
-    if (upload.state !== "open" && upload.state !== "complete") fail(410, "This transfer was cancelled.");
+    if (upload.state !== "open" && upload.state !== "complete") fail(410, CANCELLED);
     if (upload.completed === null && upload.node === null) fail(410, "This file was removed from its transfer.");
     return upload;
   };

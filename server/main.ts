@@ -2,6 +2,7 @@ import { buildApp } from "./app.ts";
 import { configFromEnv } from "./config.ts";
 import { setupStateOf } from "./modules/setup/index.ts";
 import { ensureSetupKey, setupKeyPath } from "./modules/setup/setup-key.ts";
+import { shutdown } from "./shutdown.ts";
 
 /**
  * Problems the owner can act on (a damaged or refused database, a second copy of Relay on the same
@@ -43,7 +44,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, () => {
     if (stopping) return;
     stopping = true;
-    void app.close().then(
+    void shutdown(app).then(
       () => process.exit(0),
       (error: unknown) => {
         app.log.error({ err: error }, "shutdown failed");

@@ -36,8 +36,13 @@ export type Config = {
    * kept in <root>/setup.key until setup. On unless RELAY_SETUP_KEY=false (a machine only you can reach).
    */
   setupKey: boolean;
-  /** How long a tab's transfers survive without its event stream. */
+  /** How long a tab counts as open without its event stream or an upload request. */
   tabLeaseMs: number;
+  /**
+   * How long a transfer's unfinished uploads are kept once no page is sending them (the phone slept,
+   * the page reloaded or closed), so they can continue. They count against capacity meanwhile.
+   */
+  pausedUploadMs: number;
   /** Interval of the maintenance sweep. */
   sweepMs: number;
   logger: boolean;
@@ -84,6 +89,7 @@ export function configFromEnv(env = process.env): Config {
     clientIpHeader: clientIpHeader(env.RELAY_CLIENT_IP_HEADER),
     setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true),
     tabLeaseMs: 5 * 60_000,
+    pausedUploadMs: 24 * 60 * 60_000,
     sweepMs: 60_000,
     logger: true,
     serveClient: true,

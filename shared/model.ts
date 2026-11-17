@@ -337,6 +337,35 @@ export type TransferCreated = {
 };
 export type TransferResult = { itemId: Id; link: Link | null; delivery: Delivery | null };
 export type TransferCancelled = { saved: number; removed: boolean };
+/**
+ * A member's transfer no open page is sending (its page slept, reloaded or closed). Choosing the
+ * same files again continues it; Relay removes it at `keptUntil`.
+ */
+export type PausedTransfer = {
+  id: Id;
+  itemId: Id;
+  /** The item's name, typed or automatic. */
+  name: string;
+  /** Files were being added to an item that existed before. */
+  adding: boolean;
+  /** The transfer carried text, already saved. */
+  text: boolean;
+  keptUntil: Time;
+  files: {
+    upload: Id;
+    /** Where the file goes in the item. */
+    path: string;
+    size: number;
+    /** Bytes Relay holds. */
+    offset: number;
+    done: boolean;
+    /**
+     * Up to 4 KiB from the start of what Relay holds and up to 4 KiB ending at `offset` (base64),
+     * so a page can check a chosen file really is the one that was being sent.
+     */
+    sample?: { head: string; tail: string };
+  }[];
+};
 
 /** What an invitation link shows before the account is made. Anything unusable is a 410. */
 export type InvitationCheck = { expires: Time; invitedBy: string };

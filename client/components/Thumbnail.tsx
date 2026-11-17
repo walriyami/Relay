@@ -118,6 +118,9 @@ export function Thumbnail({
   const box = useRef<HTMLDivElement>(null);
   const visible = useInView(box);
   const [failed, setFailed] = useState(false);
+  // A busy server turns a preview away for a moment: wait, then ask again, a few times.
+  const [retries, setRetries] = useState(0);
+  const [pausing, setPausing] = useState(false);
   const [data, setData] = useState<string>("");
   const [local, setLocal] = useState("");
   const type =
@@ -129,8 +132,22 @@ export function Thumbnail({
 
   useEffect(() => {
     setFailed(false);
+    setRetries(0);
+    setPausing(false);
     setData("");
   }, [entry.id, entry.path, file]);
+
+  useEffect(() => {
+    if (!pausing) return;
+    const timer = setTimeout(
+      () => {
+        setPausing(false);
+        setRetries((n) => n + 1);
+      },
+      1000 * 3 ** retries,
+    );
+    return () => clearTimeout(timer);
+  }, [pausing, retries]);
 
   // Local object URLs for images and videos picked in the composer.
   useEffect(() => {
@@ -183,9 +200,12 @@ export function Thumbnail({
   else if (failed || type === "folder" || type === "none" || type === "audio")
     content = <Fallback entry={entry} compact={compact} />;
   else if (type === "image") {
-    const url = file ? local : remote ? source.thumb(entry.id!, "s") : "";
-    content = url ? (
-      <img src={url} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} />
+    const thumb = remote ? source.thumb(entry.id!, "s") : "";
+    const url = file ? local : retries ? `${thumb}${thumb.includes("?") ? "&" : "?"}retry=${retries}` : thumb;
+    const retry = () => (remote && retries < 3 ? setPausing(true) : setFailed(true));
+    // While waiting to ask again the tile stays as it looks while loading, not a broken icon.
+    content = pausing ? null : url ? (
+      <img src={url} alt="" loading="lazy" decoding="async" draggable={false} onError={retry} />
     ) : (
       <Fallback entry={entry} compact={compact} />
     );
