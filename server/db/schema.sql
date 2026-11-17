@@ -442,3 +442,16 @@ CREATE TRIGGER retire_nearby_code_after_invite_delete AFTER DELETE ON nearby_inv
   UPDATE pickup_codes SET retired = MAX(created, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
   WHERE kind = 'nearby' AND target_id = OLD.id AND retired IS NULL;
 END;
+
+-- Optional shared identity links. App-local accounts remain independent.
+CREATE TABLE external_identities (
+ issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(issuer, subject), UNIQUE(issuer, user_id)
+) STRICT;
+CREATE TABLE external_sessions (
+ session_hash TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
+ issuer TEXT NOT NULL, subject TEXT NOT NULL
+) STRICT;
+CREATE TABLE sso_flows (
+ state_hash TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL
+) STRICT;

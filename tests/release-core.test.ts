@@ -16,12 +16,12 @@ test("schema guard accepts only fresh or exact current databases and releases re
   try {
     let db = new Database(path);
     db.setSetting("preserved", "value");
-    assert.equal(db.value("PRAGMA user_version"), 1);
+    assert.equal(db.value("PRAGMA user_version"), 2);
     db.close();
     db = new Database(path);
     assert.equal(db.setting("preserved"), "value");
     db.close();
-    for (const version of [0, 2]) {
+    for (const version of [0, 99]) {
       const raw = new DatabaseSync(path);
       raw.exec(`PRAGMA user_version = ${version}`);
       raw.close();
@@ -32,7 +32,7 @@ test("schema guard accepts only fresh or exact current databases and releases re
       inspect.close();
     }
     const raw = new DatabaseSync(path);
-    raw.exec("PRAGMA user_version=1; DROP TABLE traffic");
+    raw.exec("PRAGMA user_version=2; DROP TABLE traffic");
     raw.close();
     assert.throws(() => new Database(path), { code: "RELAY_SCHEMA_INCOMPATIBLE" });
     const partial = join(root, "partial.sqlite");

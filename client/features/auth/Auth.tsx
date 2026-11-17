@@ -69,6 +69,29 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
   useEffect(() => {
     if (loginCode || deviceToken) history.replaceState(history.state, "", location.pathname);
   }, [loginCode, deviceToken]);
+  const [sharedNotice] = useState(() => {
+    const reason = new URLSearchParams(location.search).get("sso");
+    return reason === "link-required"
+      ? "Sign in to your existing Relay account, then link Walriyami under Settings. Your accounts have not been merged."
+      : reason === "access-denied"
+        ? "Your Walriyami account has not been granted access to Relay. You can still use your Relay account."
+        : reason
+          ? "Shared sign-in could not finish. Try again, or sign in with your Relay account."
+          : undefined;
+  });
+  useEffect(() => {
+    if (!sharedNotice) return;
+    const url = new URL(location.href);
+    url.searchParams.delete("sso");
+    history.replaceState(history.state, "", url.pathname + url.search);
+  }, [sharedNotice]);
+  const [sharedSignIn, setSharedSignIn] = useState(false);
+  useEffect(() => {
+    void fetch("/api/sso/config")
+      .then((r) => r.json() as Promise<{ enabled: boolean }>)
+      .then((v) => setSharedSignIn(!!v.enabled))
+      .catch(() => {});
+  }, []);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<FieldError<"username" | "password">>(null);
@@ -149,10 +172,15 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
         </section>
       }
     >
-      {notice && (
+      {(notice || sharedNotice) && (
         <p className="notice" role="status">
-          {notice}
+          {notice || sharedNotice}
         </p>
+      )}
+      {sharedSignIn && (
+        <a className="button button-secondary" href="/api/sso/login">
+          Sign in with Walriyami
+        </a>
       )}
       <form className="stack" onSubmit={submit}>
         <Field label="Username">

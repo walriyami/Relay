@@ -1,0 +1,91 @@
+{
+  "archivedOn": "2026-10-02",
+  "purpose": "Historical evidence only; not product requirements or current verification.",
+  "files": [
+    {
+      "original": "docs/efficiency-audit.md",
+      "archived": "docs/archive/2026-09-28/efficiency-audit.md",
+      "sha256": "dad64efd4ac194a529c925ca5b19a5b0674bed57a782717f36ae3d96b7e7f40d"
+    },
+    {
+      "original": "docs/security-audit.md",
+      "archived": "docs/archive/2026-09-30/security-audit.md",
+      "sha256": "cfc2b90e9d477af1875cd9a44246061c08bdc71251be4564fe6a7e6f2249fc0c"
+    },
+    {
+      "original": "docs/security-audit/coverage-summary.md",
+      "archived": "docs/archive/2026-09-30/security-audit/coverage-summary.md",
+      "sha256": "6cf3b17e60eb2b19472ef3a6935150f8674b4c239a6f892db8a066f6a56329fb"
+    },
+    {
+      "original": "docs/security-audit/coverage.json",
+      "archived": "docs/archive/2026-09-30/security-audit/coverage.json",
+      "sha256": "20d906abfb7deb95a4c6444759fd86c3d66a5f6e66e7ca2854fa9c226e048f99"
+    },
+    {
+      "original": "docs/security-audit/deployment.json",
+      "archived": "docs/archive/2026-09-30/security-audit/deployment.json",
+      "sha256": "ab026228227e3012e7be8df364ab82e908ecc64e41c119974c5204ed49dc3a9c"
+    },
+    {
+      "original": "docs/security-audit/endpoint-actor-coverage.csv",
+      "archived": "docs/archive/2026-09-30/security-audit/endpoint-actor-coverage.csv",
+      "sha256": "deda50a3c5279bcbf056493688b0951a15f7af3512518df32b4dfbd5ca5b6bbf"
+    },
+    {
+      "original": "docs/security-audit/endpoint-roles.csv",
+      "archived": "docs/archive/2026-09-30/security-audit/endpoint-roles.csv",
+      "sha256": "38a47ee367d1963a33a6e20310fe9a39c900c23dba5a73b88f235fffcce5487f"
+    },
+    {
+      "original": "docs/security-audit/evidence-index.json",
+      "archived": "docs/archive/2026-09-30/security-audit/evidence-index.json",
+      "sha256": "b0029ed7691307101d9d95f7f3608cbab5657b6d55f685dae78a7b71199bfb91"
+    },
+    {
+      "original": "docs/security-audit/live-container-final.json",
+      "archived": "docs/archive/2026-09-30/security-audit/live-container-final.json",
+      "sha256": "4d144d3c5f88306c109482afeceffab64187ccfca87f5a5a11f640e810225f43"
+    },
+    {
+      "original": "docs/security-audit/public-final.json",
+      "archived": "docs/archive/2026-09-30/security-audit/public-final.json",
+      "sha256": "774a38800d8b0648dd28d1883e4174f1dda435065d00fbe3c3e9eccbc5b5f07e"
+    },
+    {
+      "original": "docs/security-audit/public-head-verification.md",
+      "archived": "docs/archive/2026-09-30/security-audit/public-head-verification.md",
+      "sha256": "4b8552514d939ebbd454c30724961d4ada8a17d060be045711c882708b5de757"
+    },
+    {
+      "original": "docs/security-audit/review-account.md",
+      "archived": "docs/archive/2026-09-30/security-audit/review-account.md",
+      "sha256": "8b02d5a40821e03264ab4f85ba3b6f136aa26612bdbe2c362ecba18debb9de0e"
+    },
+    {
+      "original": "docs/security-audit/review-nearby-independent.md",
+      "archived": "docs/archive/2026-09-30/security-audit/review-nearby-independent.md",
+      "sha256": "5483079795d470be957e25c85aa8df29c9c2edfd03d84d57e7c6ab35f439fcfe"
+    },
+    {
+      "original": "docs/security-audit/review-nearby.md",
+      "archived": "docs/archive/2026-09-30/security-audit/review-nearby.md",
+      "sha256": "63b7e497a47bc860a8b5bdb2f6364a86cf69e56e804e8bb4634706f6dd1fb5a8"
+    },
+    {
+      "original": "docs/security-audit/route-matrix.json",
+      "archived": "docs/archive/2026-09-30/security-audit/route-matrix.json",
+      "sha256": "8eb6f1b18e617049c081aa9022b37f8e12a168dab369f7a386a6bd959766c24d"
+    },
+    {
+      "original": "docs/security-audit/scan-summary.json",
+      "archived": "docs/archive/2026-09-30/security-audit/scan-summary.json",
+      "sha256": "7fa141e3431a39649dbe23b14da942ce790849eded0be944202606ee64c4a35a"
+    },
+    {
+      "original": "docs/security-audit/secret-scan-triage.json",
+      "archived": "docs/archive/2026-09-30/security-audit/secret-scan-triage.json",
+      "sha256": "0017bf86cf9a6871b469b720c3bee1822fb6ca348be5205a00c908d869ad8485"
+    }
+  ]
+}

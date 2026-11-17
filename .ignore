@@ -1,0 +1,3 @@
+# Keep historical AI reports out of default ripgrep discovery. Git still tracks this archive.
+docs/archive/
+work/archive/

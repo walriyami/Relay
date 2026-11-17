@@ -492,7 +492,7 @@ export type SessionEnded = {
   reason: "suspended" | "signed-out" | "password-reset" | "password-changed" | "expired";
 };
 
-export type SignInMethod = "password" | "passkey" | "code" | "invitation" | "setup";
+export type SignInMethod = "sso" | "password" | "passkey" | "code" | "invitation" | "setup";
 /** Something that happened on the account. Device and request names are as they were then. */
 export type ActivityEvent =
   | { kind: "signin"; deviceId: Id; device: string; method: SignInMethod }

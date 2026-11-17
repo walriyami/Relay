@@ -3,6 +3,14 @@ import { resolve } from "node:path";
 export type Config = {
   /** Data directory: relay.sqlite, blobs/, uploads/, thumbnails/, secret.key. */
   root: string;
+  sso?: {
+    issuer: string;
+    clientId: string;
+    clientSecret: string;
+    controlOrigin: string;
+    appToken: string;
+    projectId: string;
+  };
   /**
    * Pins the public origin, e.g. https://relay.example.com: unsafe requests must come from it and
    * passkeys belong to it. Unset, only localhost and literal IP hosts are served (see lib/auth.ts).
@@ -37,6 +45,21 @@ export type Config = {
 export function configFromEnv(env = process.env): Config {
   return {
     root: resolve(env.RELAY_DATA || ".data"),
+    sso:
+      env.WAL_SSO_ISSUER &&
+      env.WAL_SSO_CLIENT_ID &&
+      env.WAL_SSO_CLIENT_SECRET &&
+      env.WAL_CONTROL_ORIGIN &&
+      env.WAL_CONTROL_APP_TOKEN
+        ? {
+            issuer: env.WAL_SSO_ISSUER,
+            clientId: env.WAL_SSO_CLIENT_ID,
+            clientSecret: env.WAL_SSO_CLIENT_SECRET,
+            controlOrigin: env.WAL_CONTROL_ORIGIN,
+            appToken: env.WAL_CONTROL_APP_TOKEN,
+            projectId: env.WAL_CONTROL_PROJECT_ID || "relay",
+          }
+        : undefined,
     origin: env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined,
     secret: env.RELAY_SECRET,
     trustProxy: (env.RELAY_TRUST_PROXY?.trim() || "127.0.0.1,::1")

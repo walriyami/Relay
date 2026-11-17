@@ -1,6 +1,7 @@
 ## What changed
 
-<!-- A short summary, and why the change is needed. Link the issue it closes, if any. -->
+<!-- Explain the user problem and resulting behavior. Give the reason for the choice and material tradeoffs.
+Link the issue it closes, if any. An earlier AI plan or review is supporting history, not the requirement. -->
 
 ## How it was tested
 

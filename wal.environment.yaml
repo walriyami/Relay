@@ -1,0 +1,11 @@
+id: relay-production
+projectId: relay
+deviceId: ada2b536-55cc-4b9b-a6fe-72ecf4971e03
+name: Production
+hostname: relay.walriyami.com
+production: true
+updateMode: manual
+settings:
+  RELAY_ORIGIN: https://relay.walriyami.com
+  RELAY_TRUST_PROXY: 127.0.0.1,::1,wal-gateway
+  RELAY_DIRECT: "false"

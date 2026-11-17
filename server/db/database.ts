@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 export type Value = SQLInputValue;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 /** Distinct SQL strings kept prepared; the application uses fewer, so dynamic SQL cannot grow it unboundedly. */
 const STATEMENT_CACHE = 256;
 /** Rows a batched delete removes per transaction. */
@@ -74,6 +74,7 @@ export class Database {
 
   /** This unreleased product supports one schema. Never silently open incompatible or partial data. */
   private initialize() {
+    this.migrateKnownV1();
     const version = this.value<number>("PRAGMA user_version");
     const empty = !this.get("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1");
     if (empty && version === 0) {
@@ -89,6 +90,26 @@ export class Database {
         ),
         { code: "RELAY_SCHEMA_INCOMPATIBLE" },
       );
+  }
+
+  /** Back up and migrate only the exact verified v1 schema; unknown formats remain untouched. */
+  private migrateKnownV1() {
+    if (this.value<number>("PRAGMA user_version") !== 1) return;
+    const legacy = new DatabaseSync(":memory:");
+    let matches: boolean;
+    try {
+      legacy.exec(readFileSync(join(import.meta.dirname, "schema.v1.sql"), "utf8"));
+      matches = schemaDefinition(legacy) === schemaDefinition(this.sqlite);
+    } finally {
+      legacy.close();
+    }
+    if (!matches) return;
+    const location = this.sqlite.prepare("PRAGMA database_list").get() as { file: string };
+    if (location.file) this.sqlite.prepare("VACUUM INTO ?").run(`${location.file}.before-sso-${Date.now()}.sqlite`);
+    this.tx(() => {
+      const additions = schema.slice(schema.indexOf("-- Optional shared identity links."));
+      this.sqlite.exec(additions + "\nPRAGMA user_version = 2;");
+    });
   }
 
   /**

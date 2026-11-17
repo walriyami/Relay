@@ -133,6 +133,7 @@ Open **http://localhost:3090** to create your administrator account, choose memb
 | [Self-hosting](docs/self-hosting.md) | Docker Compose, HTTPS reverse proxies, configuration, limits and updates |
 | [Architecture](docs/architecture.md) | How transfers, storage, downloads and security fit together              |
 | [Development](docs/development.md)   | Local setup, tests, release checks and conventions                       |
+| [Reviewing Relay](docs/review.md)    | Independent product and engineering assessment                           |
 | [Security policy](SECURITY.md)       | Reporting vulnerabilities and the security model                         |
 | [Changelog](CHANGELOG.md)            | What changed in each release                                             |
 

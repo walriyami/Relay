@@ -1,0 +1,36 @@
+version: 1
+id: relay
+name: Relay
+source:
+  path: /Users/riyami/Desktop/Projects/Transfer Projects/Relay
+  deviceId: ef5fb737-492c-48ea-bbdf-85f0d8dce674
+  inputs:
+    - Dockerfile
+    - package.json
+    - package-lock.json
+    - vendor
+    - client
+    - server
+    - shared
+    - local
+    - public
+    - index.html
+    - tsconfig.json
+    - vite.config.ts
+  exclude: []
+runtime:
+  port: 3090
+  healthPath: /api/health
+  memoryMB: 768
+storage:
+  - name: data
+    mount: /data
+    kind: data
+    resettable: true
+auth:
+  mode: oidc
+  gatewayProtection: false
+  publicPaths:
+    - /*
+  standalone: true
+adapter: relay

@@ -359,6 +359,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         </div>
       </Section>
       <Section id="s-account" title="Account">
+        <SharedIdentitySettings me={me} />
         <div className="setting-row">
           <span className="setting-label">
             <strong>{displayName(me.user)}</strong>
@@ -713,5 +714,82 @@ function DevicesSection() {
       </div>
       {adding && <AddDevice onClose={() => setAdding(false)} />}
     </Section>
+  );
+}
+
+function SharedIdentitySettings({ me }: { me: Me }) {
+  const [enabled, setEnabled] = useState(false);
+  const [linked, setLinked] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void fetch("/api/sso/account")
+      .then((r) => r.json() as Promise<{ enabled: boolean; linked: boolean }>)
+      .then((v) => {
+        setEnabled(!!v.enabled);
+        setLinked(!!v.linked);
+      })
+      .catch(() => {});
+  }, []);
+  if (!enabled) return null;
+  return (
+    <div className="setting-row">
+      <span className="setting-label">
+        <strong>Walriyami shared sign-in</strong>
+        <span className="field-hint">
+          Link this Relay account explicitly. Your local login and public sharing keep working.
+        </span>
+      </span>
+      <Button disabled={linked} onClick={() => setOpen(true)}>
+        {linked ? "Linked" : "Link account…"}
+      </Button>
+      {open && (
+        <Modal title="Link Walriyami" onClose={() => setOpen(false)}>
+          <form
+            className="stack"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              setError("");
+              try {
+                const response = await fetch("/api/sso/link", {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-relay-csrf": me.csrf },
+                  body: JSON.stringify({ password }),
+                });
+                const result = (await response.json()) as { url?: string; error?: string };
+                if (!response.ok || !result.url) throw new Error(result.error || "Could not start account linking.");
+                location.assign(result.url);
+              } catch (e) {
+                setError((e as Error).message);
+                setBusy(false);
+              }
+            }}
+          >
+            <p>Re-enter this Relay account’s password, then sign in to the Walriyami identity you want to link.</p>
+            <Field label="Relay password">
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </Field>
+            {error && (
+              <p role="alert" className="field-error">
+                {error}
+              </p>
+            )}
+            <Button type="submit" busy={busy} variant="primary">
+              Continue to Walriyami
+            </Button>
+          </form>
+        </Modal>
+      )}
+    </div>
   );
 }

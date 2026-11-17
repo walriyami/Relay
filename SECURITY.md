@@ -23,4 +23,6 @@ Relay is built for a trusted group on a server you control. Public access to a s
 
 Relay is **not end-to-end encrypted**. The host can read stored files. Restrict host and backup access, use disk encryption appropriate to your data, keep dependencies and the host patched, and avoid running unrelated untrusted workloads on the same Docker network. Thumbnail worker threads provide scheduling and memory limits, **not an operating-system sandbox** against a native decoder vulnerability.
 
-A source audit does not certify a live deployment, tunnel configuration, host, or all future changes. See [the audit record](docs/security-audit.md) for reviewed scope, fixes, validation, and limitations.
+A source audit does not certify a live deployment, tunnel configuration, host, or all future changes. The
+[historical audit record](docs/archive/2026-09-30/security-audit.md) describes its recorded candidate, scope, fixes,
+validation, and limitations. Its findings and test results must be reassessed for the current checkout.

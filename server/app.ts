@@ -35,6 +35,7 @@ import { registerNearby } from "./modules/nearby/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
 import { ProxyTrust } from "./lib/proxies.ts";
+import { registerSharedSignIn } from "./modules/auth/sso.ts";
 
 export type App = { app: FastifyInstance; ctx: Context; sweep: () => Promise<void> };
 
@@ -190,6 +191,7 @@ export async function buildApp(config: Config): Promise<App> {
       return { ok: true as const, status: degraded ? ("degraded" as const) : ("healthy" as const) };
     });
     registerAuth(app, ctx);
+    await registerSharedSignIn(app, ctx);
     registerLibrary(app, ctx);
     registerTransfers(app, ctx);
     registerDownloads(app, ctx);

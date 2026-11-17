@@ -60,6 +60,10 @@ export const nearbyCookie = (ctx: Context, req: FastifyRequest, inviteId: string
 export const visitorCookie = (ctx: Context, req: FastifyRequest) => `${cookiePrefix(ctx, req)}relay_visitor`;
 
 const cache = new WeakMap<FastifyRequest, Auth>();
+/** Shared-session revocation runs before route authorization. */
+export function invalidateRequestAuth(req: FastifyRequest) {
+  cache.delete(req);
+}
 
 type MemberRow = {
   token_hash: string;

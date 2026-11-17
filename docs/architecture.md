@@ -1,5 +1,8 @@
 # Architecture
 
+This guide describes the current implementation. It is not a product specification or a requirement to preserve
+these choices. For independent assessment of the experience and its design, see [Reviewing Relay](review.md).
+
 Relay is a single Node.js process that serves a React web app and a JSON API, and keeps everything on one local disk.
 
 ```mermaid
@@ -26,7 +29,7 @@ flowchart LR
   DL --> BLOBS
 ```
 
-## Principles
+## Current behavior and constraints
 
 - **Saving comes first.** Every completed upload is saved to the owner's library before anything else happens. A link or a delivery to a device only points at saved content, so it never moves or deletes the original.
 - **Honest states.** A file counts as saved only after it's flushed to disk and recorded in the database. An interrupted upload never looks saved, and Relay never claims a download reached someone's disk.

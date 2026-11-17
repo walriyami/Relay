@@ -6,6 +6,7 @@ import { bytes, plural } from "../../lib/format";
 export type Described = { icon: ReactNode; title: string; detail: string; tone?: "warn" };
 
 const METHOD: Record<SignInMethod, string> = {
+  sso: "Signed in with Walriyami",
   setup: "By setting up Relay",
   password: "With a password",
   passkey: "With a passkey",
