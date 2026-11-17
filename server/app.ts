@@ -131,6 +131,14 @@ export async function buildApp(config: Config): Promise<App> {
       keyGenerator: (req) => (isLocal(req) ? "local" : addressKey(req.ip)),
       // Signed-in members are trusted; the limit protects anonymous surfaces.
       allowList: (req) => !!currentMember(ctx, req),
+      // Visitors don't need a running count of their budget; only a refusal says when to come back.
+      addHeadersOnExceeding: { "x-ratelimit-limit": false, "x-ratelimit-remaining": false, "x-ratelimit-reset": false },
+      addHeaders: {
+        "x-ratelimit-limit": false,
+        "x-ratelimit-remaining": false,
+        "x-ratelimit-reset": false,
+        "retry-after": true,
+      },
     });
 
     app.addHook("onRequest", async (req, reply) => {

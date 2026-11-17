@@ -47,6 +47,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 ### Security
 
+- Responses no longer tell visitors how much of their request budget is left; a refusal still says when to try again.
 - Link passwords need at least 8 characters, and wrong guesses are counted per network, so someone guessing a link's password can no longer lock out the person it was meant for. A link still takes at most 100 wrong passwords an hour in all.
 - A fresh or reset server can no longer be claimed by whoever opens it first. Setup asks for a one-time key that Relay prints in its server log (and keeps in `<data>/setup.key` until setup is done). With Walriyami sign-in configured, Walriyami's administrator can instead claim it by signing in. `RELAY_SETUP_KEY` is now on by default; set it to `false` only on a machine nobody else can reach.
 - One person typing wrong codes can no longer pause code entry for everyone. Each network gets a few wrong tries; when many networks guess at once, each wider network gets only a few a day, Admin shows when it happened, and right codes keep working for everyone else.

@@ -196,6 +196,23 @@ test("behind Cloudflare each visitor is counted on their own, never as the tunne
   }
 });
 
+test("visitors aren't shown a running count of their request budget", async () => {
+  const instance = await start(undefined, undefined, { setup: false });
+  try {
+    const response = await instance.app.inject({
+      method: "GET",
+      url: api.sso.config.path,
+      headers: { host: "relay.test" },
+      remoteAddress: "198.51.100.1",
+    });
+    assert.equal(response.statusCode, 200);
+    for (const header of ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"])
+      assert.equal(response.headers[header], undefined, header);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("existing data directories are made private at startup", async () => {
   const instance = await start({}, undefined, { setup: false });
   try {
