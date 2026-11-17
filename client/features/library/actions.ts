@@ -173,8 +173,8 @@ export async function addFilesTo(c: Pick<ItemSummary, "id" | "name">) {
         `These files will be added to “${current.name}”.`,
         current.linked && "Anyone with a working link can see each file as soon as it is saved.",
         current.hardExpires !== null
-          ? `All content in this item is deleted forever by ${dateTime(current.hardExpires)}, including time in Trash. Adding files does not extend this deadline.`
-          : "This item has no maximum age deadline.",
+          ? `Relay removes this item on ${dateTime(current.hardExpires)}, with the files you add. Adding files doesn’t change that date.`
+          : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -230,7 +230,7 @@ export async function restoreItem(c: Pick<ItemSummary, "id" | "name">) {
   await call(api.items.restore, { params: { id: c.id } });
   dismissToastKey(undoKey(c.id));
   notifyChange("items");
-  toast(`Restored “${c.name}”. Its hard deadline is unchanged.`, { tone: "success" });
+  toast(`Restored “${c.name}”`, { tone: "success" });
 }
 
 export async function deleteItemForever(c: Pick<ItemSummary, "id" | "name">) {

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, CheckCircle2, Clock, Clock3, FolderOpen, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, FolderOpen, Search } from "lucide-react";
 import { api, call, type ItemPage } from "../../api";
 import { useLive, notifyChange } from "../../lib/live";
 import { navigate, releaseModalAddress, takeModalAddress, useRoute } from "../../lib/router";
@@ -16,6 +16,7 @@ import {
   toast,
 } from "../../components/ui";
 import { undoKey } from "./actions";
+import { Icon } from "../../components/icons";
 import { plural } from "../../lib/format";
 import { KEEP_DAYS, days as dayLabel, durations } from "../../lib/options";
 import { useSession } from "../../app/session";
@@ -113,7 +114,7 @@ export function RecentGrid() {
             ))}
           </CardGrid>
         ) : (
-          <InlineEmpty icon={<Clock3 size={20} />} title="Nothing recent yet">
+          <InlineEmpty icon={<Icon.time size={20} />} title="Nothing recent yet">
             Files and text you send or save will appear here.
           </InlineEmpty>
         )}
@@ -311,7 +312,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       operation === "trash" &&
       !(await confirmDialog({
         title: `Move ${plural(ids.length, "item")} to Trash?`,
-        body: `${plural(ids.length, "item")} will move to Trash. You can restore them until their saved deletion deadline, at most ${dayLabel(me.user.trashDays)}; their links will stop working.`,
+        body: `${plural(ids.length, "item")} will move to Trash, where you can restore them for up to ${dayLabel(me.user.trashDays)}. Their links will stop working.`,
         confirm: "Move to Trash",
         danger: true,
       }))
@@ -344,7 +345,11 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       } else if (operation === "restore") {
         toast(`${plural(ids.length, "item")} restored`, { tone: "success" });
       } else {
-        toast(`Retention saved for ${plural(ids.length, "item")}. Each item’s saved deadline is shown in its details.`);
+        toast(
+          keep
+            ? `${plural(ids.length, "item")} will move to Trash in ${dayLabel(keep)}`
+            : `${plural(ids.length, "item")} kept until you delete them`,
+        );
       }
     } catch (e) {
       toast((e as Error).message, { tone: "error" });
@@ -374,26 +379,28 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           <h1>{trash ? "Trash" : "Files"}</h1>
           <p className="muted">
             {trash
-              ? `Items in Trash keep their saved deletion dates and may be deleted sooner by their hard deadline. Their links no longer work.`
-              : total
-                ? debounced
+              ? "Each item shows when it’s deleted for good. Restore it before then to use it again. Links to it no longer work."
+              : debounced
+                ? total
                   ? plural(total, "match", "matches")
-                  : plural(total, "item")
-                : " "}
+                  : "No matches"
+                : total
+                  ? plural(total, "item")
+                  : " "}
           </p>
         </div>
         {/* Files leads to Trash, and Trash back to Files from its heading. */}
         {trash ? (
           trashTotal > 0 && (
             <div className="page-actions">
-              <Button className="danger-text" icon={<Trash2 size={16} />} busy={emptying} onClick={emptyTrash}>
+              <Button className="danger-text" icon={<Icon.trash size={16} />} busy={emptying} onClick={emptyTrash}>
                 Empty Trash
               </Button>
             </div>
           )
         ) : (
           <div className="page-actions">
-            <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => navigate("/trash")}>
+            <Button variant="ghost" icon={<Icon.trash size={16} />} onClick={() => navigate("/trash")}>
               Trash
             </Button>
           </div>
@@ -424,7 +431,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                 className="search-clear"
                 size="sm"
                 label="Clear search"
-                icon={<X size={16} />}
+                icon={<Icon.close size={16} />}
                 onClick={clearSearch}
               />
             )}
@@ -449,17 +456,17 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
               </option>
             ))}
           </select>
-          {data.length > 0 && (
-            <Button
-              className="select-toggle"
-              variant={selecting ? "primary" : "ghost"}
-              icon={selecting ? undefined : <CheckCircle2 size={16} />}
-              aria-pressed={selecting}
-              onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
-            >
-              {selecting ? "Done" : "Select"}
-            </Button>
-          )}
+          {/* Stays in place while a search finds nothing, so the toolbar doesn't jump. */}
+          <Button
+            className="select-toggle"
+            variant={selecting ? "primary" : "ghost"}
+            icon={selecting ? undefined : <Icon.done size={16} />}
+            aria-pressed={selecting}
+            disabled={!selecting && !data.length}
+            onClick={() => (selecting ? stopSelecting() : setSelecting(true))}
+          >
+            {selecting ? "Done" : "Select"}
+          </Button>
         </div>
       )}
       <div
@@ -508,7 +515,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                   {trash ? (
                     <Button
                       size="sm"
-                      icon={<RotateCcw size={16} />}
+                      icon={<Icon.restore size={16} />}
                       busy={bulkBusy}
                       disabled={!selected.size}
                       onClick={() => void applyBulk("restore")}
@@ -518,11 +525,11 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                   ) : selected.size ? (
                     <>
                       <Menu
-                        label={`Move ${plural(selected.size, "item")} to Trash after`}
+                        label={`Auto-delete ${plural(selected.size, "item")}`}
                         variant="secondary"
                         trigger={
                           <>
-                            <Clock size={16} aria-hidden /> Trash after…
+                            <Icon.time size={16} aria-hidden /> Auto-delete…
                           </>
                         }
                         items={durations(KEEP_DAYS, null, me.user.limits.keepDays).map((d) => ({
@@ -533,7 +540,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
                       <Button
                         size="sm"
                         variant="danger"
-                        icon={<Trash2 size={16} />}
+                        icon={<Icon.trash size={16} />}
                         busy={bulkBusy}
                         onClick={() => void applyBulk("trash")}
                       >
@@ -571,9 +578,8 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
             Nothing matches “{debounced}”.
           </EmptyState>
         ) : trash ? (
-          <EmptyState icon={<Trash2 size={28} />} title="Trash is empty">
-            Items can be restored until their saved deletion deadline, for at most {dayLabel(me.user.trashDays)}.
-            Maximum file age includes this time.
+          <EmptyState icon={<Icon.trash size={28} />} title="Trash is empty">
+            Items you delete stay here for up to {dayLabel(me.user.trashDays)}, so you can restore them.
           </EmptyState>
         ) : (
           <EmptyState

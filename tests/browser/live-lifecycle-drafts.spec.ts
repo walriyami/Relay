@@ -298,24 +298,23 @@ test("an open pending-item dialog keeps its historical age cap as policy relaxes
   await page.goto(`/files/${item.id}`);
   await page
     .getByRole("dialog", { name: item.name, exact: true })
-    .getByRole("button", { name: "More actions", exact: true })
+    .getByRole("button", { name: "Change when it moves to Trash", exact: true })
     .click();
-  await page.getByRole("menuitem", { name: "Move to Trash after…", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Move to Trash after", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Auto-delete", exact: true });
   await dialog.getByRole("radio", { name: "30 days", exact: true }).click();
   item = { ...item, maxAgeDays: 3 };
   limits.keepDays = 3;
   await refresh(page);
-  await expect(dialog).toContainText("Maximum total age is 3 days from the first saved content, including Trash.");
+  await expect(dialog).toContainText("Relay removes items 3 days after they’re first saved, even from Trash.");
   await expect(dialog.getByRole("radio", { name: "3 days", exact: true })).toBeChecked();
   limits.keepDays = 90;
   await refresh(page);
-  await expect(dialog).toContainText("Maximum total age is 3 days");
+  await expect(dialog).toContainText("Relay removes items 3 days after");
   await expect(dialog.getByRole("radio", { name: "30 days", exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("radio", { name: "Never", exact: true })).toHaveCount(0);
   item = { ...item, firstSavedAt: now, expires: now + 3 * DAY, hardExpires: now + 3 * DAY, uploading: false };
   await refresh(page);
-  await expect(dialog).toContainText("Deleted forever by");
+  await expect(dialog).toContainText("Relay removes it on");
   await expect(dialog).not.toContainText("The clock starts when the first content is saved.");
   await expect(dialog.getByRole("radio", { name: /^Until / })).toBeChecked();
   await dialog.getByRole("button", { name: "Save", exact: true }).click();

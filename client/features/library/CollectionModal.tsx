@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Clock, Download, Link2, MoreHorizontal, Pencil, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
+import { Send } from "lucide-react";
+import { Icon } from "../../components/icons";
 import { api, type ItemDetail, type Link } from "../../api";
 import { ago, bytes, dateTime } from "../../lib/format";
 import { ownerSource } from "../../lib/source";
@@ -50,13 +51,14 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
   const unavailable = errorStatus !== null && [401, 403, 404, 410].includes(errorStatus);
   const data = unavailable ? null : cached;
   const single = !!data && isSingleFile(data.nodes);
+  const [keeping, setKeeping] = useState(false);
   return (
     <Modal
       size="xl"
       className={`item-window${single ? " is-single" : ""}`}
       url={url ?? itemAddress(id)}
       title={data ? data.name : error ? "Unavailable" : "Loading…"}
-      subtitle={data ? summary(data) : undefined}
+      subtitle={data ? <Summary c={data} onAutoDelete={() => setKeeping(true)} /> : undefined}
       onClose={onClose}
       footer={data ? data.trashed ? <TrashFooter c={data} /> : <ItemFooter c={data} /> : undefined}
     >
@@ -77,27 +79,47 @@ export function CollectionModal({ id, onClose, url }: { id: string; onClose: () 
       ) : (
         <LoadFailed error={error || "This item could not be loaded."} onRetry={reload} />
       )}
+      {keeping && data && !data.trashed && <KeepDialog item={data} onClose={() => setKeeping(false)} />}
     </Modal>
   );
 }
 
-function summary(c: ItemDetail) {
+/**
+ * What the item holds and when it goes, in plain dates. When it moves to Trash is changed right
+ * here, beside the date, rather than from a menu next to "Move to Trash".
+ */
+function Summary({ c, onAutoDelete }: { c: ItemDetail; onAutoDelete: () => void }) {
   const parts = [];
   if (itemParts(c) > 1 || c.topFolders) parts.push(composition(c.topFiles, c.topFolders, c.texts));
   if (c.files) parts.push(`${c.topFolders ? allFiles(c.files, c.topFiles) + " · " : ""}${bytes(c.bytes)}`);
   parts.push(`Added ${ago(c.created)}`);
-  if (c.trashed && c.purgeAt !== null) parts.push(`Deleted forever on ${dateTime(c.purgeAt)}`);
-  else if (c.firstSavedAt === null) parts.push("Clock starts with the first saved content");
-  else if (c.expires) parts.push(`Moves to Trash ${dateTime(c.expires)}`);
-  if (!c.trashed && c.hardExpires !== null) parts.push(`Deleted forever by ${dateTime(c.hardExpires)}`);
-  return parts.join(" · ");
+  if (c.trashed) {
+    if (c.purgeAt !== null) parts.push(`Deleted for good on ${dateTime(c.purgeAt)}`);
+    return <>{parts.join(" · ")}</>;
+  }
+  // A limit set by the administrator: the latest it can stay, whatever is chosen below.
+  if (c.hardExpires !== null) parts.push(`Relay removes it on ${dateTime(c.hardExpires)}`);
+  parts.push(
+    c.firstSavedAt === null
+      ? "Auto-delete starts once it’s saved"
+      : c.expires
+        ? `Moves to Trash on ${dateTime(c.expires)}`
+        : "Kept until you delete it",
+  );
+  return (
+    <>
+      {parts.join(" · ")}{" "}
+      <button type="button" className="link" aria-haspopup="dialog" onClick={onAutoDelete}>
+        Change<span className="visually-hidden"> when it moves to Trash</span>
+      </button>
+    </>
+  );
 }
 
 function ItemFooter({ c }: { c: ItemDetail }) {
   const close = useCloseModal();
   const devices = useOnlineDevices();
   const { me } = useSession();
-  const [keeping, setKeeping] = useState(false);
   const [sharing, setSharing] = useState<Link | null>(null);
   const [busy, setBusy] = useState(false);
   async function share() {
@@ -119,14 +141,13 @@ function ItemFooter({ c }: { c: ItemDetail }) {
           align="start"
           trigger={
             <>
-              <MoreHorizontal size={18} aria-hidden />
+              <Icon.more size={18} aria-hidden />
               <span>More</span>
             </>
           }
           items={[
-            { label: "Rename…", icon: <Pencil size={16} />, onSelect: () => void renameItem(c).catch(errorToast) },
-            { label: "Add files…", icon: <Plus size={16} />, onSelect: () => void addFilesTo(c).catch(errorToast) },
-            { label: "Move to Trash after…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
+            { label: "Rename…", icon: <Icon.rename size={16} />, onSelect: () => void renameItem(c).catch(errorToast) },
+            { label: "Add files…", icon: <Icon.add size={16} />, onSelect: () => void addFilesTo(c).catch(errorToast) },
             ...(c.uploading ? [] : devices).map((device) => ({
               label: `Send to ${device.name}`,
               icon: <Send size={16} />,
@@ -134,7 +155,7 @@ function ItemFooter({ c }: { c: ItemDetail }) {
             })),
             {
               label: "Move to Trash",
-              icon: <Trash2 size={16} />,
+              icon: <Icon.trash size={16} />,
               danger: true,
               separator: true,
               onSelect: () => void trashItem(c).then(close).catch(errorToast),
@@ -142,15 +163,18 @@ function ItemFooter({ c }: { c: ItemDetail }) {
           ]}
         />
       </div>
-      <Button icon={<Link2 size={16} />} busy={busy} disabled={c.uploading} onClick={() => void share()}>
+      <Button icon={<Icon.share size={16} />} busy={busy} disabled={c.uploading} onClick={() => void share()}>
         Share
       </Button>
       {hasDownloads(c) && (
-        <Button variant="primary" icon={<Download size={16} />} onClick={() => void downloadItem(c).catch(errorToast)}>
+        <Button
+          variant="primary"
+          icon={<Icon.download size={16} />}
+          onClick={() => void downloadItem(c).catch(errorToast)}
+        >
           {downloadLabel(singleFile(c))}
         </Button>
       )}
-      {keeping && <KeepDialog item={c} onClose={() => setKeeping(false)} />}
       {sharing && <ItemShareDialog share={sharing} onClose={() => setSharing(null)} />}
     </>
   );
@@ -177,7 +201,7 @@ function TrashFooter({ c }: { c: ItemDetail }) {
       <div className="modal-foot-start">
         <Button
           variant="danger"
-          icon={<Trash2 size={16} />}
+          icon={<Icon.trash size={16} />}
           busy={busy === "delete"}
           onClick={() => void run("delete", async () => (await deleteItemForever(c)) && close())}
         >
@@ -186,7 +210,7 @@ function TrashFooter({ c }: { c: ItemDetail }) {
       </div>
       <Button
         variant="primary"
-        icon={<RotateCcw size={16} />}
+        icon={<Icon.restore size={16} />}
         busy={busy === "restore"}
         disabled={expired}
         onClick={() => void run("restore", () => restoreItem(c).then(close))}

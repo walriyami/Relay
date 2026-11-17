@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Ban, ChevronRight, Inbox, Pencil, Plus } from "lucide-react";
+import { Ban, ChevronRight, Inbox } from "lucide-react";
 import { ApiError, api, call, stableId, urls, type UploadRequest } from "../../api";
 import type { Body } from "../../../shared/api";
 import { DEFAULTS, LIMITS } from "../../../shared/model";
@@ -161,7 +161,7 @@ export function RequestsPage() {
                   onSelect: () => void close(r),
                 },
               ]
-            : [{ label: "Create new request", icon: <Plus size={16} />, onSelect: () => setCreating(true) }]),
+            : [{ label: "Create new request", icon: <Icon.add size={16} />, onSelect: () => setCreating(true) }]),
         ]}
       />
     </StatusRow>
@@ -174,7 +174,7 @@ export function RequestsPage() {
           <p className="muted">Collect files or text from anyone with a link. They don’t need an account.</p>
         </div>
         {data.length > 0 && (
-          <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
+          <Button variant="primary" icon={<Icon.add size={16} />} onClick={() => setCreating(true)}>
             New request
           </Button>
         )}
@@ -189,7 +189,7 @@ export function RequestsPage() {
           icon={<Icon.request size={28} />}
           title="No requests yet"
           action={
-            <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
+            <Button variant="primary" icon={<Icon.add size={16} />} onClick={() => setCreating(true)}>
               New request
             </Button>
           }
@@ -244,10 +244,10 @@ export function RequestsPage() {
           meta={`Up to ${bytes(created.maxBytes)} · Closes ${until(created.expires)}`}
           url={requestUrl(created.token)}
           code={created.code}
-          codeLabel="Upload code"
+          codeLabel="Code"
           purpose="upload request"
           actions={
-            <Button size="sm" variant="ghost" icon={<Pencil size={16} />} onClick={() => edit(created)}>
+            <Button size="sm" variant="ghost" icon={<Icon.rename size={16} />} onClick={() => edit(created)}>
               Edit request
             </Button>
           }
@@ -553,11 +553,11 @@ function Submissions({
       onClose={onClose}
       actions={
         !request.closed && !expired ? (
-          <Button size="sm" variant="ghost" icon={<Pencil size={16} />} onClick={onEdit}>
+          <Button size="sm" variant="ghost" icon={<Icon.rename size={16} />} onClick={onEdit}>
             Edit
           </Button>
         ) : (
-          <Button size="sm" variant="ghost" icon={<Plus size={16} />} onClick={onNew}>
+          <Button size="sm" variant="ghost" icon={<Icon.add size={16} />} onClick={onNew}>
             New request
           </Button>
         )

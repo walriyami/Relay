@@ -1,19 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
-import {
-  Check,
-  Clock,
-  Copy,
-  Download,
-  ExternalLink,
-  Inbox,
-  Layers,
-  Link2,
-  Pencil,
-  Plus,
-  RotateCcw,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { Check, Inbox, Layers, Link2, Upload } from "lucide-react";
+import { Icon } from "./icons";
 import type { ItemSummary, Link, SearchMatch } from "../api";
 import { ago, bytes } from "../lib/format";
 import { isOnline } from "../lib/connection";
@@ -39,7 +26,6 @@ import {
   singleFile,
   trashItem,
 } from "../features/library/actions";
-import { KeepDialog } from "../features/library/dialogs";
 import { ItemShareDialog } from "../features/library/ItemShareDialog";
 import { Thumbnail } from "./Thumbnail";
 import { Menu, type MenuItem } from "./ui";
@@ -249,32 +235,31 @@ export function CollectionCard({
 function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; onOpen: () => void }) {
   const { me } = useSession();
   const devices = useOnlineDevices();
-  const [keeping, setKeeping] = useState(false);
   const [sharing, setSharing] = useState<Link | null>(null);
   const run = (work: () => Promise<unknown>) => () => void work().catch(errorToast);
   const items: MenuItem[] =
     item.uploading && !trash
-      ? [{ label: "Open", icon: <ExternalLink size={16} />, onSelect: onOpen }]
+      ? [{ label: "Open", icon: <Icon.open size={16} />, onSelect: onOpen }]
       : trash
         ? [
             ...(Math.min(item.hardExpires ?? Infinity, item.purgeAt ?? Infinity) > Date.now()
-              ? [{ label: "Restore", icon: <RotateCcw size={16} />, onSelect: run(() => restoreItem(item)) }]
+              ? [{ label: "Restore", icon: <Icon.restore size={16} />, onSelect: run(() => restoreItem(item)) }]
               : []),
             {
               label: "Delete forever",
-              icon: <Trash2 size={16} />,
+              icon: <Icon.trash size={16} />,
               danger: true,
               separator: true,
               onSelect: run(() => deleteItemForever(item)),
             },
           ]
         : [
-            { label: "Open", icon: <ExternalLink size={16} />, onSelect: onOpen },
+            { label: "Open", icon: <Icon.open size={16} />, onSelect: onOpen },
             ...(hasDownloads(item)
               ? [
                   {
                     label: downloadLabel(singleFile(item)),
-                    icon: <Download size={16} />,
+                    icon: <Icon.download size={16} />,
                     onSelect: run(() => downloadItem(item)),
                   },
                 ]
@@ -283,14 +268,14 @@ function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; 
               ? [
                   {
                     label: "Copy text",
-                    icon: <Copy size={16} />,
+                    icon: <Icon.copy size={16} />,
                     onSelect: run(async () => copyItemText(await loadItem(item.id))),
                   },
                 ]
               : []),
             {
               label: "Share",
-              icon: <Link2 size={16} />,
+              icon: <Icon.share size={16} />,
               onSelect: run(async () => {
                 setSharing(await ensureItemLink(item, me.prefs));
               }),
@@ -300,12 +285,16 @@ function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; 
               icon: <DeviceIcon device={d} size={16} />,
               onSelect: run(() => sendItem(item.id, d)),
             })),
-            { label: "Rename…", icon: <Pencil size={16} />, separator: true, onSelect: run(() => renameItem(item)) },
-            { label: "Add files…", icon: <Plus size={16} />, onSelect: run(() => addFilesTo(item)) },
-            { label: "Move to Trash after…", icon: <Clock size={16} />, onSelect: () => setKeeping(true) },
+            {
+              label: "Rename…",
+              icon: <Icon.rename size={16} />,
+              separator: true,
+              onSelect: run(() => renameItem(item)),
+            },
+            { label: "Add files…", icon: <Icon.add size={16} />, onSelect: run(() => addFilesTo(item)) },
             {
               label: "Move to Trash",
-              icon: <Trash2 size={16} />,
+              icon: <Icon.trash size={16} />,
               danger: true,
               separator: true,
               onSelect: run(() => trashItem(item)),
@@ -314,7 +303,6 @@ function CardMenu({ item, trash, onOpen }: { item: ItemSummary; trash: boolean; 
   return (
     <>
       <Menu label={`Actions for ${item.name}`} items={items} />
-      {keeping && <KeepDialog item={item} onClose={() => setKeeping(false)} />}
       {sharing && <ItemShareDialog share={sharing} onClose={() => setSharing(null)} />}
     </>
   );

@@ -191,7 +191,7 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   // One step per action: choosing how long to keep them applies it and ends choosing.
   await bar.getByRole("button", { name: "Select all" }).click();
   await expect(bar).toContainText("2 selected");
-  await bar.getByRole("button", { name: "Move 2 items to Trash after" }).click();
+  await bar.getByRole("button", { name: "Auto-delete 2 items" }).click();
   const retentionStarted = Date.now();
   const retentionResponse = page.waitForResponse(
     (response) => response.url().endsWith("/api/items/bulk") && response.request().method() === "POST",
@@ -201,9 +201,7 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   const retentionFinished = Date.now();
   expect(saved.ok()).toBe(true);
   expect(await saved.json()).toEqual({ updated: 2 });
-  await expect(
-    page.getByText("Retention saved for 2 items. Each item’s saved deadline is shown in its details."),
-  ).toBeVisible();
+  await expect(page.getByText("2 items will move to Trash in 7 days", { exact: true })).toBeVisible();
   // Each saved deadline respects its own hard expiry, which bulk retention cannot extend.
   for (const item of [firstItem, secondItem]) {
     const response = await page.request.get(`/api/items/${item.id}`);
@@ -229,7 +227,7 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   await bar.getByRole("button", { name: "Select all" }).click();
   await bar.getByRole("button", { name: "Move to Trash" }).click();
   const confirm = page.getByRole("dialog", { name: "Move 2 items to Trash?" });
-  await expect(confirm).toContainText("their links will stop working");
+  await expect(confirm).toContainText("Their links will stop working.");
   await confirm.getByRole("button", { name: "Move to Trash" }).click();
   await expect(page.getByText("2 items moved to Trash")).toBeVisible();
 
@@ -271,7 +269,6 @@ test("cards say what's inside and have a quick actions menu", async ({ page }) =
     "Share",
     "Rename…",
     "Add files…",
-    "Move to Trash after…",
     "Move to Trash",
   ]);
   await menu.getByRole("menuitem", { name: "Move to Trash", exact: true }).click();
@@ -370,12 +367,7 @@ test("an item can be renamed and added to, but what is in it can't be changed", 
   await expect(item.locator(".modal-foot").getByRole("button")).toHaveText(["More", "Share", "Download ZIP"]);
   await moreButton().click();
   const more = page.getByRole("menu");
-  await expect(more.getByRole("menuitem")).toHaveText([
-    "Rename…",
-    "Add files…",
-    "Move to Trash after…",
-    "Move to Trash",
-  ]);
+  await expect(more.getByRole("menuitem")).toHaveText(["Rename…", "Add files…", "Move to Trash"]);
   // Clicking anywhere else closes the menu, and the window stays open.
   await item.locator(".modal-body").click({ position: { x: 4, y: 4 } });
   await expect(more).toHaveCount(0);
