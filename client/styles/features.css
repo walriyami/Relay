@@ -7,6 +7,47 @@
 .app {
   min-height: 100vh;
 }
+/* While Relay checks the session: the shell and the page's placeholders, not a blank screen. */
+.boot-shell .nav-link {
+  cursor: default;
+}
+.boot-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.boot-box {
+  height: 260px;
+  border-radius: var(--r3);
+}
+.boot-card {
+  margin-top: var(--s5);
+}
+.boot-field {
+  height: var(--control);
+}
+.list-skeleton .list-icon {
+  background: none;
+}
+.list-skeleton .list-text {
+  gap: var(--s2);
+}
+.list-skeleton .skeleton-line {
+  width: 40%;
+}
+.list-skeleton .skeleton-line.short {
+  width: 24%;
+}
+.section-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s5);
+}
+.section-skeleton .skeleton-line.short {
+  width: 30%;
+  height: 16px;
+}
 .topbar {
   position: sticky;
   top: 0;

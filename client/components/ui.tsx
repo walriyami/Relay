@@ -1162,6 +1162,38 @@ export function QrCode({
   return <div className="qr skeleton waiting" style={style} aria-hidden />;
 }
 
+/** Placeholder rows shaped like a list of links or requests, eased in only when loading is noticeable. */
+export function ListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <ul className="list card-surface list-skeleton waiting" aria-hidden>
+      {Array.from({ length: rows }, (_, i) => (
+        <li key={i} className="list-row">
+          <span className="list-icon skeleton" />
+          <span className="list-text">
+            <span className="skeleton skeleton-line" />
+            <span className="skeleton skeleton-line short" />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Placeholder sections shaped like Settings, Usage or Admin. */
+export function SectionSkeleton({ sections = 2 }: { sections?: number }) {
+  return (
+    <div className="stack waiting" aria-hidden>
+      {Array.from({ length: sections }, (_, i) => (
+        <div key={i} className="card-surface section-skeleton">
+          <span className="skeleton skeleton-line short" />
+          <span className="skeleton skeleton-line" />
+          <span className="skeleton skeleton-line" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
     <div className="spinner-row waiting" role="status">
