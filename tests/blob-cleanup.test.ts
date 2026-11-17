@@ -319,8 +319,9 @@ test("a large deletion backlog goes in batches, with other requests answered in 
   const instance = await start();
   try {
     const client = await member(instance, "backlog-owner");
-    const entries = Array.from({ length: 300 }, (_, i) => seed(instance, `backlog ${i}`));
-    // What deleting an item with 300 files forever leaves: journaled, unreferenced blobs.
+    // Two batches of 64 are enough to show the drain yields between them.
+    const entries = Array.from({ length: 70 }, (_, i) => seed(instance, `backlog ${i}`));
+    // What deleting an item with 70 files forever leaves: journaled, unreferenced blobs.
     instance.ctx.db.tx(() => {
       for (const { sha256 } of entries) instance.ctx.db.run("INSERT INTO blob_cleanup(sha256) VALUES(?)", sha256);
     });
