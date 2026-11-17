@@ -222,12 +222,16 @@ export function LinkOptionsFields({
           ))}
       </div>
 
-      <Toggle
-        label={limit && limit > 1 ? `Only ${limit} browsers` : "One browser only"}
-        description={`Visitors are recognised by browser cookies. ${seen ? `The ${seen} previously admitted browser${seen === 1 ? "" : "s"} keep access when the limit is reduced.` : "The first browser to open it keeps access."} Clearing cookies or switching browsers counts as a new visitor. Downloads already started may finish.`}
-        checked={limit !== null}
-        onChange={(on) => set({ visitorLimit: on ? (limit ?? 1) : null })}
-      />
+      {/* New links don't offer a browser limit: a password, an expiry and Turn off cover it without
+          cookie caveats. A link that already has one shows it, so it can be lifted. */}
+      {current?.visitorLimit != null && (
+        <Toggle
+          label={current.visitorLimit > 1 ? `Only ${current.visitorLimit} browsers` : "One browser only"}
+          description={`${seen === 1 ? "1 browser has" : `${seen} browsers have`} opened it. Turn this off to let anyone with the link open it.`}
+          checked={limit !== null}
+          onChange={(on) => set({ visitorLimit: on ? current.visitorLimit : null })}
+        />
+      )}
 
       {noteOpen && (
         <label className="field">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { Icon } from "../../components/icons";
 import { ApiError, api, call, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
 import { LIMITS, USERNAME, displayName } from "../../../shared/model";
 import { useSession } from "../../app/session";
@@ -18,6 +18,8 @@ import { Section } from "./Section";
 import { NotificationSettings } from "../activity/Notifications";
 import {
   Button,
+  Chip,
+  ListSkeleton,
   LoadFailed,
   Field,
   Menu,
@@ -53,15 +55,17 @@ function applyChange(current: Me, body: AccountChange): Me {
 
 /** The page's sections, in order, as the side navigation lists them. */
 const SECTIONS = [
-  { id: "s-sending", title: "Sending" },
-  { id: "s-devices", title: "Devices" },
-  { id: "s-passkeys", title: "Passkeys" },
-  { id: "s-activity", title: "Activity" },
-  { id: "s-notify", title: "Arrivals" },
-  { id: "s-look", title: "Appearance" },
+  { id: "s-sending", title: "Sharing" },
   { id: "s-storage", title: "Storage" },
+  { id: "s-activity", title: "Activity" },
+  { id: "s-notify", title: "This device" },
+  { id: "s-devices", title: "Devices" },
   { id: "s-account", title: "Account" },
+  { id: "s-passkeys", title: "Passkeys" },
 ];
+/** How long a quiet "Saved" stays beside the section that changed. */
+const SAVED_FOR = 2400;
+const OLDER_AFTER = 30 * 24 * 3_600_000;
 const WIDE = "(min-width: 1120px)";
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
@@ -161,10 +165,23 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
   useEffect(() => {
     void refreshMe().catch(() => {});
   }, [refreshMe]);
-  const local = useLocalPrefs();
+  const device = useLocalPrefs();
   const [changingPassword, setChangingPassword] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  async function save(body: AccountChange) {
+  // Every choice on this page saves as it's made; the section it belongs to says so, quietly.
+  const [saved, setSaved] = useState<{ section: string; at: number } | null>(null);
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(null), SAVED_FOR);
+    return () => clearTimeout(timer);
+  }, [saved]);
+  const savedIn = (section: string) => saved?.section === section;
+  const done = (section: string) => setSaved({ section, at: Date.now() });
+  function local(section: string, patch: Parameters<typeof setLocalPrefs>[0]) {
+    setLocalPrefs(patch);
+    done(section);
+  }
+  async function save(body: AccountChange, section: string) {
     queue.current.push(body);
     setPending([...queue.current]);
     if (saving.current) return;
@@ -174,7 +191,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         const { prefs, user } = await call(api.account.update, { body: queue.current[0] });
         setMe((current) => ({ ...current, prefs, user }));
         setTransferPrefs(prefs);
-        toast("Saved");
+        done(section);
       } catch (e) {
         // A failed response may still have reached the server. Recover before the next write;
         // pending choices stay visible, and a failed refresh falls back to the last saved state.
@@ -193,12 +210,12 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         <h1>Settings</h1>
       </div>
       <SettingsNav />
-      <Section id="s-sending" title="Sending" description="Defaults for new transfers.">
+      <Section id="s-sending" title="Sharing" description="Defaults for new links." saved={savedIn("s-sending")}>
         <div className="setting-row">
           <span className="setting-label">
             <strong>Links expire after</strong>
             <span className="field-hint">
-              Each link can still be set on its own when you create it.
+              You can still choose for each link when you create it.
               {limits.linkDays !== null && ` ${limitHint(limits.linkDays)}`}
             </span>
           </span>
@@ -206,115 +223,23 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
             label="Links expire after"
             value={toSegment(me.prefs.linkDays)}
             options={linkLifeOptions(me.prefs.linkDays, limits.linkDays)}
-            onChange={(v) => void save({ prefs: { linkDays: fromSegment(v) } })}
-          />
-        </div>
-        <div className="setting-row">
-          <span className="setting-label">
-            <strong>Move uploads to Trash after</strong>
-            <span className="field-hint">
-              Change an unexpired item’s date in Files within its hard deadline. The clock starts with the first saved
-              content.
-              {limits.keepDays !== null && ` Maximum total file age is ${limits.keepDays} days, including Trash.`}
-            </span>
-          </span>
-          <Segmented
-            label="Move uploads to Trash after"
-            value={toSegment(me.user.retentionDays)}
-            options={keepOptions(me.user.retentionDays, limits.keepDays)}
-            onChange={(v) => void save({ retentionDays: v || null })}
+            onChange={(v) => void save({ prefs: { linkDays: fromSegment(v) } }, "s-sending")}
           />
         </div>
         <Toggle
           label="Copy new links automatically"
           description="Puts the link on your clipboard as soon as it’s ready."
           checked={me.prefs.autoCopyLink}
-          onChange={(v) => void save({ prefs: { autoCopyLink: v } })}
+          onChange={(v) => void save({ prefs: { autoCopyLink: v } }, "s-sending")}
         />
         <Toggle
           label="Visible to people nearby"
           description="Other members on the same network as you can see your devices in Nearby and offer to send you things."
           checked={me.prefs.nearbyVisible}
-          onChange={(v) => void save({ prefs: { nearbyVisible: v } })}
+          onChange={(v) => void save({ prefs: { nearbyVisible: v } }, "s-sending")}
         />
       </Section>
-      <DevicesSection />
-      <PasskeysSection />
-      <Section
-        id="s-activity"
-        title="Activity"
-        description="What the bell shows, and what notifications tell you about. Items waiting for this device to accept them are always shown."
-      >
-        <Toggle
-          label="Items you received"
-          description="Items from your other devices that this device accepted or declined."
-          checked={me.prefs.activity.received}
-          onChange={(v) => void save({ prefs: { activity: { received: v } } })}
-        />
-        <Toggle
-          label="Files sent to your requests"
-          checked={me.prefs.activity.requests}
-          onChange={(v) => void save({ prefs: { activity: { requests: v } } })}
-        />
-        <Toggle
-          label="Your links"
-          description="Someone opened or downloaded from a link you shared. Downloads are marked new."
-          checked={me.prefs.activity.links}
-          onChange={(v) => void save({ prefs: { activity: { links: v } } })}
-        />
-        <Toggle
-          label="Sign-ins and security"
-          description="Sign-ins, password changes, and passkeys added or removed. Only sign-ins on a new kind of device are marked new."
-          checked={me.prefs.activity.security}
-          onChange={(v) => void save({ prefs: { activity: { security: v } } })}
-        />
-        {me.user.admin && (
-          <Toggle
-            label="New members"
-            description="Someone joined with one of your invitations."
-            checked={me.prefs.activity.members}
-            onChange={(v) => void save({ prefs: { activity: { members: v } } })}
-          />
-        )}
-      </Section>
-      <Section
-        id="s-notify"
-        title="Arrivals"
-        description="What happens when something arrives. These apply to this browser only."
-      >
-        <Toggle
-          label="Accept items automatically"
-          description="Items your other devices send here download as soon as they arrive."
-          checked={local.autoAccept}
-          onChange={(v) => setLocalPrefs({ autoAccept: v })}
-        />
-        <Toggle
-          label="Open items as soon as they arrive"
-          description="Otherwise they wait in Activity."
-          checked={local.popups}
-          onChange={(v) => setLocalPrefs({ popups: v })}
-        />
-        <Toggle label="Play a sound" checked={local.sound} onChange={(v) => setLocalPrefs({ sound: v })} />
-        <NotificationSettings />
-      </Section>
-      <Section id="s-look" title="Appearance" description="Applies to this browser only.">
-        <div className="setting-row">
-          <span className="setting-label">
-            <strong>Theme</strong>
-          </span>
-          <Segmented
-            label="Theme"
-            value={local.theme}
-            options={[
-              { value: "system", label: "System" },
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-            ]}
-            onChange={(v) => setLocalPrefs({ theme: v })}
-          />
-        </div>
-      </Section>
-      <Section id="s-storage" title="Storage">
+      <Section id="s-storage" title="Storage" saved={savedIn("s-storage")}>
         <div className="stack-sm">
           <StorageMeter me={me} />
           <p className="field-hint">
@@ -324,20 +249,114 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         </div>
         <div className="setting-row">
           <span className="setting-label">
-            <strong>Empty Trash after</strong>
+            <strong>Auto-delete new items after</strong>
             <span className="field-hint">
-              Applies when an item next enters Trash. Existing deletion dates stay fixed. A file’s hard deadline can
-              delete it sooner and cannot be extended by restoring it.
+              They move to Trash this long after they’re first saved. You can change it for any item in Files.
+              {limits.keepDays !== null && ` Relay removes every item ${limits.keepDays} days after it’s saved.`}
             </span>
+          </span>
+          <Segmented
+            label="Auto-delete new items after"
+            value={toSegment(me.user.retentionDays)}
+            options={keepOptions(me.user.retentionDays, limits.keepDays)}
+            onChange={(v) => void save({ retentionDays: v || null }, "s-storage")}
+          />
+        </div>
+        <div className="setting-row">
+          <span className="setting-label">
+            <strong>Empty Trash after</strong>
+            <span className="field-hint">For items you delete from now on. Each item in Trash shows its own date.</span>
           </span>
           <Segmented
             label="Empty Trash after"
             value={me.user.trashDays}
             options={trashOptions(me.user.trashDays)}
-            onChange={(v) => void save({ trashDays: v })}
+            onChange={(v) => void save({ trashDays: v }, "s-storage")}
           />
         </div>
       </Section>
+      <Section
+        id="s-activity"
+        title="Activity"
+        description="What the bell shows, and what notifications tell you about. Items waiting for this device to accept them are always shown."
+        saved={savedIn("s-activity")}
+      >
+        <Toggle
+          label="Items you received"
+          description="Items from your other devices that this device accepted or declined."
+          checked={me.prefs.activity.received}
+          onChange={(v) => void save({ prefs: { activity: { received: v } } }, "s-activity")}
+        />
+        <Toggle
+          label="Files sent to your requests"
+          checked={me.prefs.activity.requests}
+          onChange={(v) => void save({ prefs: { activity: { requests: v } } }, "s-activity")}
+        />
+        <Toggle
+          label="Your links"
+          description="Someone opened or downloaded from a link you shared. Downloads are marked new."
+          checked={me.prefs.activity.links}
+          onChange={(v) => void save({ prefs: { activity: { links: v } } }, "s-activity")}
+        />
+        <Toggle
+          label="Sign-ins and security"
+          description="Sign-ins, password changes, and passkeys added or removed. Only sign-ins on a new kind of device are marked new."
+          checked={me.prefs.activity.security}
+          onChange={(v) => void save({ prefs: { activity: { security: v } } }, "s-activity")}
+        />
+        {me.user.admin && (
+          <Toggle
+            label="New members"
+            description="Someone joined with one of your invitations."
+            checked={me.prefs.activity.members}
+            onChange={(v) => void save({ prefs: { activity: { members: v } } }, "s-activity")}
+          />
+        )}
+      </Section>
+      <Section
+        id="s-notify"
+        title="This device"
+        description="These choices apply to this browser only."
+        saved={savedIn("s-notify")}
+      >
+        <div className="setting-row">
+          <span className="setting-label">
+            <strong>When your devices send something here</strong>
+            <span className="field-hint">
+              {device.autoAccept
+                ? "It downloads straight away. Text opens so you can read it."
+                : "It opens here, and you choose whether to download it."}
+            </span>
+          </span>
+          <Segmented
+            label="When your devices send something here"
+            value={device.autoAccept ? "download" : "ask"}
+            options={[
+              { value: "download", label: "Download it" },
+              { value: "ask", label: "Ask me" },
+            ]}
+            onChange={(v) => local("s-notify", { autoAccept: v === "download" })}
+          />
+        </div>
+        <Toggle label="Play a sound" checked={device.sound} onChange={(v) => local("s-notify", { sound: v })} />
+        <NotificationSettings />
+        <div className="setting-row">
+          <span className="setting-label">
+            <strong>Theme</strong>
+          </span>
+          <Segmented
+            label="Theme"
+            value={device.theme}
+            options={[
+              { value: "system", label: "System" },
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ]}
+            onChange={(v) => local("s-notify", { theme: v })}
+          />
+        </div>
+      </Section>
+      <DevicesSection />
       <Section id="s-account" title="Account">
         <SharedIdentitySettings me={me} />
         <div className="setting-row">
@@ -374,6 +393,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         {changingPassword && <PasswordDialog onClose={() => setChangingPassword(false)} />}
         {editingProfile && <ProfileDialog onClose={() => setEditingProfile(false)} />}
       </Section>
+      <PasskeysSection />
     </div>
   );
 }
@@ -585,8 +605,13 @@ function DevicesSection() {
   const { devices, devicesLoading, devicesError, reloadDevices } = useSession();
   const editDevice = useEditDevice();
   const [adding, setAdding] = useState(false);
+  const [showOlder, setShowOlder] = useState(false);
   const signedIn = devices.filter((d) => d.signedIn);
   const others = signedIn.filter((d) => !d.current);
+  // Browsers nobody has used for a month fold away, so the ones in use stay easy to find.
+  const now = Date.now();
+  const older = signedIn.filter((d) => !d.current && !d.online && now - d.seen > OLDER_AFTER);
+  const shown = showOlder ? signedIn : signedIn.filter((d) => !older.includes(d));
   const seenText = (d: Device) => (d.online ? "is online now" : `was last seen ${ago(d.seen)}`);
   async function remove(d: Device) {
     const ok = await confirmDialog({
@@ -613,27 +638,18 @@ function DevicesSection() {
       {devicesError && (
         <LoadFailed banner title="Devices couldn’t be loaded" error={devicesError} onRetry={reloadDevices} />
       )}
-      {devicesLoading && <p className="muted waiting">Loading devices…</p>}
+      {devicesLoading && <ListSkeleton rows={2} />}
       <ul className="device-list">
-        {signedIn.map((d) => (
+        {shown.map((d) => (
           <li key={d.id} className="device-row">
             <span className="device-icon">
               <DeviceIcon device={d} />
             </span>
             <span className="device-text">
-              <strong>
-                <span className="device-name">{d.name}</span>
-                {d.current && <span className="pill">This browser</span>}
-              </strong>
-              <span className="muted">
-                {d.current && <span className="device-here">This browser ·</span>}
-                {d.current || d.online ? (
-                  <>
-                    <span className="online-dot" aria-hidden /> Online
-                  </>
-                ) : (
-                  `Last seen ${ago(d.seen)}`
-                )}
+              <strong className="device-name">{d.name}</strong>
+              <span className="chips">
+                {d.current && <Chip>This browser</Chip>}
+                {d.current || d.online ? <Chip tone="good">Online</Chip> : <Chip>Last seen {ago(d.seen)}</Chip>}
               </span>
             </span>
             {d.current ? (
@@ -642,7 +658,7 @@ function DevicesSection() {
                 size="sm"
                 variant="ghost"
                 className="device-edit"
-                icon={<Pencil size={14} />}
+                icon={<Icon.rename size={14} />}
                 aria-label="Edit this device"
                 onClick={() => editDevice(d)}
               >
@@ -654,7 +670,7 @@ function DevicesSection() {
                 items={[
                   {
                     label: "Edit name and icon",
-                    icon: <Pencil size={16} aria-hidden />,
+                    icon: <Icon.rename size={16} aria-hidden />,
                     onSelect: () => editDevice(d),
                   },
                   { label: "Sign out", danger: true, onSelect: () => void remove(d) },
@@ -664,8 +680,20 @@ function DevicesSection() {
           </li>
         ))}
       </ul>
+      {older.length > 0 && (
+        <button
+          type="button"
+          className="link device-older"
+          aria-expanded={showOlder}
+          onClick={() => setShowOlder(!showOlder)}
+        >
+          {showOlder
+            ? "Hide devices not used for 30 days"
+            : `Show ${older.length === 1 ? "1 device" : `${older.length} devices`} not used for 30 days`}
+        </button>
+      )}
       <div className="row">
-        <Button icon={<Plus size={16} />} onClick={() => setAdding(true)}>
+        <Button icon={<Icon.add size={16} />} onClick={() => setAdding(true)}>
           Add a device
         </Button>
         {others.length > 0 && (

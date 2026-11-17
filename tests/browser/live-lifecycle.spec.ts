@@ -491,7 +491,7 @@ for (const guestFirst of [false, true]) {
       await expect(sender.page.locator(".transfer").first()).toContainText(`Sent to ${receiverSession.device.name}`);
       // The unchanged limited->ALL topics path discovers the delivery on its next real probe.
       expect((await download).suggestedFilename()).toBe(name);
-      await expect(page.getByRole("dialog", { name })).toContainText("Accepted on this device");
+      await expect(page.locator(".toast", { hasText: `Downloading “${name}”` })).toBeVisible();
       await expect(sender.page.locator(".transfer").first()).toContainText(
         `Accepted on ${receiverSession.device.name}`,
       );

@@ -44,9 +44,12 @@ async function openRetention(page: Page, item: ItemDetail) {
   await signedIn(page);
   await page.goto(`/files/${item.id}`);
   const details = page.getByRole("dialog", { name: item.name, exact: true });
+  // When it moves to Trash is changed beside its date, not from the menu next to "Move to Trash".
   await details.getByRole("button", { name: "More actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Move to Trash after…", exact: true }).click();
-  return page.getByRole("dialog", { name: "Move to Trash after", exact: true });
+  await expect(page.getByRole("menuitem", { name: /Trash after/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await details.getByRole("button", { name: "Change when it moves to Trash", exact: true }).click();
+  return page.getByRole("dialog", { name: "Auto-delete", exact: true });
 }
 
 async function openItemLinkSettings(page: Page, now: number, deadline: "link" | "item" = "link") {
@@ -86,7 +89,9 @@ async function openItemLinkSettings(page: Page, now: number, deadline: "link" | 
   return { dialog, link };
 }
 
-test("renewal choices respect the hard deadline and report the server-saved expiry", async ({ page }) => {
+test("renewal choices respect the administrator’s removal date and report the server-saved expiry", async ({
+  page,
+}) => {
   const now = Date.now();
   await page.clock.install({ time: now });
   let item = itemFixture(now);
@@ -100,7 +105,7 @@ test("renewal choices respect the hard deadline and report the server-saved expi
     await route.fulfill({ json: item });
   });
   const dialog = await openRetention(page, item);
-  await expect(dialog).toContainText("including time in Trash");
+  await expect(dialog).toContainText("even from Trash");
   await expect(dialog.getByRole("radio", { name: "Never", exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("radio", { name: "7 days", exact: true })).toHaveCount(0);
   await dialog.getByRole("radio", { name: /^Until / }).click();
@@ -127,10 +132,9 @@ test("pending items explain the first-save clock and expired items cannot renew"
   await page.reload();
   await page
     .getByRole("dialog", { name: item.name, exact: true })
-    .getByRole("button", { name: "More actions", exact: true })
+    .getByRole("button", { name: "Change when it moves to Trash", exact: true })
     .click();
-  await page.getByRole("menuitem", { name: "Move to Trash after…", exact: true }).click();
-  dialog = page.getByRole("dialog", { name: "Move to Trash after", exact: true });
+  dialog = page.getByRole("dialog", { name: "Auto-delete", exact: true });
   await expect(dialog).toContainText("This item has expired and cannot be renewed.");
   await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   expect(writes).toBe(0);
@@ -172,9 +176,9 @@ test("link settings bound duration to the item and report the saved expiry with 
   await page.getByRole("button", { name: `More actions for ${item.name}` }).click();
   await page.getByRole("menuitem", { name: "Link settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Link settings", exact: true });
-  await expect(dialog).toContainText("Visitors are recognised by browser cookies.");
-  await expect(dialog).toContainText("previously admitted browsers keep access");
-  await expect(dialog).toContainText("Downloads already started may finish.");
+  // New links don't offer a browser limit, but one that has it can still lift it.
+  await expect(dialog.getByRole("switch", { name: "One browser only" })).toBeChecked();
+  await expect(dialog).toContainText("2 browsers have opened it. Turn this off to let anyone with the link open it.");
   await expect(dialog.getByRole("radio", { name: "Never", exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("radio", { name: "7 days", exact: true })).toHaveCount(0);
   await dialog.getByRole("radio", { name: /^Until / }).click();
