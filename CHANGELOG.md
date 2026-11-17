@@ -26,6 +26,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 ### Changed
 
 - Restarting or updating Relay takes seconds. Requests still running get five seconds, then their connections close; downloads and uploads carry on afterwards. Before, one slow download could keep the site down for two minutes.
+- An upload whose connection drops partway through a chunk keeps what arrived, and the retry sends only the rest.
 - The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
 - Editing `server/db/schema.sql` no longer locks Relay out of existing data. At startup Relay adds new tables, columns and indexes itself, ignores comments and formatting, and refuses only an edit that would remove or reshape stored data, with a message naming it. The one-off upgrade from the first schema is gone.
 - A damaged database stops Relay at startup with a plain explanation and recovery steps instead of a stack trace. Startup errors Relay understands are printed the same way.

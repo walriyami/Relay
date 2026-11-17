@@ -185,11 +185,17 @@ test("a new PATCH supersedes a stalled one for the same upload", async () => {
     stalled.write(data.subarray(0, 100_000));
     await new Promise((resolve) => setTimeout(resolve, 200));
 
+    // The retry cuts the stalled request off. What that request already wrote is kept, so the
+    // retry learns the server's offset and sends only the rest.
     const retry = await patchUpload(client, upload, 0, data);
-    assert.equal(retry.statusCode, 204);
-    assert.equal(retry.headers["upload-offset"], String(data.length));
+    assert.equal(retry.statusCode, 409);
     await ended;
     assert.equal(stalledError, true, "the stalled request was cut off");
+    const offset = Number(retry.headers["upload-offset"]);
+    assert.equal(offset, 100_000);
+    const rest = await patchUpload(client, upload, offset, data.subarray(offset));
+    assert.equal(rest.statusCode, 204);
+    assert.equal(rest.headers["upload-offset"], String(data.length));
 
     const result = await client.call(api.transfers.complete, {
       params: { id: created.id },

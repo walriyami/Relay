@@ -269,7 +269,10 @@ export class Receivers {
       ensureTransferAvailability(this.ctx, upload);
       if (upload.offset !== offset) return { conflict: upload.offset };
       authorize();
-      return { offset: await this.write(upload, receiver, body, signal, authorize) };
+      // Bytes that arrived before the connection dropped (or a retry replaced it) are kept.
+      const keepPartial = () =>
+        abort.signal.aborted && !this.closing.signal.aborted && !receiver.cancelled.signal.aborted;
+      return { offset: await this.write(upload, receiver, body, signal, authorize, keepPartial) };
     } finally {
       body.off("close", disconnected);
       if (receiver.inflight === inflight) receiver.inflight = null;
@@ -285,6 +288,7 @@ export class Receivers {
     body: Readable,
     signal: AbortSignal,
     authorize: () => void,
+    keepPartial: () => boolean = () => false,
   ): Promise<number> {
     const hash = receiver.hash.copy();
     let crc = receiver.crc;
@@ -322,11 +326,45 @@ export class Receivers {
       this.checkCurrent(upload.id, receiver, signal);
       authorize();
     } catch (error) {
+      // A phone that lost its connection mid-request resends only what never arrived: the bytes
+      // already written are synced and committed as if the request had ended there.
+      if (position > upload.offset && keepPartial()) {
+        let kept: Stats | null = null;
+        try {
+          await file.truncate(position);
+          await file.sync();
+          kept = await file.stat();
+        } catch {
+          await file.truncate(upload.offset).catch(() => {});
+        }
+        await file.close();
+        // Not committed (cancelled, or access ended meanwhile): the next request rehashes the prefix.
+        if (kept)
+          await this.commit(upload, receiver, position, hash, crc, kept, authorize).catch(() => {
+            receiver.rebuildRequired = true;
+          });
+        throw error;
+      }
       await file.truncate(upload.offset).catch(() => {});
-      throw error;
-    } finally {
       await file.close();
+      throw error;
     }
+    await file.close();
+    await this.commit(upload, receiver, position, hash, crc, source, authorize);
+    if (position === upload.size) await this.publishOnce(upload.id, receiver, authorize);
+    return position;
+  }
+
+  /** Records `position` as the upload's offset, once its bytes are on disk. */
+  private async commit(
+    upload: UploadRow,
+    receiver: Receiver,
+    position: number,
+    hash: Hash,
+    crc: number,
+    source: Stats,
+    authorize: () => void,
+  ) {
     // Commit only if nothing cancelled or superseded this upload while the bytes were arriving.
     const current = uploadRow(this.ctx, upload.id);
     if (!current || !isActive(current) || this.receivers.get(upload.id) !== receiver)
@@ -365,8 +403,6 @@ export class Receivers {
     this.ctx.usage.add(upload.owner, {
       [upload.principal.startsWith("grant:") ? "received" : "uploaded"]: position - upload.offset,
     });
-    if (position === upload.size) await this.publishOnce(upload.id, receiver, authorize);
-    return position;
   }
 
   /**
