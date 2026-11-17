@@ -758,7 +758,6 @@ test("request expiry is final at the deadline, including after a pickup-code rot
       );
     }
     assert.equal((await owner.call(api.requests.list))[0].name, request.name);
-    await (await admin(instance)).call(api.admin.settings, { body: { codeLength: 4 } });
     assert.equal((await owner.call(api.requests.list))[0].code, "", "an expired request shows no code");
     assert.equal(
       await status(

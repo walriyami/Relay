@@ -8,7 +8,7 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
 import { FailureLog } from "../auth/limits.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
+import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
 
 /** A browser keeps its visitor cookie this long; it only tells one person from another. */
@@ -67,7 +67,7 @@ export function toLinks(ctx: Context, rows: LinkRow[], now = Date.now()): Link[]
     id: row.id,
     itemId: row.item,
     token: ctx.secrets.linkToken(row.id),
-    code: getPickupCode(ctx.db, ctx.secrets, "share", row.id) ?? "",
+    code: livePickupCode(ctx, "share", row.id, isAvailable(row, now) && !row.owner_disabled, now)?.code ?? "",
     created: row.created,
     expires: effectiveLinkExpiry(row.expires, summaries.get(row.item)?.expires ?? null),
     revoked: !!row.revoked,

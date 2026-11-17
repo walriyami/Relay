@@ -16,15 +16,8 @@ import { route } from "../../lib/http.ts";
 import { localStatus } from "../local/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { hashPassword, sha256 } from "../../lib/secrets.ts";
-import {
-  getPickupCode,
-  issuePickupCode,
-  codeLengthOf,
-  preferredCodeLengthOf,
-  reconcilePickupCodeMode,
-  setPickupCodePreference,
-} from "../../lib/pickup-codes.ts";
-import { adminPickupProtectionOf } from "../../lib/pickup-code-guard.ts";
+import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { lastCodeAttackAt } from "../../lib/pickup-code-guard.ts";
 import { applyMemberLimits, LIMIT_COLUMNS, limitValues, toLimits, type LimitRow } from "../auth/member-limits.ts";
 import { DAY_MS, storageFree, toUser, usageOf, USER_COLUMNS, type UserRow } from "../auth/sessions.ts";
 import { streamsOf } from "../auth/streams.ts";
@@ -46,7 +39,6 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     ctx.db.get<MemberRow>(`SELECT ${MEMBER_COLUMNS} FROM users WHERE id = ?`, id) ?? notFound("That member");
 
   route(app, ctx, api.admin.overview, async () => {
-    reconcilePickupCodeMode(ctx);
     const free = storageFree(ctx);
     const members = ctx.db
       .all<MemberRow & { signed_in: number; last_active: number | null }>(
@@ -71,8 +63,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       operations: ctx.operations.snapshot(),
       integrity: ctx.blobs.status(),
       usageBuffer: ctx.usage.status(),
-      codeLength: preferredCodeLengthOf(ctx.db),
-      codeProtection: adminPickupProtectionOf(ctx, codeLengthOf(ctx.db)),
+      codeAttackAt: lastCodeAttackAt(ctx),
       members,
       storage: {
         used: ctx.db.value<number>("SELECT ifnull(SUM(bytes_used), 0) FROM users")!,
@@ -113,7 +104,6 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   });
 
   route(app, ctx, api.admin.invite, ({ member: admin, body }) => {
-    reconcilePickupCodeMode(ctx);
     const now = Date.now();
     return ctx.db.tx(() => {
       const id = uuidv7(now);
@@ -137,7 +127,6 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   });
 
   route(app, ctx, api.admin.invites, () => {
-    reconcilePickupCodeMode(ctx);
     return ctx.db
       .all<
         LimitRow & {
@@ -161,7 +150,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
           expires: row.expires,
           createdBy: row.created_by,
           note: row.note,
-          code: getPickupCode(ctx.db, ctx.secrets, "invitation", row.id) ?? "",
+          code: livePickupCode(ctx, "invitation", row.id)?.code ?? "",
           limits: toLimits(row),
         };
       });
@@ -241,14 +230,13 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   });
 
   route(app, ctx, api.admin.settings, ({ body }) => {
-    const { codeLength, capacity, expectedCapacity } = body;
+    const { capacity, expectedCapacity } = body;
     ctx.db.tx(() => {
       if (capacity !== undefined) {
         if (expectedCapacity === undefined) fail(400, "Include the capacity shown when you opened this editor.");
         if (expectedCapacity !== limitsOf(ctx).capacity)
           fail(409, "Capacity changed while you were editing. Reopen the editor and review the current capacity.");
       }
-      if (codeLength !== undefined) setPickupCodePreference(ctx, codeLength);
       setLimits(ctx, { capacity });
     });
     return { ok: true as const };

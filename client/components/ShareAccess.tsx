@@ -1,11 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Share } from "lucide-react";
 import { Button, CopyButton, QrCode, toast } from "./ui";
 import { canShareLink, shareLink } from "../lib/pwa-share";
 import { api } from "../api";
 import { useLive } from "../lib/live";
-import { useCodeConfig } from "../features/codes/config";
-import { CodeProtectionNotice } from "../features/codes/CodeProtectionNotice";
 
 /** The handoff people see after creating or opening any shareable address. */
 export function ShareAccess({
@@ -27,8 +25,8 @@ export function ShareAccess({
   detail?: ReactNode;
   actions?: ReactNode;
 }) {
-  const { protection, codeLength } = useCodeConfig();
-  // The registry retains retired codes as identifiers. Only the owner can refresh their handoff.
+  // A code works for a day after it's issued, so the owner's screen asks for the working one, and
+  // asks again when it expires. Only the owner can see the replacement.
   const current = useLive(
     code ? api.pickup.current : null,
     code ? { body: { code } } : null,
@@ -36,6 +34,14 @@ export function ShareAccess({
     null,
   );
   const shownCode = current.error ? null : current.data ? current.data.code : code;
+  const expires = current.data?.expires ?? null;
+  const { reload } = current;
+  useEffect(() => {
+    if (expires === null) return;
+    // At least a minute apart, so a device whose clock runs ahead doesn't ask over and over.
+    const timer = setTimeout(reload, Math.max(60_000, expires - Date.now() + 1000));
+    return () => clearTimeout(timer);
+  }, [expires, reload]);
   return (
     <div className={`share-access${compact ? " share-access-compact" : ""}`}>
       <div className="share-access-qr">
@@ -91,9 +97,6 @@ export function ShareAccess({
             </button>
           )}
         </div>
-      </div>
-      <div className="share-access-detail">
-        <CodeProtectionNotice protection={protection} effectiveCodeLength={codeLength} />
       </div>
       {detail && <div className="share-access-detail muted">{detail}</div>}
       {actions && <div className="share-access-actions">{actions}</div>}

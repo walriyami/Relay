@@ -1,60 +1,56 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, api, call, type PickupResolution } from "../../api";
-import { formatCode, normalizeCode, type CodeLength } from "../../../shared/codes";
-import { useCodeConfig } from "./config";
-import { CodeProtectionNotice } from "./CodeProtectionNotice";
+import { CODE_LENGTH, formatCode, normalizeCode } from "../../../shared/codes";
 
 /** Remove only Relay's visible separator. Invalid letters remain invalid at request boundaries. */
 export const codeDigits = (code: string) => code.replaceAll("-", "");
 
+const codeLength = CODE_LENGTH;
 const digitsIn = (value: string) => value.replaceAll("-", "");
-function formatForLength(digits: string, length: CodeLength) {
-  if (digits.length === length) return formatCode(digits);
-  return length === 6 && digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits;
+function formatDigits(digits: string) {
+  if (digits.length === codeLength) return formatCode(digits);
+  return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits;
 }
-const charAt = (slot: number, length: CodeLength) => (length === 6 && slot >= 3 ? slot + 1 : slot);
-const caretAt = (value: string, count: number, length: CodeLength) =>
-  length === 6 && count > 3 && value.length > 3 ? count + 1 : count;
-
-function exactCode(value: string, length: CodeLength): string | null {
-  return normalizeCode(value, length);
-}
+/** Where a box's digit sits in the formatted value, after the dash for the last three. */
+const charAt = (slot: number) => (slot >= 3 ? slot + 1 : slot);
+const caretAt = (value: string, count: number) => (count > 3 && value.length > 3 ? count + 1 : count);
+const exactCode = (value: string): string | null => normalizeCode(value);
 
 /** Read a code from a copied Relay URL, a bare code, or a message that labels its code. */
-function codeFromPaste(text: string, length: CodeLength) {
+function codeFromPaste(text: string) {
   const trimmed = text.trim();
   try {
     const url = new URL(trimmed);
     // "Code: 123-456" parses as an address too; only a web link carries a code in its query.
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Not a link");
     const carried = url.searchParams.get("login") ?? url.searchParams.get("code");
-    return carried ? (exactCode(carried.trim(), length) ?? "") : "";
+    return carried ? (exactCode(carried.trim()) ?? "") : "";
   } catch {
     // Plain text can still contain a labeled code.
   }
-  const exact = exactCode(trimmed, length);
+  const exact = exactCode(trimmed);
   if (exact) return exact;
-  const codePattern = length === 6 ? /(\d{3}-?\d{3}|\d{6})/ : /(\d{4})/;
+  const codePattern = /(\d{3}-?\d{3}|\d{6})/;
   const labeled = trimmed.match(
     new RegExp(`(?:pickup\\s+)?(?:code|login)\\s*(?:is\\s*)?[:#]?\\s*${codePattern.source}(?![\\d-])`, "i"),
   );
   if (!labeled) return "";
-  return exactCode(labeled[1], length) ?? "";
+  return exactCode(labeled[1]) ?? "";
 }
 
 /** What a code lookup says about the code itself; asking again gives the same answer. */
 class FinalAnswer extends Error {}
 
-async function resolveCode(code: string, length: CodeLength) {
-  const normalized = normalizeCode(code, length);
-  if (!normalized) throw new FinalAnswer(`Enter a valid ${length}-digit code.`);
+async function resolveCode(code: string) {
+  const normalized = normalizeCode(code);
+  if (!normalized) throw new FinalAnswer(`Enter a valid ${codeLength}-digit code.`);
   try {
     return await call(api.pickup.resolve, { body: { code: normalized } });
   } catch (error) {
     // A code that was never issued (or mistyped) gets the general answer; one that exists but no
     // longer works says why ("This request is closed."), so nobody retypes a correct code.
     if (error instanceof ApiError && error.status === 404)
-      throw new FinalAnswer("That code isn’t valid or has expired.");
+      throw new FinalAnswer("That code isn’t valid or has expired. Ask whoever gave it to you for a new one.");
     if (error instanceof ApiError && error.status === 410)
       throw new FinalAnswer(error.message || "That code isn’t valid or has expired.");
     throw error;
@@ -77,10 +73,9 @@ export function CodeEntryForm({
   fieldLabel?: string;
   description?: string;
 }) {
-  const { codeLength, protection, loading: configLoading, error: configError, refetch } = useCodeConfig();
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
-  const [retryConfig, setRetryConfig] = useState(false);
+  const [retry, setRetry] = useState(false);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
   const activeAttempt = useRef<{ code: string; revision: number } | null>(null);
@@ -88,7 +83,6 @@ export function CodeEntryForm({
   const initialSubmitStarted = useRef(false);
   const codeValue = useRef(code);
   const codeRevision = useRef(0);
-  const previousLength = useRef<CodeLength | null>(null);
   const [activeSlot, setActiveState] = useState(0);
   const active = useRef(activeSlot);
   const setActiveSlot = (slot: number) => {
@@ -110,26 +104,8 @@ export function CodeEntryForm({
     setCode(formatted);
   };
 
-  function clearAfterLengthChange(length: CodeLength) {
-    queuedAttempt.current = null;
-    codeRevision.current++;
-    setCurrentCode("");
-    setActiveSlot(0);
-    setError(`Code length changed to ${length} digits. Enter the code again.`);
-    setRetryConfig(false);
-  }
-
-  // Changing the server's length invalidates any partially entered or in-flight code.
-  useEffect(() => {
-    if (codeLength === null) return;
-    if (previousLength.current !== null && previousLength.current !== codeLength) clearAfterLengthChange(codeLength);
-    previousLength.current = codeLength;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- react only to a change of the server's code length.
-  }, [codeLength]);
-
   async function submitCode(value: string) {
-    if (codeLength === null) return;
-    const normalized = exactCode(value, codeLength);
+    const normalized = exactCode(value);
     const revision = codeRevision.current;
     // Incomplete input waits for the next character.
     if (!normalized) {
@@ -146,45 +122,32 @@ export function CodeEntryForm({
     activeAttempt.current = { code: normalized, revision };
     setBusy(true);
     setError("");
-    setRetryConfig(false);
+    setRetry(false);
     try {
-      // Read the global setting immediately before resolving. A stale six-digit value must never
-      // be looked up after the deployment has moved to four digits (or the reverse).
-      const latestLength = await refetch();
-      if (codeRevision.current !== revision || exactCode(codeValue.current, codeLength) !== normalized) return;
-      if (latestLength !== codeLength) {
-        clearAfterLengthChange(latestLength);
-        return;
-      }
-      const destination = await resolveCode(normalized, latestLength);
+      const destination = await resolveCode(normalized);
       // Ignore a response that no longer belongs to the value in the field.
-      if (codeRevision.current !== revision || exactCode(codeValue.current, latestLength) !== normalized) return;
+      if (codeRevision.current !== revision || exactCode(codeValue.current) !== normalized) return;
       await onOpen(destination, normalized);
-      if (codeRevision.current === revision && exactCode(codeValue.current, latestLength) === normalized) {
+      if (codeRevision.current === revision && exactCode(codeValue.current) === normalized) {
         codeRevision.current++;
         setCurrentCode("");
         setActiveSlot(0);
       }
     } catch (e) {
-      if (codeRevision.current === revision && exactCode(codeValue.current, codeLength) === normalized) {
+      if (codeRevision.current === revision && exactCode(codeValue.current) === normalized) {
         setError((e as Error).message || "Could not check this code. Try again.");
-        // A failure that may pass (offline, busy, a limit) is retried with Enter or this action;
-        // an answer about the code itself would only come back the same.
+        // A failure that may pass (offline, busy) is retried with Enter or this action; an answer
+        // about the code itself, or a limit on wrong codes, would only come back the same.
         const status = e instanceof ApiError ? e.status : 0;
-        if (status === 429 || status === 503) void refetch().catch(() => {});
-        const final = e instanceof FinalAnswer || (status >= 400 && status < 500 && status !== 408 && status !== 429);
-        if (previousLength.current !== null && !final) setRetryConfig(true);
+        const final = e instanceof FinalAnswer || (status >= 400 && status < 500 && status !== 408);
+        if (!final) setRetry(true);
       }
     } finally {
       submitting.current = false;
       activeAttempt.current = null;
       const queued = queuedAttempt.current;
       queuedAttempt.current = null;
-      if (
-        queued &&
-        queued.revision === codeRevision.current &&
-        queued.code === exactCode(codeValue.current, codeLength)
-      ) {
+      if (queued && queued.revision === codeRevision.current && queued.code === exactCode(codeValue.current)) {
         void submitCode(queued.code);
       } else {
         setBusy(false);
@@ -204,44 +167,44 @@ export function CodeEntryForm({
     };
     el.addEventListener("beforeinput", before);
     return () => el.removeEventListener("beforeinput", before);
-  }, [codeLength]);
+  }, []);
 
-  // A complete code passed in by a deep link is intentional input. Validate it against the
-  // fetched deployment setting once; malformed and wrong-length links never get partly accepted.
+  // A complete code passed in by a deep link is intentional input, checked once; malformed and
+  // wrong-length links never get partly accepted.
   useEffect(() => {
-    if (initialSubmitStarted.current || codeLength === null) return;
+    if (initialSubmitStarted.current) return;
     initialSubmitStarted.current = true;
     if (!initialCode) return;
-    const initial = exactCode(initialCode.trim(), codeLength);
+    const initial = exactCode(initialCode.trim());
     if (!initial) {
       setError(`That link must contain exactly ${codeLength} digits.`);
       return;
     }
-    const formatted = formatForLength(initial, codeLength);
+    const formatted = formatDigits(initial);
     codeRevision.current++;
     setCurrentCode(formatted);
     setActiveSlot(codeLength - 1);
     void submitCode(formatted);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a code in the link is submitted once the code length is known.
-  }, [codeLength]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a code in the link is submitted once.
+  }, []);
 
   // The code is shown formatted as it is typed or pasted. The caret stays after the same digit it
-  // followed, so editing in the middle works for both configured lengths.
+  // followed, so editing in the middle works.
   function selectSlot(slot: number) {
     const el = field.current;
-    if (!el || codeLength === null) return;
+    if (!el) return;
     const value = el.value;
     const count = digitsIn(value).length;
     const target = Math.max(0, Math.min(slot, count, codeLength - 1));
-    const char = charAt(target, codeLength);
+    const char = charAt(target);
     if (target < count) el.setSelectionRange(char, char + 1);
-    else el.setSelectionRange(caretAt(value, count, codeLength), caretAt(value, count, codeLength));
+    else el.setSelectionRange(caretAt(value, count), caretAt(value, count));
     setActiveSlot(target);
   }
 
   useLayoutEffect(() => {
     const next = caret.current;
-    if (next === null || document.activeElement !== field.current || codeLength === null) return;
+    if (next === null || document.activeElement !== field.current) return;
     caret.current = null;
     if ("slot" in next) selectSlot(next.slot);
     else field.current!.setSelectionRange(next.at, next.at);
@@ -255,27 +218,6 @@ export function CodeEntryForm({
       if (x >= el.getBoundingClientRect().left) best = index;
     });
     return best;
-  }
-
-  if (codeLength === null) {
-    return (
-      <form className={page ? "stack" : "code-entry-form"} aria-busy={configLoading || undefined}>
-        {configLoading ? (
-          <span className="field-hint" role="status">
-            Loading code settings…
-          </span>
-        ) : (
-          <>
-            <p className="field-error" role="alert">
-              Could not load the current code settings. {configError}
-            </p>
-            <button type="button" className="btn btn-secondary" onClick={() => void refetch().catch(() => {})}>
-              Retry
-            </button>
-          </>
-        )}
-      </form>
-    );
   }
 
   const input = (
@@ -294,7 +236,7 @@ export function CodeEntryForm({
         data-form-type="other"
         autoCapitalize="off"
         spellCheck={false}
-        placeholder={codeLength === 6 ? "XXX-XXX" : "XXXX"}
+        placeholder="XXX-XXX"
         inputMode="numeric"
         enterKeyHint="go"
         value={code}
@@ -350,12 +292,12 @@ export function CodeEntryForm({
         }}
         onPaste={(e) => {
           e.preventDefault();
-          const pasted = codeFromPaste(e.clipboardData.getData("text"), codeLength);
+          const pasted = codeFromPaste(e.clipboardData.getData("text"));
           if (!pasted) {
             setError(`Paste a valid ${codeLength}-digit Relay code.`);
             return;
           }
-          const formatted = formatForLength(pasted, codeLength);
+          const formatted = formatDigits(pasted);
           caret.current = { slot: codeLength - 1 };
           codeRevision.current++;
           codeValue.current = formatted;
@@ -369,9 +311,9 @@ export function CodeEntryForm({
           const at = e.currentTarget.selectionStart ?? raw.length;
           const inputType = (e.nativeEvent as InputEvent).inputType ?? "";
           const deleting = inputType.startsWith("delete");
-          // Digits, and for six-digit codes one dash wherever an edit left it: typing before the dash
-          // shifts it (123-56 becomes 1237-56 for a moment), and the digits are regrouped below.
-          const validShape = /^\d*$/.test(raw) || (codeLength === 6 && /^\d*-\d*$/.test(raw));
+          // Digits, and one dash wherever an edit left it: typing before the dash shifts it (123-56
+          // becomes 1237-56 for a moment), and the digits are regrouped below.
+          const validShape = /^\d*-?\d*$/.test(raw);
           let next = digitsIn(raw);
           let before = digitsIn(raw.slice(0, at)).length;
           // Backspace over the dash alone would change nothing; remove the character before it.
@@ -387,7 +329,7 @@ export function CodeEntryForm({
             e.currentTarget.setSelectionRange(Math.min(start, code.length), Math.min(end, code.length));
           };
           if (!validShape || next.length > codeLength) return refuse();
-          const formatted = formatForLength(next, codeLength);
+          const formatted = formatDigits(next);
           // The same digits: a digit typed over itself stands; only a stray separator is undone.
           if (formatted === code) return raw === code ? undefined : refuse();
           codeRevision.current++;
@@ -396,19 +338,19 @@ export function CodeEntryForm({
           // next box is chosen so typing on replaces rather than overflowing.
           caret.current =
             deleting || next.length < codeLength
-              ? { at: caretAt(formatted, Math.min(before, codeLength), codeLength) }
+              ? { at: caretAt(formatted, Math.min(before, codeLength)) }
               : { slot: Math.min(before, codeLength - 1) };
           setActiveSlot(Math.min(before, codeLength - 1));
           setCode(formatted);
           setError("");
-          setRetryConfig(false);
+          setRetry(false);
           void submitCode(formatted);
         }}
       />
       <span className="code-entry-field-boxes" aria-hidden="true" data-code-length={codeLength}>
         {Array.from({ length: codeLength }, (_, index) => (
           <Fragment key={index}>
-            {codeLength === 6 && index === 3 && <span className="code-entry-field-separator">-</span>}
+            {index === 3 && <span className="code-entry-field-separator">-</span>}
             <span
               className="code-entry-field-slot"
               data-code-slot={index}
@@ -428,7 +370,7 @@ export function CodeEntryForm({
       aria-busy={busy || undefined}
       onSubmit={(event) => {
         event.preventDefault();
-        if (codeLength !== null && !exactCode(codeValue.current, codeLength)) {
+        if (!exactCode(codeValue.current)) {
           const missing = codeLength - digitsIn(codeValue.current).length;
           setError(missing > 0 ? `Enter all ${codeLength} digits.` : `Enter a valid ${codeLength}-digit code.`);
           return;
@@ -436,7 +378,6 @@ export function CodeEntryForm({
         void submitCode(codeValue.current);
       }}
     >
-      <CodeProtectionNotice protection={protection} effectiveCodeLength={codeLength} />
       <label className="field">
         <span className="field-label">{fieldLabel || "Pickup code"}</span>
         {input}
@@ -452,7 +393,7 @@ export function CodeEntryForm({
           {error}
         </p>
       )}
-      {retryConfig && (
+      {retry && (
         <button type="button" className="link" onClick={() => void submitCode(codeValue.current)}>
           Retry
         </button>

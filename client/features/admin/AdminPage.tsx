@@ -16,9 +16,7 @@ import { USERNAME } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { ago, bytes, dateTime, plural } from "../../lib/format";
 import { storageSummary } from "../../components/StorageMeter";
-import { notifyChange, useLive } from "../../lib/live";
-import type { CodeLength } from "../../../shared/codes";
-import { CodeProtectionNotice } from "../codes/CodeProtectionNotice";
+import { useLive } from "../../lib/live";
 import { usePeriodicRefresh } from "../../lib/refresh";
 import { navigate, useRoute } from "../../lib/router";
 import { days } from "../../lib/options";
@@ -31,7 +29,6 @@ import {
   Modal,
   PageLink,
   ProgressBar,
-  Segmented,
   Spinner,
   Toggle,
   confirmDialog,
@@ -119,14 +116,17 @@ export function AdminPage() {
               <section className="settings-section card-surface" aria-labelledby="admin-codes">
                 <div className="settings-section-head">
                   <h2 id="admin-codes">Codes</h2>
-                  <p className="muted">One preferred length for sign-ins, shares, upload requests and invitations.</p>
+                  <p className="muted">
+                    Codes for sign-ins, shares, upload requests and invitations are six digits and work for a day. Links
+                    and QR codes don’t change.
+                  </p>
                 </div>
-                <CodeProtectionNotice
-                  protection={data.codeProtection}
-                  effectiveCodeLength={data.codeProtection.effectiveCodeLength}
-                  owner
-                />
-                <CodeSettings key={data.codeLength} codeLength={data.codeLength} onSaved={reload} />
+                {data.codeAttackAt && (
+                  <p className="notice">
+                    Someone tried many wrong codes on {dateTime(data.codeAttackAt)}. Each network got only a few tries,
+                    and codes kept working for everyone else.
+                  </p>
+                )}
               </section>
             </>
           )}
@@ -635,73 +635,5 @@ function ManageMember({
         )}
       </form>
     </Modal>
-  );
-}
-
-function CodeSettings({ codeLength, onSaved }: { codeLength: CodeLength; onSaved: () => void }) {
-  const [length, setLength] = useState(codeLength);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  return (
-    <form
-      className="stack-sm"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (busy || length === codeLength) return;
-        if (
-          !(await confirmDialog({
-            title: `Use ${length}-digit codes?`,
-            body: "Changing the active length replaces existing codes. Protection may keep six-digit codes active until recovery. Links and QR codes keep working. Share the current codes shown in Relay with anyone who needs them.",
-            confirm: "Replace codes",
-            danger: true,
-          }))
-        )
-          return;
-        setBusy(true);
-        setError("");
-        try {
-          await call(api.admin.settings, { body: { codeLength: length } });
-          notifyChange("account");
-          onSaved();
-          toast("Code length preference saved. Use the current codes shown in Relay.");
-        } catch (e) {
-          setError((e as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <Segmented<CodeLength>
-        label="Code length"
-        value={length}
-        onChange={setLength}
-        options={[
-          { value: 6, label: "6 digits · 123-456" },
-          { value: 4, label: "4 digits · 1234" },
-        ]}
-      />
-      <p className="field-hint">
-        Six digits are harder to guess and support more codes. Four digits have a limit of 10,000 unique codes for this
-        deployment; retired codes are never reused.
-      </p>
-      <p className="field-hint">
-        Incorrect guesses trigger increasing network lockouts and a pause across Relay. Attacks against four-digit codes
-        temporarily switch to six digits. Links and QR codes continue to work. Choose six digits for stronger
-        protection; even strict limits cannot prevent a lucky guess.
-      </p>
-      {length !== codeLength && (
-        <p className="notice">Changing the active length replaces existing codes. Links and QR codes keep working.</p>
-      )}
-      {error && (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      )}
-      <div>
-        <Button type="submit" disabled={length === codeLength} busy={busy}>
-          Save code length
-        </Button>
-      </div>
-    </form>
   );
 }

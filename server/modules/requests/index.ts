@@ -7,7 +7,7 @@ import type { Submission, UploadRequest } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { sha256 } from "../../lib/secrets.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
+import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { bytesLabel } from "../transfers/create.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { registerGuests, remaining, used } from "./guests.ts";
@@ -35,7 +35,8 @@ const SELECT = `SELECT r.id, r.name, r.description, r.created, r.expires, r.clos
 
 function toRequest(ctx: Context, row: RequestRow): UploadRequest {
   const left = remaining(ctx, row);
-  const code = getPickupCode(ctx.db, ctx.secrets, "request", row.id) ?? "";
+  const open = row.closed === null && row.expires > Date.now();
+  const code = livePickupCode(ctx, "request", row.id, open)?.code ?? "";
   return {
     id: row.id,
     token: ctx.secrets.requestToken(row.id),
@@ -127,11 +128,6 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
       );
       // Guests already uploading keep going for exactly as long as the request now stays open.
       ctx.db.run("UPDATE guest_grants SET expires = ? WHERE request_id = ?", expires, request.id);
-      // An open request can recover a missing assignment without changing its public URL.
-      if (!getPickupCode(ctx.db, ctx.secrets, "request", request.id)) {
-        const issued = issuePickupCode(ctx.db, ctx.secrets, "request", request.id);
-        ctx.db.run("UPDATE requests SET code_hash = ? WHERE id = ?", issued.codeHash, request.id);
-      }
       return ownedRequest(ctx, member.userId, request.id);
     });
     ctx.events.publish(member.userId, "requests");

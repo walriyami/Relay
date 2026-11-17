@@ -167,7 +167,7 @@ test("a fresh server asks for its setup key first, spaced like the fields below 
   await page.getByRole("button", { name: "Get started" }).click();
   const key = page.getByLabel("Setup key");
   await expect(key).toBeFocused();
-  await expect(page.getByText("from setup.key in its data folder")).toBeVisible();
+  await expect(page.getByText("printed this one-time key in its log")).toBeVisible();
 
   // The key sits in the form's own stack, so the gap below it is the gap between every other field.
   const gaps = await page.locator("form.stack > .field").evaluateAll((fields) =>

@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSa
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { DEFAULT_CODE_LENGTH, formatCode, type CodeLength } from "../../shared/codes.ts";
+import { CODE_LENGTH, formatCode } from "../../shared/codes.ts";
 import { fail } from "./errors.ts";
 import type { PickupCodeKind } from "./pickup-codes.ts";
 
@@ -111,10 +111,6 @@ export class Secrets {
   pickupCodeHash(digits: string) {
     return `hmac-sha256:${this.mac("pickup-code", digits).toString("hex")}`;
   }
-  /** A database-safe identifier for an address in persistent abuse controls. */
-  pickupAddressKey(address: string) {
-    return this.mac("pickup-address", address).toString("hex");
-  }
   /**
    * Names a session to Relay's local socket. The helper attaches it to every request it forwards
    * for a browser that set up its connection with that session; browsers never see it. It lasts as
@@ -136,41 +132,41 @@ export class Secrets {
   deviceToken(codeId: string) {
     return this.mac("device-code-link", codeId).toString("base64url");
   }
-  pickupCode(linkId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
-    return this.code("pickup", linkId, nonce, length);
+  pickupCode(linkId: string, nonce = 0) {
+    return this.code("pickup", linkId, nonce);
   }
-  requestPickupCode(requestId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
-    return this.code("request-pickup", requestId, nonce, length);
+  requestPickupCode(requestId: string, nonce = 0) {
+    return this.code("request-pickup", requestId, nonce);
   }
-  invitePickupCode(inviteId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
-    return this.code("invite-pickup", inviteId, nonce, length);
+  invitePickupCode(inviteId: string, nonce = 0) {
+    return this.code("invite-pickup", inviteId, nonce);
   }
-  devicePickupCode(codeId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
-    return this.code("device-pickup", codeId, nonce, length);
+  devicePickupCode(codeId: string, nonce = 0) {
+    return this.code("device-pickup", codeId, nonce);
   }
-  nearbyPickupCode(inviteId: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
-    return this.code("nearby-pickup", inviteId, nonce, length);
+  nearbyPickupCode(inviteId: string, nonce = 0) {
+    return this.code("nearby-pickup", inviteId, nonce);
   }
-  pickupCodeFor(kind: PickupCodeKind, id: string, nonce = 0, length: CodeLength = DEFAULT_CODE_LENGTH) {
+  pickupCodeFor(kind: PickupCodeKind, id: string, nonce = 0) {
     switch (kind) {
       case "share":
-        return this.pickupCode(id, nonce, length);
+        return this.pickupCode(id, nonce);
       case "request":
-        return this.requestPickupCode(id, nonce, length);
+        return this.requestPickupCode(id, nonce);
       case "invitation":
-        return this.invitePickupCode(id, nonce, length);
+        return this.invitePickupCode(id, nonce);
       case "device":
-        return this.devicePickupCode(id, nonce, length);
+        return this.devicePickupCode(id, nonce);
       case "nearby":
-        return this.nearbyPickupCode(id, nonce, length);
+        return this.nearbyPickupCode(id, nonce);
     }
   }
-  private code(purpose: string, id: string, nonce: number, length: CodeLength) {
+  private code(purpose: string, id: string, nonce: number) {
+    const length = CODE_LENGTH;
     if (!Number.isSafeInteger(nonce) || nonce < 0 || nonce >= 10 ** length)
       throw new Error("Invalid numeric pickup-code nonce.");
     const size = 10 ** length;
-    // Each length walks its own sequence: were they shared, a four-digit replacement would be the
-    // last four digits of the six-digit code it retired.
+    // The length is part of the sequence's name, as it was when four-digit codes existed too.
     const start = this.mac(`${purpose}-${length}-start`, id).readUIntBE(0, 6) % size;
     let stride = this.mac(`${purpose}-${length}-stride`, id).readUIntBE(0, 6) % size || 1;
     // A coprime stride walks every value in the finite namespace exactly once.

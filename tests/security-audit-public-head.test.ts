@@ -34,7 +34,6 @@ const inventory = [
   "/api/r/:token/events",
   "/api/n/:token",
   "/api/n/:token/events",
-  "/api/pickup/config",
   "/uploads/:id",
 ];
 const sensitive = ["content-disposition", "etag", "last-modified", "content-range", "upload-offset", "upload-length"];
@@ -536,8 +535,7 @@ test("public HEAD: non-bearer public metadata and unsupported pickup HEAD paths 
   const instance = await start();
   try {
     const anonymous = new Client(instance);
-    for (const route of ["/api/health", "/api/setup", "/api/pickup/config"])
-      await check(anonymous, route, {}, 200, "public static metadata");
+    for (const route of ["/api/health", "/api/setup"]) await check(anonymous, route, {}, 200, "public static metadata");
     for (const path of ["/api/pickup", "/api/pickup/000000"]) {
       const head = await raw(anonymous, "HEAD", path);
       const get = await raw(anonymous, "GET", path);

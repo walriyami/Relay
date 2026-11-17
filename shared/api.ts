@@ -1,4 +1,3 @@
-import type { CodeLength } from "./codes.ts";
 // The complete JSON API. Server routes are registered from these definitions and the client calls
 // them through the same objects, so request validation, auth and response types live in one place.
 // Byte streams (downloads, ZIPs, thumbnails, tus uploads, server-sent events) are addressed by `urls`.
@@ -229,13 +228,13 @@ export const api = {
   },
 
   pickup: {
-    /** Refresh an owned handoff after a deployment-wide code rotation. */
-    current: endpoint<{ code: string | null }>()("POST", "/api/pickup/current", {
+    /**
+     * The owner's working code for the recipient a code they were shown once named: the same code
+     * until it `expires` a day after it was issued, then a fresh one. Null once the recipient ends.
+     */
+    current: endpoint<{ code: string | null; expires: M.Time | null }>()("POST", "/api/pickup/current", {
       auth: "member",
       body: z.object({ code: text(1, 32) }),
-    }),
-    config: endpoint<{ codeLength: CodeLength; protection: M.PickupProtection }>()("GET", "/api/pickup/config", {
-      auth: "public",
     }),
     /** Resolves a share, request, invitation or device sign-in code to its recipient route. */
     resolve: endpoint<M.PickupResolution>()("POST", "/api/pickup", {
@@ -592,7 +591,6 @@ export const api = {
         capacity: z.optional(quota),
         /** Required when changing capacity: the value shown when the editor opened. */
         expectedCapacity: z.optional(quota),
-        codeLength: z.optional(z.union([z.literal(4), z.literal(6)])),
       }),
     }),
   },

@@ -119,7 +119,7 @@ test("purging a link retires its pickup code and permanently rejects reuse of it
   }
 });
 
-test("pickup codes resolve to the link; wrong codes are limited per address and globally", async () => {
+test("pickup codes resolve to the link; wrong codes are limited per network, never for everyone", async () => {
   const { instance, link } = await setup();
   try {
     const visitor = new Client(instance);
@@ -144,21 +144,16 @@ test("pickup codes resolve to the link; wrong codes are limited per address and 
         headers: { "x-forwarded-for": ip },
         payload: { code },
       });
-    // Five tries from one address: the fifth starts its one-minute pause.
+    // Five wrong tries from one address; then even a right code from there waits.
     const single: number[] = [];
-    for (let i = 0; i < 5; i++) single.push((await pickup("10.0.0.1", wrong)).statusCode);
-    assert.deepEqual(single, [...Array<number>(4).fill(404), 429]);
-
-    // Ten failures across addresses start the deployment-wide pause; the tenth is refused.
-    assert.equal((await pickup("10.0.1.1", wrong)).statusCode, 404);
-    assert.equal((await pickup("10.0.1.2", wrong)).statusCode, 404);
-    assert.equal((await pickup("10.0.1.3", wrong)).statusCode, 429);
-    const clean = await pickup("10.0.1.1", link.code);
-    assert.equal(clean.statusCode, 429);
-    assert.match(clean.json<{ error: string }>().error, /Too many incorrect codes/);
+    for (let i = 0; i < 6; i++) single.push((await pickup("10.0.0.1", wrong)).statusCode);
+    assert.deepEqual(single, [...Array<number>(5).fill(404), 429]);
     const capped = await pickup("10.0.0.1", link.code);
     assert.equal(capped.statusCode, 429);
-    assert.match(capped.json<{ error: string }>().error, /Too many incorrect codes/);
+    assert.match(capped.json<{ error: string }>().error, /Too many wrong codes from your network/);
+
+    // Everyone else carries on.
+    for (const ip of ["10.0.0.2", "10.0.1.1"]) assert.equal((await pickup(ip, link.code)).statusCode, 200);
   } finally {
     await instance.close();
   }
@@ -292,14 +287,14 @@ test("a transfer can finish as a link, and a disabled owner's links stop working
 test("pickup throttles IPv6 hosts together within a /64", async () => {
   const { instance, link } = await setup();
   try {
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 6; i++) {
       const res = await instance.app.inject({
         method: "POST",
         url: api.pickup.resolve.path,
         headers: { host: "relay.test", "x-forwarded-for": `2001:db8:abcd:1234::${i}` },
         payload: { code: "short" },
       });
-      assert.equal(res.statusCode, i <= 4 ? 404 : 429);
+      assert.equal(res.statusCode, i <= 5 ? 404 : 429);
     }
     const clean = await instance.app.inject({
       method: "POST",
@@ -318,8 +313,8 @@ test("expired pickup codes count as failed attempts", async () => {
   try {
     instance.ctx.db.run("UPDATE links SET expires = ? WHERE id = ?", Date.now() - 1, link.id);
     const visitor = new Client(instance);
-    for (let i = 0; i < 5; i++)
-      assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), i < 4 ? 404 : 429);
+    for (let i = 0; i < 6; i++)
+      assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), i < 5 ? 404 : 429);
   } finally {
     await instance.close();
   }

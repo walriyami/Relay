@@ -1,6 +1,3 @@
-import type { CodeLength, PickupProtection } from "./codes.ts";
-export type { PickupProtection } from "./codes.ts";
-
 // Domain shapes exchanged between the server and the client. Every API response is built from these.
 
 export type Id = string;
@@ -372,9 +369,8 @@ export type AdminOverview = {
   operations: ServiceOperations;
   integrity: BlobStatus;
   usageBuffer: { pending: number; failed: boolean; discarded: number };
-  /** The administrator's preference, even when security temporarily lengthens public codes. */
-  codeLength: CodeLength;
-  codeProtection: Omit<PickupProtection, "addressPausedUntil"> & { effectiveCodeLength: CodeLength };
+  /** When Relay last saw someone guessing pickup codes, or null. */
+  codeAttackAt: Time | null;
   members: AdminMember[];
   storage: {
     used: number;
@@ -461,7 +457,7 @@ export type AdminUsageReport = UsageReportBase & {
 };
 
 /** Server-sent event topics. A client refetches whatever a topic covers. */
-/** `codes`: the deployment's pickup-code length or protection changed. */
+/** `codes`: Relay noticed someone guessing pickup codes (Admin shows when). */
 export type Topic =
   "items" | "links" | "deliveries" | "devices" | "requests" | "account" | "activity" | "codes" | "nearby";
 export type ChangeEvent = { topics: Topic[] };

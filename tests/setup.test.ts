@@ -29,7 +29,11 @@ test("a first start asks for the administrator, signs them in, then asks for the
   const instance = await start({}, undefined, { setup: false });
   try {
     const visitor = new Client(instance);
-    assert.deepEqual(await visitor.call(api.setup.status), { state: "account", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await visitor.call(api.setup.status), {
+      state: "account",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
     assert.throws(() => readKey(instance.root), "without RELAY_SETUP_KEY there is no key to find");
     assert.equal(await status(visitor.call(api.session.get)), 401);
     assert.equal(await status(visitor.call(api.setup.finish, { body: chosen })), 401);
@@ -41,12 +45,20 @@ test("a first start asks for the administrator, signs them in, then asks for the
     assert.deepEqual(me.user.limits, NO_LIMITS, "the administrator has no limits");
     const [signIn] = (await visitor.call(api.activity.list)).entries;
     assert.equal(signIn.kind === "signin" && signIn.method, "setup");
-    assert.deepEqual(await visitor.call(api.setup.status), { state: "choices", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await visitor.call(api.setup.status), {
+      state: "choices",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
 
     // Their own choices are saved like any member's; finishing sets the total storage.
     await visitor.call(api.account.update, { body: { retentionDays: 90, trashDays: 14, prefs: { linkDays: null } } });
     await visitor.call(api.setup.finish, { body: chosen });
-    assert.deepEqual(await new Client(instance).call(api.setup.status), { state: "done", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await new Client(instance).call(api.setup.status), {
+      state: "done",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
     assert.equal(await status(visitor.call(api.setup.finish, { body: chosen })), 409, "setup finishes once");
 
     const overview = await visitor.call(api.admin.overview);
@@ -75,7 +87,11 @@ test("with RELAY_SETUP_KEY, creating the administrator needs the one-time key fr
   const instance = await start({ setupKey: true }, undefined, { setup: false });
   try {
     const visitor = new Client(instance);
-    assert.deepEqual(await visitor.call(api.setup.status), { state: "account", keyRequired: true, sharedSignIn: false });
+    assert.deepEqual(await visitor.call(api.setup.status), {
+      state: "account",
+      keyRequired: true,
+      sharedSignIn: false,
+    });
     const keyPath = join(instance.root, "setup.key");
     assert.match(readKey(instance.root), /^[A-Za-z0-9_-]{43}$/);
     assert.equal(statSync(keyPath).mode & 0o777, 0o600);
@@ -94,7 +110,11 @@ test("with RELAY_SETUP_KEY, creating the administrator needs the one-time key fr
     const me = await visitor.call(api.setup.account, { body: accountWithKey(instance.root) });
     assert.equal(me.user.admin, true);
     assert.throws(() => readFileSync(keyPath), "the key is removed after the first administrator is created");
-    assert.deepEqual(await visitor.call(api.setup.status), { state: "choices", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await visitor.call(api.setup.status), {
+      state: "choices",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
   } finally {
     await instance.close();
   }
@@ -134,7 +154,11 @@ test("once anyone has an account, setup cannot make another", async () => {
 
   const done = await start();
   try {
-    assert.deepEqual(await new Client(done).call(api.setup.status), { state: "done", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await new Client(done).call(api.setup.status), {
+      state: "done",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
     const late = new Client(done);
     assert.equal(
       await status(late.call(api.setup.account, { body: { ...account, setupKey: "wrong", username: "mallory" } })),
@@ -229,7 +253,11 @@ test("the setup key survives an unfinished restart and disappears after account 
     await instance.app.close();
 
     instance = await start({ setupKey: true }, root, { setup: false });
-    assert.deepEqual(await new Client(instance).call(api.setup.status), { state: "choices", keyRequired: false, sharedSignIn: false });
+    assert.deepEqual(await new Client(instance).call(api.setup.status), {
+      state: "choices",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
     assert.throws(() => readFileSync(join(root, "setup.key")), "a restart cannot restore the consumed key");
     const again = new Client(instance);
     await again.signIn(account.username, account.password);

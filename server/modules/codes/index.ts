@@ -4,57 +4,29 @@ import { api } from "../../../shared/api.ts";
 import { fail, HttpError } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { normalizeCode } from "../../lib/secrets.ts";
-import { addressKey } from "../auth/limits.ts";
 import { checkAvailable, LINK_SELECT, type LinkRow } from "../links/service.ts";
-import { checkPickupCodeAttempt, pickupProtectionOf, recordPickupCodeFailure } from "../../lib/pickup-code-guard.ts";
-import {
-  codeLengthOf,
-  currentOwnedPickupCode,
-  ensurePickupCodeResolutionAvailable,
-  reconcilePickupCodeMode,
-  type PickupCodeKind,
-} from "../../lib/pickup-codes.ts";
+import { checkCodeAttempt, recordCodeFailure } from "../../lib/pickup-code-guard.ts";
+import { currentOwnedPickupCode, findPickupCode } from "../../lib/pickup-codes.ts";
 
 /** One entry point classifies a code, then its recipient flow applies its own access rules. */
 export function registerCodes(app: FastifyInstance, ctx: Context) {
-  route(app, ctx, api.pickup.config, ({ req }) => {
-    const now = Date.now();
-    reconcilePickupCodeMode(ctx, now);
-    return {
-      codeLength: codeLengthOf(ctx.db),
-      protection: pickupProtectionOf(ctx, addressKey(req.ip), now),
-    };
-  });
-
   route(app, ctx, api.pickup.current, ({ body, member }) => {
-    reconcilePickupCodeMode(ctx);
-    const code = normalizeCode(body.code);
-    const current = code ? currentOwnedPickupCode(ctx, member.userId, code) : null;
-    return { code: current };
+    const current = currentOwnedPickupCode(ctx, member.userId, body.code);
+    return current ? { code: current.code, expires: current.expires } : { code: null, expires: null };
   });
 
   route(app, ctx, api.pickup.resolve, ({ body, req }) => {
-    const address = addressKey(req.ip);
     const now = Date.now();
-    reconcilePickupCodeMode(ctx, now);
-    ensurePickupCodeResolutionAvailable(ctx.db);
     const reject = (status: number, message: string): never => {
-      const outcome = recordPickupCodeFailure(ctx, address, now);
-      if (outcome.addressTriggered || outcome.globalTriggered) reconcilePickupCodeMode(ctx, now);
-      if (outcome.addressTriggered || outcome.globalTriggered)
-        fail(429, "Too many incorrect codes. Code entry is temporarily paused.");
+      recordCodeFailure(ctx, req.ip, now);
       fail(status, message);
     };
-    checkPickupCodeAttempt(ctx, address, now);
-    const code = normalizeCode(body.code, codeLengthOf(ctx.db));
+    checkCodeAttempt(ctx, req.ip, now);
+    const code = normalizeCode(body.code);
     const codeHash = code ? ctx.secrets.pickupCodeHash(code) : "";
-    const registered = code
-      ? ctx.db.get<{ kind: PickupCodeKind; target_id: string }>(
-          "SELECT kind, target_id FROM pickup_codes WHERE code_hash = ? AND retired IS NULL",
-          codeHash,
-        )
-      : undefined;
-    if (!registered) return reject(404, "That code does not match an available link.");
+    const registered = code ? findPickupCode(ctx.db, codeHash, now) : undefined;
+    if (!registered)
+      return reject(404, "That code doesn’t match anything open. Codes stop working after a day; ask for a new one.");
 
     switch (registered.kind) {
       case "share": {

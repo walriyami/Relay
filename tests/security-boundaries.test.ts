@@ -130,7 +130,7 @@ test("client addresses come only from trusted proxies, given by address, range o
   for (const trustProxy of [["localhost"], ["127.0.0.0/8"]]) {
     const behind = await start({ trustProxy }, undefined, { setup: false });
     try {
-      for (let i = 1; i <= 5; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 4 ? 404 : 429);
+      for (let i = 1; i <= 6; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 5 ? 404 : 429);
       assert.equal((await pickup(behind, "198.51.100.2")).statusCode, 404);
     } finally {
       await behind.close();
@@ -140,7 +140,7 @@ test("client addresses come only from trusted proxies, given by address, range o
   for (const trustProxy of [["192.0.2.1"], ["relay-proxy.invalid"]]) {
     const open = await start({ trustProxy }, undefined, { setup: false });
     try {
-      for (let i = 1; i <= 4; i++) await pickup(open, "198.51.100.1");
+      for (let i = 1; i <= 5; i++) await pickup(open, "198.51.100.1");
       assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
     } finally {
       await open.close();
