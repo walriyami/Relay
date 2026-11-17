@@ -4,7 +4,7 @@ import { ApiError, api, call, type Me, type PickupResolution } from "../../api";
 import { LIMITS, USERNAME } from "../../../shared/model";
 import { navigate } from "../../lib/router";
 import { Button, Field } from "../../components/ui";
-import { Brand } from "../../app/Brand";
+import { PublicCard, PublicFrame } from "../../components/PublicFrame";
 import { CodeEntryForm, codeDigits } from "../codes/CodeEntry";
 import { thisDevice } from "./device-name";
 import { passkeyDismissed, passkeysSupported, signInWithPasskey } from "./passkeys";
@@ -31,6 +31,10 @@ const describedBy = (invalid: boolean, ...ids: (string | false)[]) => ({
   "aria-describedby": ids.filter(Boolean).join(" ") || undefined,
 });
 
+/**
+ * Sign-in and account screens use the same frame as every public page. With `side`, a second card
+ * (code entry) stands beside the first, and below it on a narrow screen.
+ */
 export function AuthFrame({
   title,
   subtitle,
@@ -42,23 +46,22 @@ export function AuthFrame({
   children: ReactNode;
   side?: ReactNode;
 }) {
+  const card = (
+    <PublicCard title={title} subtitle={subtitle} className="auth-card">
+      {children}
+    </PublicCard>
+  );
   return (
-    <main className={side ? "auth auth-split" : "auth"} tabIndex={-1}>
-      {side && (
-        <div className="auth-page-brand">
-          <Brand />
+    <PublicFrame width={side ? "wide" : "narrow"}>
+      {side ? (
+        <div className="auth-split">
+          {card}
+          {side}
         </div>
+      ) : (
+        card
       )}
-      <div className="auth-card card-surface">
-        {!side && <Brand />}
-        <div>
-          <h1>{title}</h1>
-          {subtitle && <p className="muted">{subtitle}</p>}
-        </div>
-        {children}
-      </div>
-      {side}
-    </main>
+    </PublicFrame>
   );
 }
 

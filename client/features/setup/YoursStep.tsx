@@ -17,6 +17,7 @@ export function YoursStep({
   storage,
   check,
   finish,
+  lifetimes = true,
   onSaved,
 }: {
   me: Me;
@@ -29,6 +30,11 @@ export function YoursStep({
   check?: () => boolean;
   /** Runs after the choices are saved, before moving on. */
   finish?: () => Promise<void>;
+  /**
+   * Whether to ask how long links and files last. A new member hasn't used Relay yet, so they
+   * start with the defaults and find these in Settings when they matter.
+   */
+  lifetimes?: boolean;
   onSaved: () => void;
 }) {
   const { limits } = me.user;
@@ -73,7 +79,11 @@ export function YoursStep({
         </p>
       )}
       <StepTitle>Make it yours</StepTitle>
-      <p className="setup-lead">These work well for most people. Change what you like, now or any time in Settings.</p>
+      <p className="setup-lead">
+        {lifetimes
+          ? "These work well for most people. Change what you like, now or any time in Settings."
+          : "Choose the name people see when you share. How long links and files last can wait for Settings."}
+      </p>
       <form className="setup-card card-surface setup-questions" noValidate onSubmit={save}>
         <Question
           icon={<UserRound size={18} />}
@@ -91,50 +101,54 @@ export function YoursStep({
             onChange={(e) => setName(e.target.value)}
           />
         </Question>
-        <Question
-          icon={<Link2 size={18} />}
-          title="Links expire after"
-          hint={
-            limits.linkDays === null
-              ? "You can still choose differently for any link when you share it."
-              : `You can choose a shorter time for any link. ${limitHint(limits.linkDays)}`
-          }
-        >
-          <Segmented
-            label="Links expire after"
-            value={linkDays}
-            options={linkLifeOptions(fromSegment(linkDays), limits.linkDays)}
-            onChange={setLinkDays}
-          />
-        </Question>
-        <Question
-          icon={<Clock size={18} />}
-          title="Move uploads to Trash after"
-          hint={
-            limits.keepDays === null
-              ? "Never keeps them until you delete them."
-              : `Counted from when each upload arrives. ${limitHint(limits.keepDays)}`
-          }
-        >
-          <Segmented
-            label="Move uploads to Trash after"
-            value={retention}
-            options={keepOptions(fromSegment(retention), limits.keepDays)}
-            onChange={setRetention}
-          />
-        </Question>
-        <Question
-          icon={<Trash2 size={18} />}
-          title="Empty Trash after"
-          hint="Until then, anything in Trash can be restored."
-        >
-          <Segmented
-            label="Empty Trash after"
-            value={trashDays}
-            options={trashOptions(trashDays)}
-            onChange={setTrashDays}
-          />
-        </Question>
+        {lifetimes && (
+          <>
+            <Question
+              icon={<Link2 size={18} />}
+              title="Links expire after"
+              hint={
+                limits.linkDays === null
+                  ? "You can still choose differently for any link when you share it."
+                  : `You can choose a shorter time for any link. ${limitHint(limits.linkDays)}`
+              }
+            >
+              <Segmented
+                label="Links expire after"
+                value={linkDays}
+                options={linkLifeOptions(fromSegment(linkDays), limits.linkDays)}
+                onChange={setLinkDays}
+              />
+            </Question>
+            <Question
+              icon={<Clock size={18} />}
+              title="Move uploads to Trash after"
+              hint={
+                limits.keepDays === null
+                  ? "Never keeps them until you delete them."
+                  : `Counted from when each upload arrives. ${limitHint(limits.keepDays)}`
+              }
+            >
+              <Segmented
+                label="Move uploads to Trash after"
+                value={retention}
+                options={keepOptions(fromSegment(retention), limits.keepDays)}
+                onChange={setRetention}
+              />
+            </Question>
+            <Question
+              icon={<Trash2 size={18} />}
+              title="Empty Trash after"
+              hint="Until then, anything in Trash can be restored."
+            >
+              <Segmented
+                label="Empty Trash after"
+                value={trashDays}
+                options={trashOptions(trashDays)}
+                onChange={setTrashDays}
+              />
+            </Question>
+          </>
+        )}
         {storage}
         {error && (
           <p className="field-error" role="alert">

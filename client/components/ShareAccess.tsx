@@ -11,7 +11,7 @@ import { CodeProtectionNotice } from "../features/codes/CodeProtectionNotice";
 export function ShareAccess({
   url,
   code,
-  codeLabel = "Pickup code",
+  codeLabel = "Code",
   purpose = "link",
   copyLabel = "Copy link",
   compact = false,

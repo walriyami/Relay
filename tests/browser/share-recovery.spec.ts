@@ -34,7 +34,7 @@ async function openShare(page: Page, surface: Surface, token: string) {
   await page.route("**/api/pickup", (route) => route.fulfill({ json: { kind: "share", path: `/s/${token}` } }));
   if (surface === "public pickup") {
     await page.goto("/pickup");
-    await page.getByLabel("Pickup code").fill("234567");
+    await page.getByRole("textbox", { name: "Code", exact: true }).fill("234567");
   } else {
     await signedIn(page);
     await page.getByRole("button", { name: "Enter code", exact: true }).click();
@@ -91,7 +91,7 @@ for (const status of [401, 403, 404, 410]) {
       ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "Have a pickup code?", exact: true }).click();
+    await page.getByRole("button", { name: "Have a code?", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Use a code", exact: true })).toBeVisible();
   });
 }
@@ -115,7 +115,7 @@ for (const surface of ["public pickup", "in-app pickup"] as const) {
     if (surface === "public pickup") {
       await page.getByRole("button", { name: "Try another code", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Use a code", exact: true })).toBeVisible();
-      await expect(page.getByLabel("Pickup code")).toHaveValue("");
+      await expect(page.getByRole("textbox", { name: "Code", exact: true })).toHaveValue("");
     } else {
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog", { name: "Link unavailable" })).toHaveCount(0);

@@ -87,7 +87,7 @@ test("the deployment setting rotates open handoffs, updates every code field and
     await expect(guest.getByRole("region", { name: "Text" })).toContainText(content);
     await guest.goto("/pickup");
     await expect(guest.locator(".code-entry-field-slot")).toHaveCount(4);
-    await guest.getByLabel("Pickup code").fill(currentCode);
+    await guest.getByRole("textbox", { name: "Code", exact: true }).fill(currentCode);
     await expect(guest.getByRole("region", { name: "Text" })).toContainText(content);
 
     for (const [codeField, url] of [

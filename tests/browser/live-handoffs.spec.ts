@@ -232,7 +232,7 @@ test("a sign-in code entered at /pickup signs the browser in at once", async ({ 
   try {
     const other = await context.newPage();
     await other.goto("/pickup");
-    await expect(other.getByLabel("Pickup code")).toBeFocused();
+    await expect(other.getByRole("textbox", { name: "Code", exact: true })).toBeFocused();
     await other.keyboard.type(code!);
     await other.keyboard.press("Enter");
     await expect(other.getByRole("region", { name: "Compose" })).toBeVisible();

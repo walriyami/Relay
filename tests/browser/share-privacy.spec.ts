@@ -38,7 +38,7 @@ test("a shared item that is one folder opens inside it, with a breadcrumb back",
 test("the pickup code field shows six segments and keeps keyboard editing in place", async ({ page }) => {
   await page.route("**/api/pickup", (route) => route.fulfill({ status: 404, json: { error: "No match" } }));
   await page.goto("/pickup");
-  const input = page.getByLabel("Pickup code");
+  const input = page.getByRole("textbox", { name: "Code", exact: true });
   const boxes = page.locator(".code-entry-field-slot");
   const caret = () => input.evaluate((el: HTMLInputElement) => el.selectionStart);
   await expect(boxes).toHaveCount(6);
@@ -74,7 +74,7 @@ test("typing a valid code opens its destination once without a submit button", a
   });
   await page.route("**/api/s/auto-typed", (route) => route.fulfill({ status: 404, json: { error: "Gone" } }));
   await page.goto("/pickup");
-  const input = page.getByLabel("Pickup code");
+  const input = page.getByRole("textbox", { name: "Code", exact: true });
   await input.pressSequentially("234567");
   try {
     await expect(page.getByRole("status").and(page.locator(".field-hint"))).toHaveText("Checking code…");
@@ -103,7 +103,7 @@ test("pasting a valid code submits automatically and invalid alphabet characters
   await page.route("**/api/s/auto-paste", (route) => route.fulfill({ status: 404, json: { error: "Gone" } }));
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/pickup");
-  const input = page.getByLabel("Pickup code");
+  const input = page.getByRole("textbox", { name: "Code", exact: true });
   await input.fill("O12345");
   expect(attempts).toEqual([]);
   await page.evaluate(() => navigator.clipboard.writeText("234 567"));
@@ -124,7 +124,7 @@ test("a failed code stays editable and a correction retries automatically", asyn
   });
   await page.route("**/api/s/auto-retry", (route) => route.fulfill({ status: 404, json: { error: "Gone" } }));
   await page.goto("/pickup");
-  const input = page.getByLabel("Pickup code");
+  const input = page.getByRole("textbox", { name: "Code", exact: true });
   await input.pressSequentially("234567");
   await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
   await expect(input).toHaveValue("234-567");
@@ -154,7 +154,7 @@ test("a correction during lookup ignores the stale destination and resolves the 
     await route.fulfill({ status: 404, json: { error: "Gone" } });
   });
   await page.goto("/pickup");
-  const input = page.getByLabel("Pickup code");
+  const input = page.getByRole("textbox", { name: "Code", exact: true });
   await input.pressSequentially("234567");
   await expect(page.getByRole("status").and(page.locator(".field-hint"))).toHaveText("Checking code…");
   await expect.poll(() => attempts).toEqual(["234567"]);

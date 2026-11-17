@@ -1,7 +1,18 @@
 // A new member's welcome: the invitation, their account, their own choices, their other devices,
 // done. Once the account exists the address is /welcome, so a reload picks up where it left off.
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, FolderInput, FolderOpen, HardDrive, Link2, Send, Smartphone } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  FolderInput,
+  FolderOpen,
+  HardDrive,
+  Laptop,
+  Link2,
+  Send,
+  Smartphone,
+} from "lucide-react";
+import { deviceKind } from "../../../shared/devices";
 import { ApiError, api, call, type InvitationCheck, type Me } from "../../api";
 import { displayName } from "../../../shared/model";
 import type { SetMe } from "../../app/session";
@@ -94,6 +105,7 @@ export function Join({
             setMe={setMe}
             resumed={resumed}
             storage={<MemberStorage me={me} />}
+            lifetimes={false}
             onSaved={() => setStep("devices")}
           />
         );
@@ -253,11 +265,25 @@ function MemberStorage({ me }: { me: Me }) {
           {me.user.admin
             ? "Shared with everyone on this Relay. You can change it in Admin."
             : limit === null
-              ? "Shared with everyone on this Relay. See what you use any time in Settings."
+              ? "Shared with everyone on this Relay. See what you use any time in Settings › Storage."
               : "Your administrator can give you more if you need it."}
         </span>
       </p>
     </div>
+  );
+}
+
+/** The device to add next: a phone from a computer, a computer from a phone or tablet. */
+function AddOtherDevice() {
+  const onComputer = deviceKind(navigator.userAgent, navigator.maxTouchPoints) === "computer";
+  return onComputer ? (
+    <Point icon={<Smartphone size={18} />} title="Add your phone">
+      Choose Add a device on the Send page, then scan the code with your phone.
+    </Point>
+  ) : (
+    <Point icon={<Laptop size={18} />} title="Add your computer">
+      Choose Add a device on the Send page, then open the link it shows on your computer.
+    </Point>
   );
 }
 
@@ -276,9 +302,7 @@ function Done({ me, addedDevice, onFinish }: { me: Me; addedDevice: boolean; onF
             Create a request, and anyone with its link can upload to you.
           </Point>
         ) : (
-          <Point icon={<Smartphone size={18} />} title="Add your phone">
-            Choose Add a device on the Send page, then scan the code with your phone.
-          </Point>
+          <AddOtherDevice />
         )}
         <Point icon={<FolderOpen size={18} />} title="Find everything in Files">
           What you send is kept there, ready to share again.

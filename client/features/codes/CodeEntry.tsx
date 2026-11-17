@@ -438,7 +438,7 @@ export function CodeEntryForm({
     >
       <CodeProtectionNotice protection={protection} effectiveCodeLength={codeLength} />
       <label className="field">
-        <span className="field-label">{fieldLabel || "Pickup code"}</span>
+        <span className="field-label">{fieldLabel || "Code"}</span>
         {input}
       </label>
       {description && <span className="field-hint">{description}</span>}

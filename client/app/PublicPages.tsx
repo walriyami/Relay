@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, Upload } from "lucide-react";
 import { ApiError, api, call, type PublicRequest, type PublicShare } from "../api";
 import { LIMITS } from "../../shared/model";
@@ -14,7 +14,7 @@ import {
 } from "../lib/draft";
 import { navigate } from "../lib/router";
 import { useExpiryClock } from "../lib/refresh";
-import { Button, Field, Spinner, toast } from "../components/ui";
+import { Button, Field, toast } from "../components/ui";
 import { ContentBox } from "../components/ContentBox";
 import { usePageDrop } from "../components/PageDrop";
 import { composition } from "../features/library/actions";
@@ -23,22 +23,11 @@ import { CodeEntryForm, codeDigits } from "../features/codes/CodeEntry";
 import { thisDevice } from "../features/auth/device-name";
 import { AuthFrame } from "../features/auth/Auth";
 import { TransferCard, useTransfers } from "../features/send/TransferList";
-import { Brand } from "./Brand";
+import { PublicCard, PublicFrame, PublicLoading, Unavailable } from "../components/PublicFrame";
+import { Icon } from "../components/icons";
 
-type Width = "narrow" | "medium" | "wide";
-
-export function PublicFrame({ children, width = "medium" }: { children: ReactNode; width?: Width }) {
-  return (
-    <div className="public">
-      <header className={`public-head ${width}`}>
-        <Brand />
-      </header>
-      <main className={`public-main ${width}`} tabIndex={-1}>
-        {children}
-      </main>
-    </div>
-  );
-}
+// Shared with the Nearby guest page, which imports them from here.
+export { PublicFrame, Unavailable };
 
 const hasFiles = (share: PublicShare) => share.nodes.some((n) => n.kind !== "text");
 // A text-only share named after its own first line would just repeat the text box.
@@ -46,18 +35,6 @@ function shareTitle(share: PublicShare) {
   if (hasFiles(share)) return share.name;
   const text = share.nodes.find((n) => n.kind === "text")?.text || "";
   return share.name === autoName([], text) || share.name === "Text" ? "Shared text" : share.name;
-}
-
-export function Unavailable({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
-  return (
-    <div className="card-surface public-card">
-      <div className="public-title">
-        <h1>{title}</h1>
-        <p className="muted">{children}</p>
-      </div>
-      {action}
-    </div>
-  );
 }
 
 const LINK_GONE = "This link has expired or was removed. Ask the person who sent it for a new one.";
@@ -73,7 +50,7 @@ export function PublicSharePage({ token }: { token: string }) {
             <div className="action-bar">
               {canRetry && <Button onClick={retry}>Retry</Button>}
               <button type="button" className="link" onClick={() => navigate("/pickup")}>
-                Have a pickup code?
+                Have a code?
               </button>
             </div>
           }
@@ -85,15 +62,11 @@ export function PublicSharePage({ token }: { token: string }) {
           <ShareUnlock locked={locked} onUnlock={unlock} />
         </div>
       ) : !data ? (
-        <Spinner />
+        <PublicLoading />
       ) : (
-        <div className="card-surface public-card">
-          <div className="public-title">
-            <h1>{shareTitle(data)}</h1>
-            <p className="muted">{shareSummary(data)}</p>
-          </div>
+        <PublicCard title={shareTitle(data)} subtitle={shareSummary(data)}>
           <ShareView token={token} share={data} />
-        </div>
+        </PublicCard>
       )}
     </PublicFrame>
   );
@@ -118,7 +91,7 @@ export function PickupPage() {
   }, []);
   if (!token)
     return (
-      <AuthFrame title="Use a code" subtitle="Enter any Relay code to open its destination.">
+      <AuthFrame title="Use a code" subtitle="Type the code someone gave you.">
         <CodeEntryForm
           page
           autoFocus
@@ -165,7 +138,7 @@ export function PickupPage() {
           <ShareUnlock locked={locked} onUnlock={unlock} />
         </div>
       ) : !data ? (
-        <Spinner />
+        <PublicLoading />
       ) : (
         <div className="card-surface public-card">
           <div className="between">
@@ -400,6 +373,7 @@ export function GuestUpload({ token }: { token: string }) {
       <PublicFrame width={transfers.length ? "medium" : "narrow"}>
         <Unavailable
           title="Request unavailable"
+          icon={<Icon.request size={22} />}
           action={<Button onClick={() => setLooked((n) => n + 1)}>Try again</Button>}
         >
           {error === "gone" || expired
@@ -419,7 +393,7 @@ export function GuestUpload({ token }: { token: string }) {
   if (!info)
     return (
       <PublicFrame>
-        <Spinner />
+        <PublicLoading />
       </PublicFrame>
     );
   const delivered = done.reduce((n, t) => n + t.doneFiles, 0);
