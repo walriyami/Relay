@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { copyShareUrl, recordWrites, signedIn, textFile, unique } from "./helpers";
 
-test("a guest picks files, reviews them, and only uploads on Upload", async ({ page, browser }) => {
+test("a guest picks files, reviews them, and only uploads on Send", async ({ page, browser }) => {
   await signedIn(page);
   const name = unique("request");
   await page.getByRole("link", { name: "Requests" }).click();
@@ -24,9 +24,9 @@ test("a guest picks files, reviews them, and only uploads on Upload", async ({ p
   await guest.getByRole("button", { name: `Remove ${name}-b.txt` }).click();
   await guest.waitForTimeout(1000);
   expect(writes).toEqual([]);
-  await guest.getByRole("button", { name: "Upload 1 file", exact: true }).click();
-  await expect(guest.getByRole("heading", { name: "Files sent" })).toBeVisible();
-  await expect(guest.getByRole("status").filter({ hasText: "uploaded for admin" })).toBeVisible();
+  await guest.getByRole("button", { name: "Send 1 file", exact: true }).click();
+  await expect(guest.getByRole("heading", { name: "Sent" })).toBeVisible();
+  await expect(guest.getByRole("status").filter({ hasText: "sent to admin" })).toBeVisible();
   await visitor.close();
 
   // The owner finds it under the request.
@@ -49,6 +49,33 @@ async function createRequest(page: Page, name: string) {
 const requestRow = (page: Page, name: string) =>
   page.getByRole("list", { name: "Open requests" }).getByRole("listitem").filter({ hasText: name });
 
+test("a guest can send text, the same way as on Send", async ({ page, browser }) => {
+  await signedIn(page);
+  const name = unique("note");
+  const url = await createRequest(page, name);
+  const visitor = await browser.newContext();
+  try {
+    const guest = await visitor.newPage();
+    await guest.goto(url);
+    await guest.getByRole("group", { name: "Content type" }).getByRole("button", { name: "Text" }).click();
+    await expect(guest.locator("#guest-text")).toBeFocused();
+    await guest.locator("#guest-text").fill("The door code is 4512");
+    await guest.getByLabel("Your name (optional)").fill("Dana");
+    await guest.getByRole("button", { name: "Send text", exact: true }).click();
+    await expect(guest.getByRole("heading", { name: "Sent" })).toBeVisible();
+    await expect(guest.getByRole("status").filter({ hasText: "Text ·" })).toContainText("sent to admin");
+  } finally {
+    await visitor.close();
+  }
+
+  await page.reload();
+  await expect(requestRow(page, name)).toContainText("received");
+  await expect(requestRow(page, name)).not.toContainText("Nothing received yet");
+  await requestRow(page, name).locator(".list-text").click();
+  const received = page.getByRole("dialog", { name });
+  await expect(received.locator(".submission-list")).toContainText(`${name} · Dana`);
+});
+
 test("a file dropped anywhere on the page joins the list rather than replacing the page", async ({ page, browser }) => {
   await signedIn(page);
   const name = unique("dropped");
@@ -69,7 +96,7 @@ test("a file dropped anywhere on the page joins the list rather than replacing t
     await expect(guest.getByText("Drop to add")).toBeVisible();
     await heading.dispatchEvent("drop", { dataTransfer: data });
     await expect(guest.getByRole("button", { name: `Remove ${name}.txt` })).toBeVisible();
-    await expect(guest.getByRole("button", { name: "Upload 1 file", exact: true })).toBeVisible();
+    await expect(guest.getByRole("button", { name: "Send 1 file", exact: true })).toBeVisible();
     await expect(guest).toHaveURL(url);
   } finally {
     await visitor.close();
@@ -94,22 +121,22 @@ test("a full request says so, hides the picker and never offers to send more", a
     .getByTestId("guest-file-input")
     .setInputFiles([1, 2, 3, 4].map((n) => textFile(`${name}-${n}.txt`, `file ${n}`)));
   await expect(guest.getByRole("alert")).toHaveText("This request accepts up to 18 B. Remove 6 B to continue.");
-  await expect(guest.getByRole("button", { name: "Upload 4 files" })).toBeDisabled();
+  await expect(guest.getByRole("button", { name: "Send 4 files" })).toBeDisabled();
   await guest.getByRole("button", { name: `Remove ${name}-4.txt` }).click();
   await expect(guest.getByRole("alert")).toHaveCount(0);
-  await guest.getByRole("button", { name: "Upload 3 files", exact: true }).click();
+  await guest.getByRole("button", { name: "Send 3 files", exact: true }).click();
 
   const sent = guest.locator(".guest-sent");
-  await expect(sent.getByRole("heading", { name: "Files sent" })).toBeVisible();
+  await expect(sent.getByRole("heading", { name: "Sent" })).toBeVisible();
   await expect(sent).toContainText("This request is full. admin has received the 18 B it allows.");
-  await expect(guest.getByRole("button", { name: "Send more files" })).toHaveCount(0);
+  await expect(guest.getByRole("button", { name: "Send more" })).toHaveCount(0);
 
   // Coming back later: the same notice, and nothing to pick files with.
   await guest.reload();
   await expect(guest.locator(".guest-full")).toContainText(
     "This request is full. admin has received the 18 B it allows.",
   );
-  await expect(guest.getByRole("button", { name: "Add files" })).toHaveCount(0);
+  await expect(guest.getByRole("button", { name: /Add files|Browse files/ })).toHaveCount(0);
   await expect(guest.getByTestId("guest-file-input")).toHaveCount(0);
   await visitor.close();
 
@@ -155,8 +182,8 @@ test("a guest keeps identical picks, shows collision names, and labels the submi
   );
 
   await guest.getByLabel("Your name (optional)").fill("  Dana  ");
-  await guest.getByRole("button", { name: "Upload 4 files", exact: true }).click();
-  await expect(guest.getByRole("heading", { name: "Files sent" })).toBeVisible();
+  await guest.getByRole("button", { name: "Send 4 files", exact: true }).click();
+  await expect(guest.getByRole("heading", { name: "Sent" })).toBeVisible();
   await visitor.close();
 
   const notice = page.locator(".toast", { hasText: `New files for ${name}` });
@@ -185,8 +212,8 @@ test("a submission without a name is named after its first file", async ({ page,
   await guest
     .getByTestId("guest-file-input")
     .setInputFiles([textFile(`${name}-W-2.pdf`, "w2"), textFile(`${name}-receipt.txt`, "r")]);
-  await guest.getByRole("button", { name: "Upload 2 files", exact: true }).click();
-  await expect(guest.getByRole("heading", { name: "Files sent" })).toBeVisible();
+  await guest.getByRole("button", { name: "Send 2 files", exact: true }).click();
+  await expect(guest.getByRole("heading", { name: "Sent" })).toBeVisible();
   await visitor.close();
 
   await requestRow(page, name)

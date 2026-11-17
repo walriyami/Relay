@@ -3,18 +3,12 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Clipboard,
   Clock,
-  FileText,
-  Folder,
   HardDriveUpload,
   History,
   Link2,
-  Loader2,
-  Paperclip,
   PenLine,
   Pencil,
-  Plus,
   QrCode,
   X,
 } from "lucide-react";
@@ -25,15 +19,13 @@ import {
   clearDraft,
   clearItems,
   draftFiles,
-  fromFileList,
   getDraft,
   removeItem,
   restoreDraft,
   setText,
   useDraft,
-  type DraftItem,
 } from "../../lib/draft";
-import { autoName as nameOf, bytes, plural } from "../../lib/format";
+import { autoName as nameOf, bytes } from "../../lib/format";
 import { days, durations, KEEP_DAYS } from "../../lib/options";
 import {
   NewLinkOptions,
@@ -44,7 +36,7 @@ import {
   useLinkChoiceLimit,
 } from "../../components/LinkOptions";
 import { navigate, scrollMotion } from "../../lib/router";
-import { DocumentArt } from "../../components/DocumentArt";
+import { ContentBox, FilePickers } from "../../components/ContentBox";
 import {
   abandonedUploads,
   addLink,
@@ -63,30 +55,13 @@ import {
 import { useLive } from "../../lib/live";
 import { useConnection } from "../../lib/connection";
 import { LIMITS, api, type Delivery, type DeliveryState } from "../../api";
-import { Thumbnail } from "../../components/Thumbnail";
-import { Button, IconButton, LoadFailed, Menu, Popover, dismissToastKey, toast } from "../../components/ui";
+import { Button, IconButton, LoadFailed, Menu, Popover, dismissToastKey } from "../../components/ui";
 import { CollectionModal } from "../library/CollectionModal";
 import { AddDevice } from "../settings/AddDevice";
-import { allFiles, composition, errorToast, sendItem } from "../library/actions";
+import { errorToast, sendItem } from "../library/actions";
 import { TransferCard, TransferStrip, useTransfers } from "./TransferList";
 
-// Collapsed selections show a few rows; more on request.
-const PREVIEW = 6;
-const PAGE = 60;
-// Phones and tablets can't drop files or pick folders.
-const touch = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
-
 const DRAFT_UNDO = "draft-undo";
-
-/**
- * "4 files, 1 folder" for the picks, plus "and text" when there is text. Folders hide how much they
- * hold, so a selection with folders also counts every file: "1 folder · 1,200 files".
- */
-function describePicks(items: DraftItem[], hasText: boolean, fileTotal: number) {
-  const files = items.filter((i) => i.kind === "file").length;
-  const parts = composition(files, items.length - files, hasText ? 1 : 0);
-  return files < items.length && fileTotal ? `${parts} · ${allFiles(fileTotal, files)}` : parts;
-}
 
 /** Whether this tab chose "Send something else" (the drop box is free while transfers run). */
 let composingKept = false;
@@ -127,45 +102,18 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const [linkTried, setLinkTried] = useState(false);
   const defaultKeep = me.user.retentionDays || 0;
   const [keep, setKeep] = useState(defaultKeep);
-  const [shown, setShown] = useState(PREVIEW);
-  // One frame, two modes: files (the drop area and picks) or the one text box.
-  // Text kept from before a reload opens where it was typed.
-  const [mode, setMode] = useState<"files" | "text">(() =>
-    getDraft().text && !getDraft().items.length ? "text" : "files",
-  );
-  const [pasting, setPasting] = useState(false);
-  const [pasteError, setPasteError] = useState("");
   // The devices the finished item was also sent to from the panel.
   const [also, setAlso] = useState<string[]>([]);
   const [alsoBusy, setAlsoBusy] = useState("");
   useEffect(() => setLink((current) => ({ ...current, days: me.prefs.linkDays })), [me.prefs.linkDays]);
   useEffect(() => setKeep(defaultKeep), [defaultKeep]);
-  const textArea = useRef<HTMLTextAreaElement>(null);
-  const focusText = useRef(false);
   // The transfer just sent, and the control it was sent from, until focus has settled on it.
   const handoff = useRef<{ id: string; from: Element | null } | null>(null);
-  function switchMode(next: "files" | "text") {
-    setMode(next);
-    if (next !== "text") return;
-    // The text box takes focus once it is shown, unless focus has moved on by then.
-    const from = document.activeElement;
-    requestAnimationFrame(() => {
-      const now = document.activeElement;
-      if (now === from || !now || now === document.body) textArea.current?.focus();
-    });
-  }
-  // Text pasted elsewhere on the page opens the text box so you can see it landed.
-  useEffect(() => {
-    const show = () => switchMode("text");
-    window.addEventListener("relay-show-text", show);
-    return () => window.removeEventListener("relay-show-text", show);
-  }, []);
 
   const items = draft.items;
   const hasText = draft.text.trim().length > 0;
   const ready = items.length > 0 || hasText;
   const size = items.reduce((n, i) => n + i.size, 0);
-  const fileTotal = items.reduce((n, i) => n + (i.kind === "file" ? 1 : i.files.length), 0);
   const showing = list.length > 0 && !composing;
   // The name the transfer will get unless you type one, built from the whole selection.
   // The selection's part is worked out when it changes, not on every keystroke in the text.
@@ -220,14 +168,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     if (ready && showing) startNext();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
-  // New picks bring the files back into view.
-  const count = useRef(items.length);
-  useEffect(() => {
-    if (!items.length) setShown(PREVIEW);
-    if (items.length > count.current) setMode("files");
-    count.current = items.length;
-  }, [items.length]);
-
   /** Done: finished transfers leave the drop box (they're in Recent); running ones shrink to strips. */
   function startNext() {
     for (const t of [...list]) {
@@ -239,17 +179,11 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const answerOf = (t: Transfer): DeliveryState =>
     (t.delivery && sent.data.find((d) => d.id === t.delivery!.id)?.state) || "available";
 
-  function pick(files: FileList | null, folder: boolean) {
-    if (!files?.length) return;
-    addSelection(fromFileList(files, folder));
-  }
+  /** Empties the files, keeping the text; returns how to put them back. */
   function clearFiles() {
     const previous = getDraft();
     clearItems();
-    toast("Files cleared", {
-      key: DRAFT_UNDO,
-      action: { label: "Undo", onClick: () => restoreDraft({ ...getDraft(), items: previous.items }) },
-    });
+    return () => restoreDraft({ ...getDraft(), items: previous.items });
   }
   // On a phone the destinations fold away while it uploads, so the transfer takes focus: the card
   // while it runs, then its main control (Copy link or Done, never the quieter Add files) once it has finished. Where the
@@ -287,33 +221,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
       ) ?? card.closest(".composer")?.querySelector<HTMLElement>(".transfer-view-foot .btn");
     (main ?? card).focus({ preventScroll: true });
   });
-  useEffect(() => {
-    if (pasting || !focusText.current) return;
-    focusText.current = false;
-    textArea.current?.focus();
-  }, [pasting]);
-  async function paste() {
-    setPasteError("");
-    setPasting(true);
-    const el = textArea.current;
-    const text = draft.text;
-    const start = el?.selectionStart ?? text.length;
-    const end = el?.selectionEnd ?? text.length;
-    try {
-      const clip = await navigator.clipboard.readText();
-      setText((text.slice(0, start) + clip + text.slice(end)).slice(0, LIMITS.textBytes));
-      requestAnimationFrame(() => {
-        textArea.current?.focus();
-        textArea.current?.setSelectionRange(start + clip.length, start + clip.length);
-      });
-    } catch {
-      setPasteError("This browser won’t let Relay read the clipboard. Paste into the box with ⌘V or Ctrl+V.");
-      // The box is read-only while pasting; it takes focus once it can be typed in again.
-      focusText.current = true;
-    } finally {
-      setPasting(false);
-    }
-  }
   function send(destination: Destination) {
     if (!ready || noSpace) return;
     // Undoing a clear makes no sense once the next thing is on its way.
@@ -333,7 +240,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     setLink(newLinkChoice(me.prefs.linkDays));
     setLinkTried(false);
     setKeep(defaultKeep);
-    setMode("files");
     setComposing(false);
     handoff.current = { id: t.id, from: document.activeElement };
   }
@@ -409,31 +315,12 @@ export function Composer({ children }: { children?: React.ReactNode }) {
         className={`composer card-surface${showing && allFinished ? " is-transfer-settled" : ""}`}
         aria-label="Compose"
       >
-        <input
-          ref={filesInput}
-          type="file"
-          multiple
-          hidden
-          aria-hidden
-          tabIndex={-1}
-          data-testid="file-input"
-          onChange={(e) => {
-            pick(e.target.files, false);
-            e.target.value = "";
-          }}
-        />
-        <input
-          ref={folderInput}
-          type="file"
-          hidden
-          aria-hidden
-          tabIndex={-1}
-          data-testid="folder-input"
-          {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
-          onChange={(e) => {
-            pick(e.target.files, true);
-            e.target.value = "";
-          }}
+        <FilePickers
+          files={filesInput}
+          folder={folderInput}
+          onFiles={(files) => addSelection(files)}
+          testId="file-input"
+          folderTestId="folder-input"
         />
         {showing ? (
           <div className="transfer-view">
@@ -486,139 +373,19 @@ export function Composer({ children }: { children?: React.ReactNode }) {
                 onView={(id) => setOpen(id)}
               />
             )}
-            <div className="composer-head">
-              <span className={`composer-summary${ready ? "" : " muted"}`}>
-                {ready
-                  ? `${describePicks(items, hasText, fileTotal)}${size ? ` · ${bytes(size)}` : ""}`
-                  : "Nothing added yet"}
-              </span>
-              <div className="composer-mode" role="group" aria-label="Content type" data-mode={mode}>
-                <button type="button" aria-pressed={mode === "files"} onClick={() => switchMode("files")}>
-                  Files
-                  {fileTotal > 0 && <span className="composer-mode-count">{fileTotal.toLocaleString()}</span>}
-                </button>
-                <button type="button" aria-pressed={mode === "text"} onClick={() => switchMode("text")}>
-                  Text
-                  {hasText && <span className="composer-mode-dot" aria-label="has text" />}
-                </button>
-              </div>
-            </div>
-            <div className="composer-pane" hidden={mode !== "files"}>
-              {items.length === 0 ? (
-                <button type="button" className="composer-drop" onClick={() => filesInput.current?.click()}>
-                  <DocumentArt />
-                  <strong>{touch ? "Choose files to send" : "Drop files or folders"}</strong>
-                  <span className="composer-browse">Browse files</span>
-                </button>
-              ) : (
-                <ul className="selection-list" aria-label="Selected items">
-                  {items.slice(0, shown).map((item) => (
-                    <SelectionRow key={item.key} item={item} onRemove={() => removeItem(item.key)} />
-                  ))}
-                  {items.length > shown && (
-                    <li className="selection-more">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setShown(shown === PREVIEW ? PAGE : items.length)}
-                      >
-                        {shown === PREVIEW && items.length > PAGE
-                          ? `Show ${PAGE - PREVIEW} more`
-                          : `Show all ${items.length.toLocaleString()}`}
-                      </Button>
-                    </li>
-                  )}
-                </ul>
-              )}
-              <div className={`composer-tools${items.length ? "" : " is-centered"}`}>
-                {items.length > 0 && (
-                  <button type="button" onClick={() => filesInput.current?.click()}>
-                    <Plus size={15} aria-hidden /> Add files
-                  </button>
-                )}
-                {!touch && (
-                  <button type="button" onClick={() => folderInput.current?.click()}>
-                    <Folder size={15} aria-hidden /> {items.length ? "Add folder" : "Choose folder"}
-                  </button>
-                )}
-                {items.length > 0 && (
-                  <button type="button" className="composer-tools-end" onClick={clearFiles}>
-                    <X size={15} aria-hidden /> Clear
-                  </button>
-                )}
-              </div>
-              {hasText && (
-                <div className="composer-peek">
-                  <FileText size={16} aria-hidden />
-                  <span>{draft.text.trim().split("\n")[0]}</span>
-                  <button type="button" onClick={() => switchMode("text")}>
-                    Edit text
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="composer-pane composer-write" hidden={mode !== "text"}>
-              <label className="visually-hidden" htmlFor="composer-text">
-                Text
-              </label>
-              <textarea
-                id="composer-text"
-                ref={textArea}
-                placeholder="Write or paste text…"
-                value={draft.text}
-                maxLength={LIMITS.textBytes}
-                readOnly={pasting}
-                aria-busy={pasting || undefined}
-                spellCheck
-                onChange={(e) => {
-                  setText(e.target.value);
-                  setPasteError("");
-                }}
-              />
-              <div className="composer-tools">
-                <button
-                  type="button"
-                  // Unavailable rather than disabled, so focus stays here while the browser asks.
-                  aria-disabled={pasting || undefined}
-                  onClick={() => !pasting && void paste()}
-                >
-                  {pasting ? <Loader2 size={15} className="spin" aria-hidden /> : <Clipboard size={15} aria-hidden />}{" "}
-                  Paste
-                </button>
-                <button
-                  type="button"
-                  disabled={!draft.text.length}
-                  onClick={() => {
-                    const previous = draft.text;
-                    setText("");
-                    setPasteError("");
-                    textArea.current?.focus();
-                    toast("Text cleared", {
-                      key: DRAFT_UNDO,
-                      action: { label: "Undo", onClick: () => setText(previous) },
-                    });
-                  }}
-                >
-                  <X size={15} aria-hidden /> Clear
-                </button>
-              </div>
-              {pasteError && (
-                <p className="field-error" role="alert">
-                  {pasteError}
-                </p>
-              )}
-              {items.length > 0 && (
-                <div className="composer-peek">
-                  <Paperclip size={16} aria-hidden />
-                  <span>
-                    {describePicks(items, false, fileTotal)} · {bytes(size)}
-                  </span>
-                  <button type="button" onClick={() => switchMode("files")}>
-                    Show files
-                  </button>
-                </div>
-              )}
-            </div>
+            <ContentBox
+              items={items}
+              text={draft.text}
+              textMax={LIMITS.textBytes}
+              onFiles={(files) => addSelection(files)}
+              onRemove={removeItem}
+              onClearFiles={clearFiles}
+              onText={setText}
+              textId="composer-text"
+              showTextEvent="relay-show-text"
+              undoKey={DRAFT_UNDO}
+              pickers={{ files: filesInput, folder: folderInput }}
+            />
             {ready && (
               <div className="composer-meta" role="group" aria-label="Details">
                 <NameChip name={name} placeholder={autoName} onChange={setName} />
@@ -900,32 +667,6 @@ function StoppedNotice({
       </div>
       <IconButton size="sm" label="Dismiss" icon={<X size={16} />} onClick={forgetAbandoned} />
     </div>
-  );
-}
-
-export function SelectionRow({ item, onRemove }: { item: DraftItem; onRemove: () => void }) {
-  return (
-    <li className="selection-row">
-      {item.kind === "folder" ? (
-        <div className="thumb thumb-compact thumb-folder">
-          <div className="thumb-icon">
-            <Folder size={20} />
-          </div>
-        </div>
-      ) : (
-        <Thumbnail compact file={item.file} entry={{ path: item.path, mime: item.file.type, size: item.size }} />
-      )}
-      <div className="selection-text">
-        <span className="selection-name" title={item.name}>
-          {item.name}
-        </span>
-        <span className="muted">
-          {item.kind === "folder" ? `Folder · ${plural(item.files.length, "file")} · ` : ""}
-          {bytes(item.size)}
-        </span>
-      </div>
-      <IconButton size="sm" label={`Remove ${item.name}`} icon={<X size={16} />} onClick={onRemove} />
-    </li>
   );
 }
 

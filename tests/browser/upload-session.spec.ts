@@ -85,11 +85,11 @@ test("a closed guest stream reconnects while its upload remains active", async (
   try {
     await guest.goto(new URL(`/r/${request.token}`, page.url()).href);
     await guest.getByTestId("guest-file-input").setInputFiles(textFile("guest-stream.txt"));
-    await guest.getByRole("button", { name: "Upload 1 file", exact: true }).click();
+    await guest.getByRole("button", { name: "Send 1 file", exact: true }).click();
     await expect.poll(() => ids.length).toBe(2);
     expect(new Set(ids).size).toBe(1);
     release();
-    await expect(guest.getByRole("heading", { name: "Files sent" })).toBeVisible();
+    await expect(guest.getByRole("heading", { name: "Sent" })).toBeVisible();
   } finally {
     release();
     await visitor.close();

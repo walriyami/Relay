@@ -296,8 +296,13 @@ test("content audit: guest cookies and submitted identifiers cannot cross reques
     const transfer = created.json<{ id: string; itemId: string; uploads: { id: string }[] }>();
     assert.notEqual(transfer.itemId, privateItem.result.itemId, "unknown fields do not override the server's target");
     assert.equal(instance.ctx.db.value("SELECT request_id FROM items WHERE id = ?", transfer.itemId), ar.id);
+    // Guests may send text; it lands in their own submission, never in the item they named.
     assert.equal(
       instance.ctx.db.value("SELECT count(*) FROM nodes WHERE item = ? AND kind = 'text'", transfer.itemId),
+      1,
+    );
+    assert.equal(
+      instance.ctx.db.value("SELECT count(*) FROM nodes WHERE item = ? AND kind = 'text'", privateItem.result.itemId),
       0,
     );
     const upload = transfer.uploads[0].id;
@@ -319,7 +324,9 @@ test("content audit: guest cookies and submitted identifiers cannot cross reques
     await a.call(api.transfers.complete, { params: { id: transfer.id }, body: { destination: { kind: "save" } } });
     const [submission] = await alice.call(api.requests.submissions, { params: { id: ar.id } });
     assert.equal(submission.id, transfer.itemId);
-    const node = (await alice.call(api.items.get, { params: { id: transfer.itemId } })).nodes[0];
+    const node = (await alice.call(api.items.get, { params: { id: transfer.itemId } })).nodes.find(
+      (n) => n.kind === "file",
+    )!;
     for (const url of [`/api/items/${transfer.itemId}`, urls.nodeContent(node.id), urls.itemZip(transfer.itemId)])
       assert.equal((await bytes(a, url)).statusCode, 401, "guest authority is write-only");
     assert.equal((await bytes(alice, urls.nodeContent(node.id))).body, "GOOD");

@@ -63,7 +63,7 @@ for (const action of ["upload", "file picker"] as const) {
     if (action === "upload") await page.getByTestId("guest-file-input").setInputFiles(textFile("late.txt"));
     // Wall time changes without running the deadline timer, as when the browser was suspended.
     await page.clock.setSystemTime(now + 11_000);
-    if (action === "upload") await page.getByRole("button", { name: "Upload 1 file", exact: true }).click();
+    if (action === "upload") await page.getByRole("button", { name: "Send 1 file", exact: true }).click();
     else await page.getByTestId("guest-file-input").setInputFiles(textFile("late.txt"));
     await expect(page.getByRole("heading", { name: "Request unavailable" })).toBeVisible();
     expect(writes).toEqual([]);
@@ -141,7 +141,7 @@ test("an accepted guest upload stays visible and finishes after the known reques
     const uploading = guest.waitForRequest(
       (r) => r.method() === "PATCH" && new URL(r.url()).pathname.startsWith("/uploads/"),
     );
-    await guest.getByRole("button", { name: "Upload 1 file", exact: true }).click();
+    await guest.getByRole("button", { name: "Send 1 file", exact: true }).click();
     await uploading;
     await guest.clock.fastForward(11_000);
     await expect(guest.getByRole("heading", { name: "Request unavailable" })).toBeVisible();
@@ -149,7 +149,7 @@ test("an accepted guest upload stays visible and finishes after the known reques
     await expect(guest.locator(".transfer-list")).toContainText("Uploads already accepted can still finish.");
     release();
     await expect(guest.locator(".transfer-list")).toContainText("Uploaded");
-    await expect(guest.getByRole("button", { name: "Send more files", exact: true })).toHaveCount(0);
+    await expect(guest.getByRole("button", { name: "Send more", exact: true })).toHaveCount(0);
   } finally {
     release();
     await visitor.close();

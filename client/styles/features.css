@@ -574,39 +574,9 @@
   gap: var(--s3);
   padding: var(--s4) var(--s5) var(--s4);
 }
-.dropzone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s3);
-  min-height: 190px;
-  padding: var(--s5);
-  border: 1.5px dashed var(--line-strong);
-  border-radius: var(--r2);
-  background: var(--well);
-  color: var(--muted);
-  text-align: center;
-  transition:
-    border-color 0.12s,
-    background-color 0.12s;
-}
-.dropzone > div:not(.row) {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.dropzone strong {
-  color: var(--ink);
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-.dropzone strong + span {
-  font-size: 0.88rem;
-}
-.dropzone.dragging {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+/* The Files | Text box lays its parts out in the frame around it. */
+.content-box {
+  display: contents;
 }
 .selection {
   display: flex;
@@ -855,16 +825,13 @@
   stroke-width: 2;
   transition: transform 0.26s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
-.composer-drop:hover .document-art-back,
-.dropzone.dragging .document-art-back {
+.composer-drop:hover .document-art-back {
   transform: rotate(-21deg) translateX(-6px);
 }
-.composer-drop:hover .document-art-middle,
-.dropzone.dragging .document-art-middle {
+.composer-drop:hover .document-art-middle {
   transform: rotate(18deg) translateX(5px);
 }
-.composer-drop:hover .document-art-arrow,
-.dropzone.dragging .document-art-arrow {
+.composer-drop:hover .document-art-arrow {
   transform: translateY(-3px);
 }
 .composer-tools {
@@ -1558,10 +1525,6 @@
 }
 @media (max-width: 720px) {
   .composer {
-    padding: var(--s4);
-  }
-  .dropzone {
-    min-height: 150px;
     padding: var(--s4);
   }
   .composer-pane {
@@ -3369,27 +3332,9 @@ audio.preview-media {
   font-weight: 600;
   font-size: 0.92rem;
 }
-.guest-add {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--s2);
-  border-radius: var(--r1);
-}
-.guest-add strong {
-  font-weight: 600;
-}
-.guest-add .muted {
-  font-weight: 400;
-}
-.guest-add .row {
-  gap: 2px;
-}
-.guest-add.dragging {
-  outline: 1.5px dashed var(--accent);
-  outline-offset: 4px;
-  background: var(--accent-soft);
+/* The shared box sits inside the request card, which already has the frame and padding. */
+.guest-composer {
+  padding: 0;
 }
 .guest-sent {
   display: flex;

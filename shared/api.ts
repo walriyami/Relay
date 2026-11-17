@@ -467,7 +467,7 @@ export const api = {
     start: endpoint<M.GuestGrant>()("POST", "/api/r/:token/start", { auth: "public", csrf: false }),
     transfer: endpoint<M.TransferCreated>()("POST", "/api/r/:token/transfers", {
       auth: "any",
-      body: z.extend(z.omit(transferInput, { text: true, retentionDays: true, name: true, item: true }), {
+      body: z.extend(z.omit(transferInput, { retentionDays: true, name: true, item: true }), {
         /** The guest's name, optional and trimmed; blank means none. The submission keeps the first one given. */
         sender: z.optional(z.string().check(z.trim(), z.maxLength(LIMITS.senderLength))),
       }),

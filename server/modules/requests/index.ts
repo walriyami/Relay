@@ -1,5 +1,5 @@
-// Upload requests: an owner publishes a bounded intake link; guests add files to it and can never
-// read anything back.
+// Upload requests: an owner publishes a bounded intake link; guests add files and text to it and
+// can never read anything back.
 import type { FastifyInstance } from "fastify";
 import type { Context } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
@@ -26,12 +26,12 @@ type RequestRow = {
   received_files: number;
   received_bytes: number;
 };
-/** Received counts are the request's saved files, across all of its submission items. */
+/** Received counts are the request's saved files and texts, across all of its submission items. */
 const SELECT = `SELECT r.id, r.name, r.description, r.created, r.expires, r.closed, r.max_bytes,
     r.last_received, COUNT(n.id) AS received_files, ifnull(SUM(n.size), 0) AS received_bytes
   FROM requests r
   LEFT JOIN items i ON i.request_id = r.id
-  LEFT JOIN nodes n ON n.item = i.id AND n.kind = 'file' AND n.state = 'ready'`;
+  LEFT JOIN nodes n ON n.item = i.id AND n.kind IN ('file', 'text') AND n.state = 'ready'`;
 
 function toRequest(ctx: Context, row: RequestRow): UploadRequest {
   const left = remaining(ctx, row);

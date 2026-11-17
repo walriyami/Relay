@@ -374,6 +374,7 @@ async function createTransfer(t: Transfer, input: StartInput) {
         body: {
           id: t.id,
           tab: t.tabId,
+          ...(t.text.trim() ? { text: t.text } : {}),
           folders: input.folders,
           files,
           ...(input.sender ? { sender: input.sender } : {}),

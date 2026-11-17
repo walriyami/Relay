@@ -62,7 +62,7 @@ const startTransfer = (
   client: Client,
   token: string,
   list: ReturnType<typeof files>,
-  extra: { id?: string; sender?: string; folders?: string[] } = {},
+  extra: { id?: string; sender?: string; folders?: string[]; text?: string } = {},
 ) =>
   client.call(api.requests.transfer, {
     params: { token },
@@ -475,6 +475,49 @@ test("submissions are named after the guest, or after what they sent", async () 
       await status(startTransfer(tooLong, request.token, files(1), { sender: "x".repeat(81) })),
       400,
       "the name is bounded",
+    );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("guests can send text, alone or with files, within the request's room", async () => {
+  const { instance, owner, request } = await setup({ maxBytes: 20 });
+  try {
+    const visitor = await guest(instance, request.token);
+    const note = await startTransfer(visitor, request.token, [], { text: "hello there" });
+    assert.deepEqual(note.uploads, [], "text is stored with the transfer, nothing to upload");
+    await visitor.call(api.transfers.complete, { params: { id: note.id }, body: { destination: { kind: "save" } } });
+    const both = await startTransfer(visitor, request.token, files(1), { text: "notes" });
+    await upload(visitor, both, [1]);
+
+    const submissions = await owner.call(api.requests.submissions, { params: { id: request.id } });
+    const byId = new Map(submissions.map((s) => [s.id, s]));
+    assert.equal(byId.get(note.itemId)!.name, "Tax papers · Text · 11 characters");
+    assert.equal(byId.get(both.itemId)!.name, "Tax papers · scan-0-1.pdf + text");
+    const item = await owner.call(api.items.get, { params: { id: note.itemId } });
+    assert.deepEqual(
+      item.nodes.map((n) => [n.name, n.kind, n.text]),
+      [["Text.txt", "text", "hello there"]],
+    );
+
+    const listed = (await owner.call(api.requests.list)).find((r) => r.id === request.id)!;
+    assert.deepEqual([listed.receivedFiles, listed.receivedBytes], [3, 17], "texts count as received");
+    const uploads = (await owner.call(api.activity.list)).entries.filter((e) => e.kind === "upload");
+    assert.ok(
+      uploads.some((e) => e.kind === "upload" && e.itemId === note.itemId && e.files === 0 && e.text),
+      "the owner is told a text arrived",
+    );
+
+    assert.equal(
+      await status(startTransfer(visitor, request.token, [], { text: "x".repeat(4) })),
+      413,
+      "text counts against the request's room like files do",
+    );
+    assert.equal(
+      await status(startTransfer(visitor, request.token, [], { text: "   " })),
+      400,
+      "blank text is nothing",
     );
   } finally {
     await instance.close();

@@ -16,21 +16,24 @@ export function usePageDrop({
   onFiles,
   onText,
   hint,
+  accepts = () => true,
 }: {
   onFiles: (files: PickedDraftFile[], folders: PickedFolder[]) => void;
   /** Text pasted outside any input; return false to leave it alone. */
   onText: (text: string) => boolean;
   /** Under "Drop to add": what happens next. */
   hint: string;
+  /** False while the page takes nothing (say, a request that is full): drops and pastes are refused. */
+  accepts?: () => boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   // Files found so far while a dropped folder is read; null when not reading.
   const [reading, setReading] = useState<number | null>(null);
-  const handlers = useRef({ onFiles, onText });
-  handlers.current = { onFiles, onText };
+  const handlers = useRef({ onFiles, onText, accepts });
+  handlers.current = { onFiles, onText, accepts };
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
-      if (modalOpen()) return;
+      if (modalOpen() || !handlers.current.accepts()) return;
       const files = Array.from(event.clipboardData?.files || []);
       if (!files.length) {
         // Text already being written is never touched.
@@ -57,12 +60,12 @@ export function usePageDrop({
       if (!dragHasFiles(event) || modalOpen()) return;
       event.preventDefault();
       depth++;
-      setDragging(true);
+      setDragging(handlers.current.accepts());
     };
     const over = (event: DragEvent) => {
       if (!dragHasFiles(event) || modalOpen()) return;
       event.preventDefault();
-      event.dataTransfer!.dropEffect = "copy";
+      event.dataTransfer!.dropEffect = handlers.current.accepts() ? "copy" : "none";
     };
     const leave = (event: DragEvent) => {
       if (!dragHasFiles(event)) return;
@@ -74,9 +77,12 @@ export function usePageDrop({
       event.preventDefault();
       depth = 0;
       setDragging(false);
+      // Refused drops are still caught, so the browser never opens the file in place of the page.
+      if (!handlers.current.accepts()) return;
       setReading(0);
       const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
       setReading(null);
+      if (!handlers.current.accepts()) return;
       handlers.current.onFiles(selection.files, selection.folders);
       if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
     };

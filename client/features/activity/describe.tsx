@@ -51,7 +51,7 @@ export function describeEntry(e: ActivityEntry): Described {
     case "upload":
       return {
         icon: <FolderInput size={16} />,
-        title: `${e.sender || "Someone"} sent files to “${e.request}”`,
+        title: `${e.sender || "Someone"} sent ${!e.files && e.text ? "text" : "files"} to “${e.request}”`,
         detail: contents(e.files, e.bytes, e.text),
       };
     case "link":

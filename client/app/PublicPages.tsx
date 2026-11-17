@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CircleCheck, FilePlus2, FolderPlus, Upload, X } from "lucide-react";
+import { CircleCheck, Upload } from "lucide-react";
 import { ApiError, api, call, type PublicRequest, type PublicShare } from "../api";
 import { LIMITS } from "../../shared/model";
-import { collectDroppedSelection, dragHasFiles, skippedNotice } from "../drop-selection";
 import { autoName, baseName, bytes, plural, until } from "../lib/format";
-import { startTransfer, isBusy, uniquePaths, type DraftFile, type Transfer } from "../lib/transfers";
+import { startTransfer, isBusy, payloadBytes, uniquePaths, type Transfer } from "../lib/transfers";
 import {
-  fromFileList,
+  draftFiles,
   normalizeSelection,
+  type DraftItem,
   type PickedDraftFile,
   type PickedFolder,
   type SelectionRename,
 } from "../lib/draft";
 import { navigate } from "../lib/router";
 import { useExpiryClock } from "../lib/refresh";
-import { Button, Field, IconButton, Spinner, toast } from "../components/ui";
-import { FileTypeIcon } from "../components/Thumbnail";
-import { DocumentArt } from "../components/DocumentArt";
+import { Button, Field, Spinner, toast } from "../components/ui";
+import { ContentBox } from "../components/ContentBox";
+import { usePageDrop } from "../components/PageDrop";
+import { composition } from "../features/library/actions";
 import { SHARE_GONE, ShareUnlock, ShareView, shareSummary, useShare } from "../features/incoming/ReceiveView";
 import { CodeEntryForm, codeDigits } from "../features/codes/CodeEntry";
 import { thisDevice } from "../features/auth/device-name";
@@ -183,15 +184,8 @@ export function PickupPage() {
   );
 }
 
-type Pick = {
-  key: string;
-  files: DraftFile[];
-  folders: string[];
-  name: string;
-  size: number;
-  folder: boolean;
-  renames: Omit<SelectionRename, "itemKey">[];
-};
+/** Something picked to send, with what it was renamed to as it was added. */
+type Pick = DraftItem & { renames: Omit<SelectionRename, "itemKey">[] };
 
 // The server compares names the way SQLite's NOCASE does: ASCII letters only.
 const foldCase = (value: string) => value.replace(/[A-Z]/g, (c) => c.toLowerCase());
@@ -232,7 +226,7 @@ function place(files: { path: string }[], folders: string[], taken: Set<string>)
  * Picks that will be saved under another name: two different files with the same name in this
  * upload (the second becomes "a (2).txt"), or a name an earlier upload from this page already used.
  */
-function renames(picks: Pick[], earlier: Transfer[]) {
+function renames(items: Pick[], earlier: Transfer[]) {
   const taken = new Set<string>();
   for (const t of earlier)
     place(
@@ -240,10 +234,10 @@ function renames(picks: Pick[], earlier: Transfer[]) {
       t.folders,
       taken,
     );
-  const files = picks.flatMap((p) => p.files);
+  const { files, folders } = draftFiles(items);
   const sent = uniquePaths(files);
-  const result = picks.flatMap((pick) =>
-    pick.renames.map((rename) => {
+  const result = items.flatMap((item) =>
+    item.renames.map((rename) => {
       const from = baseName(rename.from);
       const to = baseName(rename.to);
       return { from: from === to ? rename.from : from, to: from === to ? rename.to : to, path: rename.path };
@@ -255,17 +249,12 @@ function renames(picks: Pick[], earlier: Transfer[]) {
       .filter((r) => r.from !== r.to)
       .map((r) => ({ from: baseName(r.from), to: baseName(r.to), path: r.from })),
   );
-  for (const r of place(
-    sent,
-    picks.flatMap((p) => p.folders),
-    taken,
-  ))
-    result.push({ ...r, path: r.from });
+  for (const r of place(sent, folders, taken)) result.push({ ...r, path: r.from });
   return result;
 }
 
 /**
- * Why the current picks don't fit the request, saying what to remove; null when they fit. A request
+ * Why what's about to be sent doesn't fit the request, saying how much to remove; null when it fits. A request
  * with no room at all is shown as full instead (see `fullMessage`).
  */
 function limitProblem(info: PublicRequest, size: number) {
@@ -283,25 +272,28 @@ function fullMessage(info: PublicRequest) {
   const who = info.owner || "The person who asked";
   return info.remainingBytes === 0
     ? `This request is full. ${who} has received the ${bytes(info.maxBytes)} it allows.`
-    : `This request is full. ${who} can’t receive more files with it.`;
+    : `This request is full. ${who} can’t receive more with it.`;
 }
 
-const coarse = () => typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+// Fired when text pasted elsewhere on the page lands in the text box, so the box shows it.
+const SHOW_TEXT = "relay-guest-text";
 
-// Someone asked for files. The guest picks them, reviews the list, then presses Upload.
+/** "2 files and text", "1 folder", "text": what the Send button sends. */
+function sendLabel(items: Pick[], files: number, hasText: boolean) {
+  const picks = files ? plural(files, "file") : items.length ? plural(items.length, "folder") : "";
+  return [picks, hasText ? "text" : ""].filter(Boolean).join(" and ");
+}
+
+// Someone asked for files or text. The guest adds them, reviews what's there, then presses Send.
 export function GuestUpload({ token }: { token: string }) {
   const [info, setInfo] = useState<PublicRequest | null>(null);
   const [error, setError] = useState("");
   const now = useExpiryClock([info?.expires ?? Infinity]);
   const expired = !!info && info.expires <= now;
-  const [picks, setPicks] = useState<Pick[]>([]);
-  const [dragging, setDragging] = useState(false);
-  // Files found so far while a dropped folder is read; null when not reading.
-  const [reading, setReading] = useState<number | null>(null);
+  const [items, setItems] = useState<Pick[]>([]);
+  const [text, setText] = useState("");
   const [seen, setSeen] = useState<Set<string>>(() => new Set());
   const [sender, setSender] = useState("");
-  const filesInput = useRef<HTMLInputElement>(null);
-  const folderInput = useRef<HTMLInputElement>(null);
   const all = useTransfers().filter((t) => t.guest === token);
   const transfers = all.filter((t) => !seen.has(t.id));
   const finished = transfers.filter((t) => t.status === "done").length;
@@ -338,92 +330,50 @@ export function GuestUpload({ token }: { token: string }) {
   function add(files: PickedDraftFile[], folders: PickedFolder[] = []) {
     // A file picker or folder read may return after the deadline, before its timer runs.
     if (!requestOpen()) return;
-    setPicks((current) => {
+    setItems((current) => {
       const normalized = normalizeSelection(
         files,
         folders,
-        current.map((pick) => pick.name),
+        current.map((item) => item.name),
       );
-      const renamedByItem = new Map<string, Omit<SelectionRename, "itemKey">[]>();
-      for (const rename of normalized.renames) {
-        const entries = renamedByItem.get(rename.itemKey) ?? [];
-        entries.push(rename);
-        renamedByItem.set(rename.itemKey, entries);
-      }
       const next = normalized.items.map((item): Pick => ({
-        key: item.key,
-        name: item.name,
-        size: item.size,
-        files: item.kind === "file" ? [{ file: item.file, path: item.path }] : item.files,
-        folders: item.kind === "file" ? [] : item.folders,
-        folder: item.kind === "folder",
-        renames: renamedByItem.get(item.key) ?? [],
+        ...item,
+        renames: normalized.renames
+          .filter((rename) => rename.itemKey === item.key)
+          .map(({ itemKey: _, ...rename }) => rename),
       }));
       return [...current, ...next];
     });
   }
-  const count = picks.reduce((n, p) => n + p.files.length, 0);
-  const size = picks.reduce((n, p) => n + p.size, 0);
-  const limitMessage = info && limitProblem(info, size);
+  const count = items.reduce((n, i) => n + (i.kind === "file" ? 1 : i.files.length), 0);
+  const size = items.reduce((n, i) => n + i.size, 0);
+  const hasText = text.trim().length > 0;
+  const ready = items.length > 0 || hasText;
+  const limitMessage = info && limitProblem(info, payloadBytes(size, text));
   const busy = transfers.some(isBusy);
   const done = transfers.filter((t) => t.status === "done");
   const full = info && !busy ? fullMessage(info) : null;
-  const sent = !busy && done.length > 0 && (!picks.length || !!full);
+  const sent = !busy && done.length > 0 && (!ready || !!full);
   // Earlier uploads from this page, oldest first: their names are already taken in the submission.
   const renamed = useMemo(
-    () => renames(picks, all.filter((t) => t.status === "done").reverse()),
+    () => renames(items, all.filter((t) => t.status === "done").reverse()),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when a transfer's status changes, not on every progress tick.
-    [picks, all.map((t) => `${t.id}:${t.status}`).join()],
+    [items, all.map((t) => `${t.id}:${t.status}`).join()],
   );
-  // Dropping anywhere on the page adds to the list, so a near miss never opens the file in place of
-  // this page. While the request is full or just answered, drops are refused rather than lost.
-  const accepting = useRef<() => boolean>(() => false);
-  accepting.current = () => !!info && !error && !sent && !full && info.expires > Date.now();
-  const addDropped = useRef(add);
-  addDropped.current = add;
-  useEffect(() => {
-    let depth = 0;
-    const enter = (event: DragEvent) => {
-      if (!dragHasFiles(event)) return;
-      event.preventDefault();
-      depth++;
-      setDragging(accepting.current());
-    };
-    const over = (event: DragEvent) => {
-      if (!dragHasFiles(event)) return;
-      event.preventDefault();
-      event.dataTransfer!.dropEffect = accepting.current() ? "copy" : "none";
-    };
-    const leave = (event: DragEvent) => {
-      if (!dragHasFiles(event)) return;
-      depth = Math.max(0, depth - 1);
-      if (!depth) setDragging(false);
-    };
-    const drop = async (event: DragEvent) => {
-      if (!dragHasFiles(event)) return;
-      event.preventDefault();
-      depth = 0;
-      setDragging(false);
-      if (!accepting.current()) return;
-      setReading(0);
-      const selection = await collectDroppedSelection(event.dataTransfer!.items, setReading);
-      setReading(null);
-      if (!accepting.current()) return;
-      addDropped.current(selection.files, selection.folders);
-      if (selection.skipped) toast(skippedNotice(selection.skipped), { tone: "error" });
-    };
-    const onDrop = (event: DragEvent) => void drop(event);
-    document.addEventListener("dragenter", enter);
-    document.addEventListener("dragover", over);
-    document.addEventListener("dragleave", leave);
-    document.addEventListener("drop", onDrop);
-    return () => {
-      document.removeEventListener("dragenter", enter);
-      document.removeEventListener("dragover", over);
-      document.removeEventListener("dragleave", leave);
-      document.removeEventListener("drop", onDrop);
-    };
-  }, []);
+  // Dropping or pasting anywhere on the page adds to what will be sent, so a near miss never opens
+  // the file in place of this page. While the request is full or just answered, drops are refused.
+  const accepting = () => !!info && !error && !sent && !full && info.expires > Date.now();
+  const overlay = usePageDrop({
+    accepts: accepting,
+    onFiles: (files, folders) => add(files, folders),
+    onText: (pasted) => {
+      if (text.trim()) return false;
+      setText(pasted.slice(0, LIMITS.textBytes));
+      window.dispatchEvent(new Event(SHOW_TEXT));
+      return true;
+    },
+    hint: "Nothing is sent until you press Send.",
+  });
   function requestOpen() {
     if (!info || error) return false;
     if (info.expires > Date.now()) return true;
@@ -431,17 +381,19 @@ export function GuestUpload({ token }: { token: string }) {
     return false;
   }
   function upload() {
-    if (!requestOpen() || !count) return;
+    if (!requestOpen() || !ready) return;
+    const { files, folders } = draftFiles(items);
     startTransfer({
-      files: picks.flatMap((p) => p.files),
-      folders: picks.flatMap((p) => p.folders),
-      text: "",
+      files,
+      folders,
+      text: hasText ? text : "",
       name: null,
       destination: { kind: "guest" },
       guest: token,
       sender: sender.trim() || undefined,
     });
-    setPicks([]);
+    setItems([]);
+    setText("");
   }
   if (error || expired)
     return (
@@ -470,61 +422,14 @@ export function GuestUpload({ token }: { token: string }) {
         <Spinner />
       </PublicFrame>
     );
-  const pickers = (
-    <>
-      <input
-        ref={filesInput}
-        data-testid="guest-file-input"
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          if (e.target.files) add(fromFileList(e.target.files));
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={folderInput}
-        type="file"
-        hidden
-        {...({ webkitdirectory: "" } as object)}
-        onChange={(e) => {
-          if (e.target.files) add(fromFileList(e.target.files, true));
-          e.target.value = "";
-        }}
-      />
-    </>
-  );
-  const addButtons = (size: "sm" | "md") => (
-    <>
-      <Button
-        size={size}
-        variant={size === "sm" ? "ghost" : "secondary"}
-        icon={<FilePlus2 size={16} />}
-        onClick={() => filesInput.current?.click()}
-      >
-        Add files
-      </Button>
-      {/* Phones have no folder picker worth offering, as on the Send page. */}
-      {!coarse() && (
-        <Button
-          size={size}
-          variant={size === "sm" ? "ghost" : "secondary"}
-          icon={<FolderPlus size={16} />}
-          onClick={() => folderInput.current?.click()}
-        >
-          Add folder
-        </Button>
-      )}
-    </>
-  );
   const delivered = done.reduce((n, t) => n + t.doneFiles, 0);
-  const deliveredBytes = done.reduce((n, t) => n + t.totalBytes, 0);
+  const deliveredTexts = done.filter((t) => t.text.trim()).length;
+  const deliveredBytes = done.reduce((n, t) => n + payloadBytes(t.totalBytes, t.text), 0);
   return (
     <PublicFrame>
       <div className="card-surface public-card">
         <div className="public-title">
-          {info.owner && <p className="request-owner">{info.owner} is asking for files</p>}
+          {info.owner && <p className="request-owner">{info.owner} is asking for</p>}
           <h1>{info.name}</h1>
           {info.description && <p className="request-description">{info.description}</p>}
           <p className="muted">
@@ -536,10 +441,10 @@ export function GuestUpload({ token }: { token: string }) {
             <span className="guest-sent-icon">
               <CircleCheck size={28} aria-hidden />
             </span>
-            <h2>Files sent</h2>
+            <h2>Sent</h2>
             <p className="muted">
-              {plural(delivered, "file")} · {bytes(deliveredBytes)} uploaded{info.owner ? ` for ${info.owner}` : ""}.
-              You can close this page.
+              {composition(delivered, 0, deliveredTexts)} · {bytes(deliveredBytes)} sent
+              {info.owner ? ` to ${info.owner}` : ""}. You can close this page.
             </p>
             {full ? (
               <p className="muted">{full}</p>
@@ -549,7 +454,7 @@ export function GuestUpload({ token }: { token: string }) {
                   setSeen((prev) => new Set([...prev, ...transfers.map((t) => t.id)]));
                 }}
               >
-                Send more files
+                Send more
               </Button>
             )}
           </div>
@@ -560,74 +465,25 @@ export function GuestUpload({ token }: { token: string }) {
           </div>
         ) : (
           <>
-            {picks.length > 0 || busy ? (
-              <div className={`guest-add ${dragging ? "dragging" : ""}`}>
-                {reading !== null ? (
-                  <span className="muted" role="status">
-                    {reading ? `Reading… ${plural(reading, "file")} so far` : "Reading what you dropped…"}
-                  </span>
-                ) : picks.length > 0 ? (
-                  <strong>
-                    {plural(count, "file")}
-                    <span className="muted"> · {bytes(size)}</span>
-                  </strong>
-                ) : (
-                  <span className="muted">Add more while this uploads</span>
-                )}
-                <span className="row">{addButtons("sm")}</span>
-                {pickers}
-              </div>
-            ) : (
-              <div className={`dropzone ${dragging ? "dragging" : ""}`}>
-                <DocumentArt />
-                <div role={reading === null ? undefined : "status"}>
-                  <strong>
-                    {reading !== null
-                      ? "Reading what you dropped…"
-                      : dragging
-                        ? "Drop to add"
-                        : coarse()
-                          ? "Choose files to send"
-                          : "Drop files or folders here"}
-                  </strong>
-                  <span>
-                    {reading
-                      ? `${plural(reading, "file")} found so far`
-                      : "You’ll see the list before anything uploads."}
-                  </span>
-                </div>
-                <div className="row center">{addButtons("md")}</div>
-                {pickers}
-              </div>
-            )}
-            {picks.length > 0 && (
-              <ul className="selection-list">
-                {picks.map((p) => (
-                  <li key={p.key} className="selection-row">
-                    <div className={`thumb thumb-compact ${p.folder ? "thumb-folder" : ""}`}>
-                      <div className="thumb-icon">
-                        <FileTypeIcon path={p.name} kind={p.folder ? "folder" : "file"} size={20} />
-                      </div>
-                    </div>
-                    <div className="selection-text">
-                      <span className="selection-name" title={p.name}>
-                        {p.name}
-                      </span>
-                      <span className="muted">
-                        {p.folder ? `Folder · ${plural(p.files.length, "file")} · ` : ""}
-                        {bytes(p.size)}
-                      </span>
-                    </div>
-                    <IconButton
-                      size="sm"
-                      label={`Remove ${p.name}`}
-                      icon={<X size={16} />}
-                      onClick={() => setPicks((all) => all.filter((x) => x.key !== p.key))}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
+            <div className="composer guest-composer">
+              <ContentBox
+                items={items}
+                text={text}
+                textMax={LIMITS.textBytes}
+                onFiles={(files) => add(files)}
+                onRemove={(key) => setItems((current) => current.filter((item) => item.key !== key))}
+                onClearFiles={() => {
+                  const previous = items;
+                  setItems([]);
+                  return () => setItems((current) => [...previous, ...current]);
+                }}
+                onText={setText}
+                textId="guest-text"
+                showTextEvent={SHOW_TEXT}
+                undoKey="guest-undo"
+                fileInputTestId="guest-file-input"
+              />
+            </div>
             {renamed.length > 0 && (
               <ul className="guest-renames muted" aria-label="Renamed files">
                 {renamed.slice(0, 5).map((r) => (
@@ -643,8 +499,8 @@ export function GuestUpload({ token }: { token: string }) {
                 {limitMessage}
               </p>
             )}
-            {picks.length > 0 && (
-              <Field label="Your name (optional)" hint={`So ${info.owner || "they"} can tell who sent these.`}>
+            {ready && (
+              <Field label="Your name (optional)" hint={`So ${info.owner || "they"} can tell who sent this.`}>
                 <input
                   className="input"
                   autoComplete="name"
@@ -654,15 +510,15 @@ export function GuestUpload({ token }: { token: string }) {
                 />
               </Field>
             )}
-            {picks.length > 0 && (
+            {ready && (
               <div className="row end">
                 <Button
                   variant="primary"
                   icon={<Upload size={16} />}
-                  disabled={!count || !!limitMessage || busy}
+                  disabled={!!limitMessage || busy}
                   onClick={upload}
                 >
-                  Upload {plural(count, "file")}
+                  Send {sendLabel(items, count, hasText)}
                 </Button>
               </div>
             )}
@@ -678,6 +534,7 @@ export function GuestUpload({ token }: { token: string }) {
           </>
         )}
       </div>
+      {overlay}
     </PublicFrame>
   );
 }

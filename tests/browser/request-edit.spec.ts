@@ -103,7 +103,7 @@ test("a full request's limit can be raised, and never set below what it holds", 
   const guest = await visitor.newPage();
   await guest.goto(`/r/${request.token}`);
   await guest.getByTestId("guest-file-input").setInputFiles([textFile(`${name}-a.txt`, "twelve bytes")]);
-  await guest.getByRole("button", { name: "Upload 1 file", exact: true }).click();
+  await guest.getByRole("button", { name: "Send 1 file", exact: true }).click();
   await expect(guest.locator(".guest-sent")).toContainText(
     "This request is full. admin has received the 12 B it allows.",
   );
@@ -148,7 +148,7 @@ test("a full request's limit can be raised, and never set below what it holds", 
   // The guest can send again after a reload.
   await guest.reload();
   await expect(guest.getByText("Up to 1 GB")).toBeVisible();
-  await expect(guest.getByRole("button", { name: "Add files" })).toBeVisible();
+  await expect(guest.getByRole("button", { name: /Browse files/ })).toBeVisible();
   await visitor.close();
 });
 
@@ -158,7 +158,7 @@ test("expired and closed requests keep received files but cannot be edited or re
   const sendFile = async (token: string, filename: string) => {
     await guest.goto(`/r/${token}`);
     await guest.getByTestId("guest-file-input").setInputFiles([textFile(filename, "received before closing")]);
-    await guest.getByRole("button", { name: "Upload 1 file", exact: true }).click();
+    await guest.getByRole("button", { name: "Send 1 file", exact: true }).click();
     await expect(guest.locator(".guest-sent")).toBeVisible();
   };
   const name = unique("expired-final");

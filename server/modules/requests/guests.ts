@@ -65,12 +65,18 @@ export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes
 }
 
 /**
- * "Tax papers · Dana", or without a name "Tax papers · W-2.pdf + 2 more", so several guests'
- * submissions are told apart. Bounded to the item name limit, keeping the request's name first.
+ * "Tax papers · Dana", or without a name "Tax papers · W-2.pdf + 2 more" (or "+ text", or
+ * "Text · 120 characters"), so several guests' submissions are told apart. Bounded to the item name
+ * limit, keeping the request's name first.
  */
-function submissionName(request: string, sender: string | null, input: Parameters<typeof planNodes>[0]) {
+function submissionName(
+  request: string,
+  sender: string | null,
+  input: Parameters<typeof planNodes>[0] & { text?: string },
+) {
   const top = planNodes(input).filter((node) => node.parentKey === null);
-  const label = sender ?? autoName(top[0]?.name ?? null, top.length, null) ?? "submission";
+  const text = input.text?.trim() ? [...input.text].length : null;
+  const label = sender ?? autoName(top[0]?.name ?? null, top.length, text) ?? "submission";
   return [...`${request} · ${label}`].slice(0, LIMITS.nameLength).join("");
 }
 

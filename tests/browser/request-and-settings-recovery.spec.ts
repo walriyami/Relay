@@ -75,7 +75,7 @@ test("a guest can retry a request after an initial network failure", async ({ pa
     await guest.unroute(`**/api/r/${request.token}`);
     await guest.getByRole("button", { name: "Try again" }).click();
     await expect(guest.getByRole("heading", { name })).toBeVisible();
-    await expect(guest.getByRole("button", { name: "Add files" })).toBeEnabled();
+    await expect(guest.getByRole("button", { name: /Browse files/ })).toBeEnabled();
   } finally {
     await context.close();
   }
@@ -108,7 +108,7 @@ test("an existing guest page keeps its draft after a failed refresh and reloads 
     await expect(guest.getByRole("heading", { name: "Request unavailable" })).toHaveCount(0);
     await expect(guest.getByText(filename, { exact: true })).toBeVisible();
     await expect(guest.getByLabel("Your name (optional)")).toHaveValue("Guest sender");
-    await expect(guest.getByRole("button", { name: /^Upload/ })).toBeEnabled();
+    await expect(guest.getByRole("button", { name: /^Send / })).toBeEnabled();
     const response = await page.request.patch(`/api/requests/${request.id}`, {
       headers: { "X-Relay-CSRF": csrf },
       data: { name: `${name} updated`, description: "", days: 30, maxBytes: 1024 ** 3 },
@@ -119,7 +119,7 @@ test("an existing guest page keeps its draft after a failed refresh and reloads 
     await expect(guest.getByRole("heading", { name: `${name} updated` })).toBeVisible();
     await expect(guest.getByText(filename, { exact: true })).toBeVisible();
     await expect(guest.getByLabel("Your name (optional)")).toHaveValue("Guest sender");
-    await expect(guest.getByRole("button", { name: /^Upload/ })).toBeEnabled();
+    await expect(guest.getByRole("button", { name: /^Send / })).toBeEnabled();
   } finally {
     await context.close();
   }

@@ -3,7 +3,7 @@ import { Ban, ChevronRight, FolderInput, Inbox, Link2, Pencil, Plus } from "luci
 import { ApiError, api, call, stableId, urls, type UploadRequest } from "../../api";
 import type { Body } from "../../../shared/api";
 import { DEFAULTS, LIMITS } from "../../../shared/model";
-import { ago, bytes, date, plural, until } from "../../lib/format";
+import { ago, bytes, date, until } from "../../lib/format";
 import { notifyChange, useLive } from "../../lib/live";
 import { takeModalAddress, useRoute } from "../../lib/router";
 import { useExpiryClock } from "../../lib/refresh";
@@ -78,7 +78,7 @@ export function RequestsPage() {
   async function close(r: UploadRequest) {
     const ok = await confirmDialog({
       title: `Close “${r.name}”?`,
-      body: "People can’t upload with this link anymore. Files already received stay in Files.",
+      body: "People can’t send with this link anymore. What they already sent stays in Files.",
       confirm: "Close request",
       danger: true,
     });
@@ -110,9 +110,8 @@ export function RequestsPage() {
         </strong>
         <span className="muted">
           {[
-            r.receivedFiles
-              ? `${plural(r.receivedFiles, "file")} · ${bytes(r.receivedBytes)} received`
-              : "Nothing received yet",
+            // Files and texts alike, so a request answered only with text doesn't look untouched.
+            r.receivedFiles ? `${bytes(r.receivedBytes)} received` : "Nothing received yet",
             live
               ? r.full
                 ? "No room for more · review saved, retained and reserved space"
@@ -164,7 +163,7 @@ export function RequestsPage() {
       <div className="page-head">
         <div>
           <h1>Requests</h1>
-          <p className="muted">Collect files from anyone with a link. They don’t need an account.</p>
+          <p className="muted">Collect files or text from anyone with a link. They don’t need an account.</p>
         </div>
         {data.length > 0 && (
           <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
@@ -187,7 +186,7 @@ export function RequestsPage() {
             </Button>
           }
         >
-          Ask someone for files and they’ll land straight in your Files.
+          Ask someone for files or text, and what they send lands straight in your Files.
         </EmptyState>
       ) : (
         <>
@@ -541,7 +540,7 @@ function Submissions({
   return (
     <Modal
       title={request.name}
-      subtitle={request.full && !request.closed ? "Received files · Full" : "Received files"}
+      subtitle={request.full && !request.closed ? "Received · Full" : "Received"}
       url={requestAddress(request.id)}
       onClose={onClose}
       actions={
@@ -573,12 +572,12 @@ function Submissions({
         </p>
       )}
       {error && !data.length ? (
-        <LoadFailed title="Received files couldn’t be loaded" error={error} onRetry={reload} />
+        <LoadFailed title="What was received couldn’t be loaded" error={error} onRetry={reload} />
       ) : loading && !data.length ? (
         <Spinner />
       ) : !data.length ? (
-        <InlineEmpty icon={<Inbox size={20} />} title="No files received yet">
-          Files uploaded with this request will appear here and in Files.
+        <InlineEmpty icon={<Inbox size={20} />} title="Nothing received yet">
+          Files and text sent with this request will appear here and in Files.
         </InlineEmpty>
       ) : (
         <ul className="list submission-list">

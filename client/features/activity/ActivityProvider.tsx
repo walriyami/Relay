@@ -166,7 +166,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     };
   }, [queue, viewing, deliveries.data]);
 
-  // New files through a request: "New files for Tax documents · View".
+  // New files or text through a request: "New files for Tax documents · View".
   const knownEntries = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (feed.loading) return;
@@ -180,7 +180,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     if (!uploads.length) return;
     const requests = [...new Map(uploads.map((u) => [u.requestId, u])).values()];
     const one = requests.length === 1 ? requests[0] : null;
-    const message = one ? `New files for ${one.request}` : `New files for ${plural(requests.length, "request")}`;
+    const what = uploads.every((u) => !u.files && u.text) ? "New text" : "New files";
+    const message = one ? `${what} for ${one.request}` : `${what} for ${plural(requests.length, "request")}`;
     const view = () => navigate(one ? requestAddress(one.requestId) : "/requests");
     toast(message, { key: `request-files:${one?.requestId ?? "many"}`, action: { label: "View", onClick: view } });
     if (getLocalPrefs().sound) chime();
