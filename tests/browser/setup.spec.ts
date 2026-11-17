@@ -257,7 +257,7 @@ test("empty pages of a new install appear without a flash of loading, and waitin
     await route.continue();
   });
   await nav("Links");
-  await expect(page.locator(".spinner-row")).toHaveCSS("opacity", "1");
+  await expect(page.locator(".list-skeleton")).toHaveCSS("opacity", "1");
   release();
   await expect(page.getByText("No links yet", { exact: true })).toBeVisible();
   await page.unroute("**/api/links");

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Ban, ChevronRight, FolderInput, Inbox, Link2, Pencil, Plus } from "lucide-react";
+import { Ban, ChevronRight, Inbox, Pencil, Plus } from "lucide-react";
 import { ApiError, api, call, stableId, urls, type UploadRequest } from "../../api";
 import type { Body } from "../../../shared/api";
 import { DEFAULTS, LIMITS } from "../../../shared/model";
@@ -18,17 +18,45 @@ import {
   Menu,
   Modal,
   Segmented,
-  Spinner,
+  Chip,
+  ListSkeleton,
   confirmDialog,
   toast,
   LoadFailed,
   PageLink,
 } from "../../components/ui";
+import { Icon } from "../../components/icons";
+import { StatusRow } from "../../components/StatusRow";
 import { CollectionModal } from "../library/CollectionModal";
 import { LinkDialog } from "../../components/LinkDialog";
 import { itemMeta } from "../library/actions";
 
 const requestUrl = (token: string) => urls.requestLink(location.origin, token);
+
+/** Whether anything arrived, and when it closes or why it stopped taking files. */
+function RequestChips({ request: r, live, now }: { request: UploadRequest; live: boolean; now: number }) {
+  return (
+    <>
+      {live && r.full ? (
+        <Chip tone="warn" title="Guests can’t send more until you raise its limit">
+          Full
+        </Chip>
+      ) : live ? (
+        <Chip tone={r.expires - now < DAY ? "warn" : "neutral"} icon={<Icon.time size={13} aria-hidden />}>
+          Closes {until(r.expires, now)}
+        </Chip>
+      ) : (
+        <Chip tone="off">{r.closed ? "Closed" : "Expired"}</Chip>
+      )}
+      {/* Files and texts alike, so a request answered only with text doesn't look untouched. */}
+      {r.receivedFiles ? (
+        <Chip tone={live ? "good" : "neutral"}>{bytes(r.receivedBytes)} received</Chip>
+      ) : (
+        <Chip>Nothing received yet</Chip>
+      )}
+    </>
+  );
+}
 
 export function RequestsPage() {
   const { data, loading, error, reload } = useLive(api.requests.list, {}, ["requests"], []);
@@ -92,36 +120,16 @@ export function RequestsPage() {
     }
   }
   const row = (r: UploadRequest, live: boolean) => (
-    <li key={r.id} className={`list-row request-row ${live ? "" : "inactive"}`}>
-      <span className="list-icon">
-        <FolderInput size={18} aria-hidden />
-      </span>
-      <button type="button" className="list-text" onClick={() => setViewing(r)}>
-        <strong>
-          {r.name}
-          {live && r.full && (
-            <>
-              {" "}
-              <span className="pill" title="Guests can’t upload more">
-                Full
-              </span>
-            </>
-          )}
-        </strong>
-        <span className="muted">
-          {[
-            // Files and texts alike, so a request answered only with text doesn't look untouched.
-            r.receivedFiles ? `${bytes(r.receivedBytes)} received` : "Nothing received yet",
-            live
-              ? r.full
-                ? "No room for more · review saved, retained and reserved space"
-                : `Closes ${until(r.expires)}`
-              : r.closed
-                ? "Closed"
-                : "Expired",
-          ].join(" · ")}
-        </span>
-      </button>
+    <StatusRow
+      key={r.id}
+      className="request-row"
+      inactive={!live}
+      media={<Icon.request size={18} aria-hidden />}
+      title={r.name}
+      chips={<RequestChips request={r} live={live} now={now} />}
+      opensDialog
+      onOpen={() => setViewing(r)}
+    >
       <ChevronRight className="row-chevron" size={18} aria-hidden />
       {/* A full request takes nothing more until its limit is raised, so that is the next step. */}
       {live && (
@@ -143,8 +151,8 @@ export function RequestsPage() {
           { label: "View received files", icon: <Inbox size={16} />, onSelect: () => setViewing(r) },
           ...(live
             ? [
-                { label: "Share request", icon: <Link2 size={16} />, onSelect: () => setCreated(r) },
-                { label: "Edit request", icon: <Pencil size={16} />, onSelect: () => edit(r) },
+                { label: "Share request", icon: <Icon.share size={16} />, onSelect: () => setCreated(r) },
+                { label: "Edit request", icon: <Icon.rename size={16} />, onSelect: () => edit(r) },
                 {
                   label: "Close request",
                   icon: <Ban size={16} />,
@@ -156,7 +164,7 @@ export function RequestsPage() {
             : [{ label: "Create new request", icon: <Plus size={16} />, onSelect: () => setCreating(true) }]),
         ]}
       />
-    </li>
+    </StatusRow>
   );
   return (
     <div className="page">
@@ -175,10 +183,10 @@ export function RequestsPage() {
       {error && !data.length ? (
         <LoadFailed title="Requests couldn’t be loaded" error={error} onRetry={reload} />
       ) : loading && !data.length ? (
-        <Spinner />
+        <ListSkeleton />
       ) : !data.length ? (
         <EmptyState
-          icon={<FolderInput size={28} />}
+          icon={<Icon.request size={28} />}
           title="No requests yet"
           action={
             <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
@@ -196,7 +204,7 @@ export function RequestsPage() {
             </ul>
           )}
           {!open.length && (
-            <InlineEmpty icon={<FolderInput size={20} />} title="No open requests">
+            <InlineEmpty icon={<Icon.request size={20} />} title="No open requests">
               Create a request when you need files from someone.
             </InlineEmpty>
           )}
@@ -574,7 +582,7 @@ function Submissions({
       {error && !data.length ? (
         <LoadFailed title="What was received couldn’t be loaded" error={error} onRetry={reload} />
       ) : loading && !data.length ? (
-        <Spinner />
+        <ListSkeleton />
       ) : !data.length ? (
         <InlineEmpty icon={<Inbox size={20} />} title="Nothing received yet">
           Files and text sent with this request will appear here and in Files.

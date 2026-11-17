@@ -113,8 +113,7 @@ test("a full request's limit can be raised, and never set below what it holds", 
   // Keep the incoming notification present throughout validation, including when it overlaps Save.
   await page.clock.pauseAt(new Date(Date.now() + 1000));
   const full = row(page, name);
-  await expect(full.locator(".pill")).toHaveText("Full");
-  await expect(full).toContainText("No room for more · review saved, retained and reserved space");
+  await expect(full.locator(".chip-warn")).toHaveText("Full");
   await full.getByRole("button", { name: "Raise limit" }).click();
   const dialog = page.getByRole("dialog", { name: "Edit request" });
   const size = dialog.getByLabel("Total size limit (GB)");
@@ -142,7 +141,7 @@ test("a full request's limit can be raised, and never set below what it holds", 
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(full.locator(".pill")).toHaveCount(0);
+  await expect(full.getByText("Full", { exact: true })).toHaveCount(0);
   await expect(full.getByRole("button", { name: "Share" })).toBeVisible();
 
   // The guest can send again after a reload.

@@ -1163,6 +1163,30 @@ export function QrCode({
 }
 
 /** Placeholder rows shaped like a list of links or requests, eased in only when loading is noticeable. */
+export type ChipTone = "neutral" | "good" | "warn" | "off";
+/**
+ * A short state read at a glance: "Expires in 5 h", "Opened by 2 browsers", "Full". One size and
+ * four tones everywhere: good (it worked), warn (needs attention soon), off (no longer active).
+ */
+export function Chip({
+  tone = "neutral",
+  icon,
+  title,
+  children,
+}: {
+  tone?: ChipTone;
+  icon?: React.ReactNode;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={`chip chip-${tone}`} title={title}>
+      {icon ?? (tone === "good" || tone === "warn" ? <span className="chip-dot" aria-hidden /> : null)}
+      <span>{children}</span>
+    </span>
+  );
+}
+
 export function ListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <ul className="list card-surface list-skeleton waiting" aria-hidden>

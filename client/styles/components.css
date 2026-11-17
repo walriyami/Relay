@@ -439,6 +439,54 @@ textarea.input {
   background: var(--success-soft);
   border-color: transparent;
 }
+/* State chips: one size and four tones wherever a list shows how something stands. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) 6px;
+  min-width: 0;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 var(--s2);
+  border-radius: var(--pill);
+  background: var(--well);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip svg {
+  flex-shrink: 0;
+}
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.chip-good {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.chip-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.chip-off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
 .badge {
   position: absolute;
   top: 3px;
@@ -1641,6 +1689,30 @@ button.list-text:focus-visible {
   box-shadow: var(--focus);
   border-radius: 6px;
 }
+/* A status row's name keeps its marker (a lock) in front, so cutting the name off never hides it. */
+.status-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.status-row-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-row-marker {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.status-row .list-text {
+  gap: 6px;
+}
+.status-row .list-icon {
+  overflow: hidden;
+}
+.status-row .list-icon .thumb-icon {
+  gap: 0;
+}
 @media (max-width: 520px) {
   .list-row {
     padding-left: var(--s3);
@@ -1648,6 +1720,12 @@ button.list-text:focus-visible {
   }
   .list-row .list-icon {
     display: none;
+  }
+  /* A shared item's picture is how two links with similar names are told apart, so it stays. */
+  .link-row-item.list-row .list-icon {
+    display: grid;
+    width: 32px;
+    height: 32px;
   }
 }
 

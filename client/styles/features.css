@@ -2260,14 +2260,12 @@ audio.preview-media {
 .preview-nav.is-end {
   visibility: hidden;
 }
-/* Links, requests, members and invitations on narrow screens: Share stays whole, and the status
-   line wraps to a second line rather than cutting off when it expires, closes or was last active. */
+/* Links, members and invitations on narrow screens: Share stays whole, and the status line wraps
+   to a second line rather than cutting off when it was last active. */
 @media (max-width: 560px) {
   .link-row-item .link-copy {
     flex-shrink: 0;
   }
-  .link-row-item .list-text .muted,
-  .request-row .list-text .muted,
   .member-row .list-text > .muted,
   .invite-row .list-text > .muted {
     white-space: normal;
@@ -3717,11 +3715,6 @@ audio.preview-media {
 }
 .link-visits .muted {
   font-size: 0.8rem;
-}
-.link-row-lock {
-  margin-left: 6px;
-  vertical-align: -1px;
-  color: var(--muted);
 }
 .member-username {
   margin-left: 6px;
