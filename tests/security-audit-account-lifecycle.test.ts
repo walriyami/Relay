@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import { after, test } from "node:test";
-import { mkdir, writeFile } from "node:fs/promises";
 import filesystem from "node:fs/promises";
 import { request } from "node:http";
 import { createSocket } from "node:dgram";
@@ -37,12 +36,9 @@ type Instance = Awaited<ReturnType<typeof start>>;
 type Evidence = { case: string; expected: number; observed: number; unchanged?: boolean; control?: number };
 const evidence: Evidence[] = [];
 const record = (value: Evidence) => evidence.push(value);
-after(async () => {
+after(() => {
   crypto.scrypt = nativeScrypt;
   syncBuiltinESMExports();
-  await mkdir("work/security-audit", { recursive: true });
-  const path = process.env.RELAY_ACCOUNT_EVIDENCE_PATH ?? "work/security-audit/account-verification-runtime.json";
-  await writeFile(path, JSON.stringify(evidence, null, 2) + "\n");
 });
 
 const deferred = () => {

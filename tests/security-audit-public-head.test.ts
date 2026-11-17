@@ -1,7 +1,6 @@
 // Public HEAD authorization verification, using only disposable Relay resources.
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { mkdir, writeFile } from "node:fs/promises";
 import { request, type IncomingHttpHeaders } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import sharp from "sharp";
@@ -39,12 +38,7 @@ const inventory = [
   "/uploads/:id",
 ];
 const sensitive = ["content-disposition", "etag", "last-modified", "content-range", "upload-offset", "upload-length"];
-after(async () => {
-  await mkdir("work/security-audit", { recursive: true });
-  await writeFile(
-    "work/security-audit/public-head-runtime.json",
-    JSON.stringify({ inventory, evidence, unsupported }, null, 2) + "\n",
-  );
+after(() => {
   assert.deepEqual(
     [...new Set(evidence.map((row) => row.route))].sort(),
     [...inventory].sort(),

@@ -1,7 +1,7 @@
 // Independent adversarial audit cases. Instances and keys are disposable; no deployed data is used.
-import { after, test } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile, stat, readFile } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { request } from "node:http";
 import { createSocket } from "node:dgram";
@@ -36,10 +36,6 @@ async function raw(
   return client.raw({ method: endpoint.method, url, ...(payload ? { payload } : {}), headers });
 }
 const sid = (client: Client) => sha256([...client.cookies.values()][0]);
-after(async () => {
-  await mkdir("work/security-audit", { recursive: true });
-  await writeFile("work/security-audit/auth-direct-runtime.json", JSON.stringify(evidence, null, 2) + "\n");
-});
 
 test("audit auth: every member/admin contract rejects anonymous and foreign administrator access", async () => {
   const instance = await start();

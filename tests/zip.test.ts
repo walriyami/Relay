@@ -229,10 +229,10 @@ test("a ZIP of 2,100 entries", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
-    const files = Array.from({ length: 2100 }, (_, i) => ({
-      path: `many/dir-${i % 10}/file-${i}.txt`,
-      data: `content ${i}`,
-    }));
+    // Most entries are empty, which skips their uploads: the ZIP is what's under test, and uploading
+    // 2,100 files one by one took most of a minute.
+    const data = (i: number) => (i % 100 === 0 ? `content ${i}` : "");
+    const files = Array.from({ length: 2100 }, (_, i) => ({ path: `many/dir-${i % 10}/file-${i}.txt`, data: data(i) }));
     const { result } = await send(client, files);
     const res = await fetchZip(client, urls.itemZip(result.itemId));
     assert.equal(res.statusCode, 200);
@@ -240,7 +240,7 @@ test("a ZIP of 2,100 entries", async () => {
     assert.equal(zip.bad, null);
     assert.equal(zip.names.length, 2100 + 11);
     assert.equal(Object.keys(zip.hashes).length, 2100);
-    for (const i of [0, 777, 2099]) assert.equal(zip.hashes[`many/dir-${i % 10}/file-${i}.txt`], sha(`content ${i}`));
+    for (const i of [0, 777, 1500, 2099]) assert.equal(zip.hashes[`many/dir-${i % 10}/file-${i}.txt`], sha(data(i)));
     if (zip.unzip !== null) assert.equal(zip.unzip, 0, "unzip -t");
   } finally {
     await instance.close();

@@ -1,16 +1,11 @@
 // Independent review fixtures: only disposable browser transport/storage adapters are replaced.
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { registerHooks } from "node:module";
 import { setImmediate } from "node:timers/promises";
-import { mkdir, writeFile } from "node:fs/promises";
 import type { NearbyPeer } from "../shared/nearby.ts";
 
 const evidence: { case: string; observed: unknown }[] = [];
-after(async () => {
-  await mkdir("work/security-audit", { recursive: true });
-  await writeFile("work/security-audit/nearby-independent-runtime.json", JSON.stringify(evidence, null, 2) + "\n");
-});
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => (resolve = done));
