@@ -71,6 +71,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       operations: ctx.operations.snapshot(),
       integrity: ctx.blobs.status(),
       usageBuffer: ctx.usage.status(),
+      database: { failure: ctx.db.storageFailure },
       codeLength: preferredCodeLengthOf(ctx.db),
       codeProtection: adminPickupProtectionOf(ctx, codeLengthOf(ctx.db)),
       members,

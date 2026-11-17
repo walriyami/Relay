@@ -63,7 +63,12 @@ test("operator diagnostics remain admin-only and distinguish deduplication from 
     assert.equal(overview.storage.trashItems, 1);
     assert.equal((await user.raw({ method: "GET", url: "/api/admin" })).statusCode, 403);
     assert.equal((await new Client(instance).raw({ method: "GET", url: "/api/admin" })).statusCode, 401);
-    assert.deepEqual((await instance.app.inject("/api/health")).json(), { ok: true, status: "healthy", ...release });
+    assert.deepEqual((await instance.app.inject("/api/health")).json(), {
+      ok: true,
+      status: "healthy",
+      problems: [],
+      ...release,
+    });
   } finally {
     await instance.close();
   }

@@ -3,7 +3,6 @@ import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import staticFiles from "@fastify/static";
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
-import { statfs } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { core as zod } from "zod/mini";
 import type { Config } from "./config.ts";
@@ -34,9 +33,9 @@ import { registerLocal } from "./modules/local/index.ts";
 import { registerNearby } from "./modules/nearby/index.ts";
 import { Operations } from "./lib/operations.ts";
 import { registerCompression } from "./lib/compress.ts";
+import { createHealth } from "./health-status.ts";
 import { ProxyTrust } from "./lib/proxies.ts";
 import { registerSharedSignIn } from "./modules/auth/sso.ts";
-import { build } from "./build-info.ts";
 import { createPush, registerPush } from "./modules/push/index.ts";
 import { registerShareTarget } from "./modules/push/share-target.ts";
 
@@ -176,29 +175,12 @@ export async function buildApp(config: Config): Promise<App> {
       return reply.code(500).send({ error: "The operation could not finish. Retry or contact the administrator." });
     });
 
-    route(app, ctx, api.health, async () => {
-      db.value("SELECT 1");
-      const disk = await statfs(config.root);
-      const usage = ctx.usage.status();
-      const now = Date.now();
-      const degraded =
-        ctx.blobs.degraded() ||
-        usage.failed ||
-        usage.discarded > 0 ||
-        disk.bavail * disk.bsize < 256 * 1024 ** 2 ||
-        ctx.operations
-          .snapshot(now)
-          .maintenance.some(
-            (stage) => stage.failed || now - stage.attempted > Math.max(5 * 60_000, 3 * config.sweepMs),
-          );
-      // Individual damaged files do not take healthy content offline. Monitoring should inspect status.
-      return {
-        ok: true as const,
-        status: degraded ? ("degraded" as const) : ("healthy" as const),
-        // Which commit is live, so a deploy can be checked from outside (server/build-info.ts).
-        version: build.version,
-        commit: build.commit,
-      };
+    const health = createHealth(ctx);
+    route(app, ctx, api.health, async ({ reply }) => {
+      const result = await health();
+      // Only what a restart may fix fails the check; everything else reports degraded with a 200.
+      if (!result.ok) reply.code(503);
+      return result;
     });
     registerAuth(app, ctx);
     await registerSharedSignIn(app, ctx);

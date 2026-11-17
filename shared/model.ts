@@ -374,10 +374,26 @@ export type ServiceOperations = {
   maintenance: { name: string; attempted: Time; succeeded: Time | null; failed: boolean; failures: number }[];
 };
 
+/** What the public health route reports. Problems are named, never detailed: the route is public. */
+export type HealthProblem = "database" | "disk-space" | "stored-files" | "usage-records" | "maintenance";
+export type Health = {
+  ok: boolean;
+  status: "healthy" | "degraded" | "unavailable";
+  problems: HealthProblem[];
+  /** Which build is live, so a deploy can be checked from outside (server/build-info.ts). */
+  version: string;
+  commit: string | null;
+};
+
+/** Free space is low below 1 GiB, or below 5% on a disk smaller than 20 GiB. */
+export const isDiskLow = (free: number, total: number) => free < Math.min(1024 ** 3, total * 0.05);
+
 export type AdminOverview = {
   operations: ServiceOperations;
   integrity: BlobStatus;
   usageBuffer: { pending: number; failed: boolean; discarded: number };
+  /** The last failed database write, until a write succeeds again (or for good, when it is damaged). */
+  database: { failure: { at: Time; message: string; damaged: boolean } | null };
   /** The administrator's preference, even when security temporarily lengthens public codes. */
   codeLength: CodeLength;
   codeProtection: Omit<PickupProtection, "addressPausedUntil"> & { effectiveCodeLength: CodeLength };

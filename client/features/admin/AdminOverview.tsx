@@ -6,6 +6,7 @@ import {
   api,
   call,
   displayName,
+  isDiskLow,
   type AdminOverview as Overview,
   type AdminUsageReport,
   type UsageRange,
@@ -285,12 +286,16 @@ function MemberUsage({ report, range }: { report: AdminUsageReport; range: Usage
 }
 
 /** What needs the administrator, if anything; everything else about the service can wait below. */
-function healthProblems({ operations: o, storage, integrity, usageBuffer, local }: Overview) {
+function healthProblems({ operations: o, storage, integrity, usageBuffer, local, database }: Overview) {
   const stale = (stage: Overview["operations"]["maintenance"][number]) =>
     o.sampled - stage.attempted > Math.max(5 * 60_000, 3 * o.maintenanceIntervalMs);
   return [
-    storage.diskFree < Math.min(1024 ** 3, storage.diskTotal * 0.05) &&
-      "Disk space is low. Free space on the host before uploads fail.",
+    database.failure?.damaged &&
+      "Relay’s database is damaged. Restart Relay; if it won’t start, its message says what to do next.",
+    database.failure &&
+      !database.failure.damaged &&
+      `Relay couldn’t save a change to its database (${database.failure.message}). Changes may fail until storage recovers; check free space and the data disk.`,
+    isDiskLow(storage.diskFree, storage.diskTotal) && "Disk space is low. Free space on the host before uploads fail.",
     integrity.missing + integrity.corrupt + integrity.errors > 0 &&
       `${plural(integrity.missing + integrity.corrupt + integrity.errors, "stored file")} missing or damaged. The members below see which of their items are affected and can upload those files again. Check the data disk for faults.`,
     integrity.lastError && "The last file check failed. Retry the check when storage is available.",
