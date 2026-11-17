@@ -55,8 +55,6 @@ const dayOptions = (presets: number[], current: number) => [
 ];
 
 /** The three limits, each "No limit" or a most. `used` is what the member already keeps, if anyone. */
-export type LimitsDraft = Draft;
-
 export function LimitsFields({
   draft,
   onChange,

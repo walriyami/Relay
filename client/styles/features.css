@@ -3265,10 +3265,6 @@ audio.preview-media {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.auth-switch {
-  align-self: flex-start;
-  font-size: 0.92rem;
-}
 .auth-alt {
   padding-top: var(--s4);
   border-top: 1px solid var(--line);
@@ -3361,11 +3357,6 @@ audio.preview-media {
   border-radius: 50%;
   background: var(--success-soft);
   color: var(--success);
-}
-
-/* Requests */
-.limits-summary {
-  font-size: 0.92rem;
 }
 
 /* Requests */

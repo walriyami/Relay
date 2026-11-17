@@ -164,10 +164,4 @@ export function ConnectionScreen({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-/** "Waiting for your connection", in place of a list that can't load while Relay is out of reach. */
-export function waitingText(problem: Problem) {
-  return problem === "down"
-    ? "This loads by itself when Relay is back."
-    : "This loads by itself when you’re back online.";
-}
 export { problemOf };

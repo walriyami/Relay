@@ -611,4 +611,3 @@ export const headers = {
   /** On every API response: where changes stood before the server began reading for it. */
   changes: "X-Relay-Changes",
 } as const;
-export type ApiError = { error: string };

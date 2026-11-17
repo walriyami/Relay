@@ -23,17 +23,9 @@ export function setPrincipal(value: string | null) {
 }
 
 let csrf = "";
-const csrfListeners = new Set<() => void>();
 export const csrfToken = () => csrf;
 export function setCsrf(value: string) {
   csrf = value;
-  if (value) csrfListeners.forEach((fn) => fn());
-}
-/** Runs `fn` once a CSRF token is known (now, or after sign-in). */
-export function onCsrf(fn: () => void) {
-  csrfListeners.add(fn);
-  if (csrf) fn();
-  return () => csrfListeners.delete(fn);
 }
 /** Headers every same-origin write needs; tus uploads and keepalive beacons use them too. */
 export const writeHeaders = (): Record<string, string> => ({

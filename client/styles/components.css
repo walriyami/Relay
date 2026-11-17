@@ -141,10 +141,6 @@ textarea.input {
   background-size: 5px 5px;
   background-repeat: no-repeat;
 }
-.code-input {
-  font-family: var(--mono);
-  letter-spacing: 0.1em;
-}
 .code-entry-field {
   position: relative;
   display: flex;
@@ -910,17 +906,6 @@ textarea.input {
   background: var(--well);
   text-align: center;
   font-size: 0.88rem;
-}
-.qr-wrap {
-  display: flex;
-  align-items: center;
-  gap: var(--s4);
-  flex-wrap: wrap;
-}
-.qr-wrap .muted {
-  flex: 1;
-  min-width: 160px;
-  font-size: 0.9rem;
 }
 
 /* Thumbnails */

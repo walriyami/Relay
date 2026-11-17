@@ -180,9 +180,6 @@ pre {
   flex-direction: column;
   gap: var(--s2);
 }
-.spacer {
-  flex: 1;
-}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

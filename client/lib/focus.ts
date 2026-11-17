@@ -35,13 +35,6 @@ function firstIn(el: Element | null): HTMLElement | null {
   return [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].find(visible) ?? null;
 }
 
-/** Focuses the first visible control inside `el`; false when there is none. */
-export function focusFirstIn(el: Element | null) {
-  const target = firstIn(el);
-  target?.focus({ preventScroll: true });
-  return !!target;
-}
-
 const lost = () => !document.activeElement || document.activeElement === document.body;
 const disabled = (el: Element) => (el as HTMLButtonElement).disabled === true;
 const LAYERS = '[role="dialog"],[role="menu"],.popover';
