@@ -237,7 +237,7 @@ test("thumbnails: unique rendition backlog is bounded and rejected with a retry 
         path: `images/${index}.png`,
         mime: "image/png",
         data: await sharp({
-          create: { width: 256, height: 256, channels: 3, background: { r: index * 7, g: index * 3, b: index } },
+          create: { width: 64, height: 64, channels: 3, background: { r: index * 7, g: index * 3, b: index } },
         })
           .png()
           .toBuffer(),

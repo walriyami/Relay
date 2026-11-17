@@ -11,7 +11,9 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL,
-    trace: "retain-on-failure",
+    // Recording a trace screenshots every step of every test, even ones that pass. Only CI keeps them;
+    // locally, rerun a failing test with --trace on.
+    trace: process.env.CI ? "retain-on-failure" : "off",
     screenshot: "only-on-failure",
   },
   webServer: {
@@ -20,6 +22,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 45000,
   },
+  // `npm run test:e2e` runs only chromium; `npm run test:e2e:all` (CI and releases) runs all four.
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },

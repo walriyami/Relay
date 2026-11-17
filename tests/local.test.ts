@@ -12,7 +12,7 @@ import { isLocalAddress, lanAddresses } from "../local/addresses.ts";
 import { heldChannels } from "../local/channels.ts";
 import { announce, localOffer } from "../local/helper.ts";
 import { localStatus } from "../server/modules/local/index.ts";
-import { Client, member, start, type ApiError, type Instance } from "./support/harness.ts";
+import { Client, member, send, start, type ApiError, type Instance } from "./support/harness.ts";
 import nodeDataChannel from "node-datachannel";
 import { LocalPeer } from "../scripts/lib/local-peer.ts";
 
@@ -129,7 +129,7 @@ test("local: a signed-in browser connects, proves the route and uploads and down
       assert.deepEqual(JSON.parse(check.body.toString()), { ok: true });
 
       // Larger than the window both ways, so credit has to flow.
-      const data = randomBytes(LOCAL.windowBytes * 2 + 12345);
+      const data = randomBytes(LOCAL.windowBytes + 12345);
       const { transfer, item, id } = await upload(client, data.length);
       const half = 5 * 1024 ** 2;
       let res = await peer.fetch({
@@ -171,14 +171,17 @@ test("local: a signed-in browser connects, proves the route and uploads and down
       assert.ok(file.body.equals(data));
 
       // A download that fell back mid-way resumes from where it stood, if the file is the same.
+      const from = data.length - 1000;
       const rest = await peer.fetch({
         path: urls.nodeContent(node.id),
-        headers: { range: "bytes=1000-", "if-range": file.headers.etag },
+        headers: { range: `bytes=${from}-`, "if-range": file.headers.etag },
       });
       assert.equal(rest.status, 206);
-      assert.ok(rest.body.equals(data.subarray(1000)));
+      assert.ok(rest.body.equals(data.subarray(from)));
 
-      const zip = await peer.fetch({ path: urls.itemZip(item) });
+      // Archives travel the same way; a small item proves it without moving the large file again.
+      const { result: small } = await send(client, [{ path: "note.txt", data: "small" }]);
+      const zip = await peer.fetch({ path: urls.itemZip(small.itemId) });
       assert.equal(zip.status, 200);
       assert.equal(zip.headers["content-type"], "application/zip");
     } finally {
@@ -227,7 +230,7 @@ test("local: lanes that close mid-transfer take nothing with them", async () => 
 
 test("local: the helper holds back a response until the browser returns credit", async () => {
   await withLocal(async ({ client }) => {
-    const data = randomBytes(LOCAL.windowBytes * 3);
+    const data = randomBytes(LOCAL.windowBytes + 2 * 1024 ** 2);
     const { transfer, item, id } = await upload(client, data.length);
     const peer = await LocalPeer.connect(client);
     try {
@@ -242,11 +245,11 @@ test("local: the helper holds back a response until the browser returns credit",
       }
       await client.call(api.transfers.complete, { params: { id: transfer }, body: { destination: { kind: "save" } } });
       const node = (await client.call(api.items.get, { params: { id: item } })).nodes.find((n) => n.kind === "file")!;
-      // Every credit is returned late; by then, the helper must not have sent past what it was allowed.
+      // Every credit is held back until the helper has sent all it may; it must never send past that.
       const seen: { arrived: number; allowed: number }[] = [];
       const file = await peer.fetch({
         path: urls.nodeContent(node.id),
-        creditDelayMs: 150,
+        holdCredit: true,
         onCredit: (arrived, allowed) => seen.push({ arrived, allowed }),
       });
       assert.ok(file.body.equals(data));

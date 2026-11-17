@@ -183,12 +183,18 @@ export async function send(
       files: buffers.map((f) => ({ path: f.path, size: f.data.length, mime: f.mime ?? "application/octet-stream" })),
     },
   });
-  for (const [i, upload] of created.uploads.entries()) {
-    const data = buffers[i].data;
-    if (!data.length) continue;
-    const res = await patchUpload(client, upload.id, 0, data);
-    if (res.statusCode !== 204) throw new ApiError(res.statusCode, res.body);
-  }
+  // A few at a time, as a browser uploads: each one waits for the disk, so this overlaps the waits.
+  const queue = [...created.uploads.entries()];
+  const worker = async () => {
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      const [i, upload] = next;
+      const data = buffers[i].data;
+      if (!data.length) continue;
+      const res = await patchUpload(client, upload.id, 0, data);
+      if (res.statusCode !== 204) throw new ApiError(res.statusCode, res.body);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
   const result = await client.call(api.transfers.complete, {
     params: { id: created.id },
     body: { destination: options.destination ?? { kind: "save" } },

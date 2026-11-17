@@ -4,7 +4,7 @@ import { api } from "../../../shared/api.ts";
 import { clearCookie, sessionCookie } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
-import { DUMMY_PASSWORD_HASH, hashPassword, sha256 } from "../../lib/secrets.ts";
+import { dummyPasswordHash, hashPassword, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "./limits.ts";
 import { checkPassword } from "./passwords.ts";
 import { finishSignIn, insertSession, me, newDevice } from "./sessions.ts";
@@ -28,7 +28,7 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
       const username = body.username.trim().toLowerCase();
       const user = ctx.db.get<Row>("SELECT id, password_hash, disabled FROM users WHERE username = ?", username);
       // Always run scrypt so response time does not reveal which usernames exist.
-      const valid = await checkPassword(ctx, username, body.password, user?.password_hash ?? DUMMY_PASSWORD_HASH);
+      const valid = await checkPassword(ctx, username, body.password, user?.password_hash ?? dummyPasswordHash());
       if (!user || !valid) fail(401, "Incorrect username or password.");
       if (user.disabled) fail(403, "This account is disabled. Contact the administrator.");
       const session = ctx.db.tx(() => {

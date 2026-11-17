@@ -16,6 +16,15 @@ const scrypt = promisify(scryptCallback) as (
 ) => Promise<Buffer>;
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 ** 2 };
 
+/**
+ * Tests only: makes new password hashes cheap (about 2 ms instead of about 70 ms of CPU). Tests sign in
+ * hundreds of times, so the production cost made up most of the suite's CPU time. Each hash records its
+ * own cost, so verifying works either way. Nothing in the server calls this.
+ */
+export function useTestPasswordCost() {
+  SCRYPT.N = 2 ** 10;
+}
+
 // One scrypt uses about 32 MiB. Limit active derivations and bound the wait list so a distributed
 // burst at public setup/join/sign-in endpoints cannot turn into unbounded native work and memory.
 const MAX_ACTIVE_SCRYPT = 2;
@@ -62,7 +71,8 @@ export async function verifyPassword(password: string, encoded: string): Promise
   return timingSafeEqual(actual, expected);
 }
 /** Compare against this when the account does not exist, so timing does not reveal usernames. */
-export const DUMMY_PASSWORD_HASH = "scrypt$32768$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+export const dummyPasswordHash = () =>
+  `scrypt$${SCRYPT.N}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
 
 /**
  * Derives the bearer secrets of links and upload requests from their ids with a server key, so

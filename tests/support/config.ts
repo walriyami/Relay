@@ -1,4 +1,8 @@
 import type { Config } from "../../server/config.ts";
+import { useTestPasswordCost } from "../../server/lib/secrets.ts";
+
+// Every disposable instance hashes passwords cheaply; see useTestPasswordCost.
+useTestPasswordCost();
 
 /** Disposable-directory configuration for tests. Never point this at real data. */
 export function testConfig(root: string, overrides: Partial<Config> = {}): Config {

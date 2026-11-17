@@ -185,16 +185,18 @@ test("admission: storage limit (including reserved bytes), capacity, disk space 
   }
 });
 
-test("a manifest with about 20,000 long paths is accepted by the transfer route", async () => {
+test("a manifest larger than other routes accept is accepted by the transfer route", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
     const prefix = Array.from({ length: 5 }, () => "p".repeat(170)).join("/");
-    const files = Array.from({ length: 20_000 }, (_, i) => ({
+    const files = Array.from({ length: 1_500 }, (_, i) => ({
       path: `${prefix}/${i}.txt`,
       size: 0,
       mime: "text/plain",
     }));
+    // Past the 1 MiB every other route takes, so only the route's own limit lets it through.
+    assert.ok(JSON.stringify(files).length > 1024 ** 2);
     const created = await client.call(api.transfers.create, {
       body: { id: crypto.randomUUID(), tab: client.tab, name: null, folders: [], files },
     });

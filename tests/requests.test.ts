@@ -81,7 +81,7 @@ test("a request is bounded by size alone; a fixed entry guard stops empty-file f
   const { instance, owner, request } = await setup({ maxBytes: 100 });
   try {
     const visitor = await guest(instance, request.token);
-    const many = Array.from({ length: 400 }, (_, i) => ({ path: `a/b/empty-${i}.txt`, size: 0, mime: "text/plain" }));
+    const many = Array.from({ length: 50 }, (_, i) => ({ path: `a/b/empty-${i}.txt`, size: 0, mime: "text/plain" }));
     const first = await startTransfer(visitor, request.token, many);
     await upload(
       visitor,

@@ -16,6 +16,11 @@ export type LocalFetch = {
   body?: Buffer;
   /** Holds the response back: each run of bytes that earns credit waits this long to be taken. */
   creditDelayMs?: number;
+  /**
+   * Holds each run's credit back until the helper has sent everything it was allowed (or the whole
+   * body), up to 5 s: whether it uses its window shows without depending on how fast the machine is.
+   */
+  holdCredit?: boolean;
   /** Called before each of those runs earns its credit, with the body bytes arrived so far and the most the helper was allowed to send. */
   onCredit?: (arrived: number, allowed: number) => void;
 };
@@ -160,6 +165,7 @@ export class LocalPeer {
       let head: LocalResponse | null = null;
       const chunks: Buffer[] = [];
       let owed = 0;
+      const start = this.arrived;
       const fail = (error: Error) => {
         this.waiting.delete(r);
         into.close();
@@ -170,9 +176,15 @@ export class LocalPeer {
         write: async (bytes) => {
           chunks.push(Buffer.from(bytes));
           owed += bytes.byteLength;
-          if (!request.creditDelayMs || owed < LANES.creditBytes) return;
+          if ((!request.creditDelayMs && !request.holdCredit) || owed < LANES.creditBytes) return;
           owed = 0;
-          await new Promise((wait) => setTimeout(wait, request.creditDelayMs));
+          if (request.holdCredit) {
+            const total = Number(head?.headers["content-length"] ?? Number.POSITIVE_INFINITY);
+            const sentAll = () =>
+              this.arrived >= LOCAL.windowBytes + this.credited - LANES.frameBytes || this.arrived - start >= total;
+            for (const started = Date.now(); !sentAll() && Date.now() - started < 5000;)
+              await new Promise((wait) => setTimeout(wait, 5));
+          } else await new Promise((wait) => setTimeout(wait, request.creditDelayMs));
           request.onCredit?.(this.arrived, LOCAL.windowBytes + this.credited);
         },
         done: () => {

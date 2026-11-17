@@ -17,18 +17,19 @@ Relay needs Node.js 24, which can run TypeScript directly, so there's no compile
 
 ## Commands
 
-| Command                           | What it does                                                                              |
-| --------------------------------- | ----------------------------------------------------------------------------------------- |
-| `npm run dev`                     | API and Vite dev server with reload                                                       |
-| `npm run build`                   | Type-checks everything and builds the web app into `dist/`                                |
-| `npm run check`                   | Formatting, type-check, lint and backend tests: the same checks as CI                     |
-| `npm run typecheck`               | TypeScript, without building                                                              |
-| `npm run lint` / `lint:fix`       | ESLint                                                                                    |
-| `npm start`                       | Runs the production server, which serves `dist/`                                          |
-| `npm test`                        | Backend integration tests on disposable instances                                         |
-| `npm run test:e2e`                | Builds, then runs the browser journeys in Chromium, Firefox, WebKit and a mobile viewport |
-| `npm run format` / `format:check` | Prettier                                                                                  |
-| `npm run screenshots`             | Regenerates `docs/images` from generated demo content. Run `npm run build` first.         |
+| Command                           | What it does                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------- |
+| `npm run dev`                     | API and Vite dev server with reload                                                   |
+| `npm run build`                   | Type-checks everything and builds the web app into `dist/`                            |
+| `npm run check`                   | Formatting, type-check, lint and backend tests: the same checks as CI                 |
+| `npm run typecheck`               | TypeScript, without building                                                          |
+| `npm run lint` / `lint:fix`       | ESLint                                                                                |
+| `npm start`                       | Runs the production server, which serves `dist/`                                      |
+| `npm test`                        | Backend integration tests on disposable instances                                     |
+| `npm run test:e2e`                | Builds, then runs the browser journeys in Chromium                                    |
+| `npm run test:e2e:all`            | Builds, then runs them in Chromium, Firefox, WebKit and a mobile viewport, as CI does |
+| `npm run format` / `format:check` | Prettier                                                                              |
+| `npm run screenshots`             | Regenerates `docs/images` from generated demo content. Run `npm run build` first.     |
 
 Install the browsers once before the first end-to-end run:
 
@@ -39,10 +40,20 @@ npx playwright install --with-deps
 ## Tests
 
 - **Backend** (`tests/*.test.ts`, `node:test`). Each test starts a real server on a temporary data directory and calls it through the typed API contract. The tests cover authorization, uploads and resume, storage limits, usage, ZIP64 layout, links, requests and pickup codes.
-- **Resources** (`npm run test:resources`). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling in Chromium, Firefox and WebKit.
+- **Resources** (`npm run test:resources`, or `test:resources:all` for Firefox and WebKit too). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe. The Nearby journeys connect two browsers by their local addresses, which only Chromium can be told to reveal, so they run in Chromium and the mobile viewport only.
 
 Tests never touch real data. Every instance uses a new temporary directory and generated files.
+
+Test instances hash passwords at a much lower cost than production (`useTestPasswordCost` in `server/lib/secrets.ts`), because tests sign in hundreds of times.
+
+### Choosing what to run
+
+Run the tests for what you changed, not every suite each time. The browser suites cost far more than the rest.
+
+- While working, run single files: `npx node --test tests/links.test.ts`, or `npx playwright test tests/browser/send.spec.ts --project=chromium` after `npm run build`. Add `-g "<name>"` for one test, and `--trace on` to record a failing one.
+- Before committing, `npm run check`, plus `npm run test:e2e` when the change shows in the browser.
+- Leave `test:e2e:all` and `test:resources:all` to CI, or run them when a change depends on how Firefox or Safari behave.
 
 ## Release verification
 

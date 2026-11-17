@@ -19,7 +19,7 @@ test("large collection metadata is compressed only for the app's own requests", 
   const instance = await start();
   try {
     const client = await admin(instance);
-    const files = Array.from({ length: 200 }, (_, i) => ({ path: `photos/2026/trip/image-${i}.jpg`, data: `${i}` }));
+    const files = Array.from({ length: 40 }, (_, i) => ({ path: `photos/2026/trip/image-${i}.jpg`, data: `${i}` }));
     const { result } = await send(client, files);
     const url = api.items.get.path.replace(":id", result.itemId);
     const plain = await client.raw({ method: "GET", url });

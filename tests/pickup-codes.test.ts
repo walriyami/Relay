@@ -312,10 +312,13 @@ test("four-digit generation covers the full namespace and exhausted rotations ro
     const reserve = instance.ctx.db.sqlite.prepare(
       "INSERT INTO pickup_codes(code_hash, kind, target_id, nonce, created, retired) VALUES(?, 'share', ?, 0, ?, ?)",
     );
-    for (let value = 0; value < 10_000; value++) {
-      const digits = String(value).padStart(4, "0");
-      reserve.run(instance.ctx.secrets.pickupCodeHash(digits), `reserved-${value}`, reservedAt, reservedAt);
-    }
+    // One commit: the end state is the same, without 10,000 separate trips to the disk.
+    instance.ctx.db.tx(() => {
+      for (let value = 0; value < 10_000; value++) {
+        const digits = String(value).padStart(4, "0");
+        reserve.run(instance.ctx.secrets.pickupCodeHash(digits), `reserved-${value}`, reservedAt, reservedAt);
+      }
+    });
 
     assert.equal(await status(boss.call(api.admin.settings, { body: { codeLength: 4 } })), 409);
     assert.deepEqual(await new Client(instance).call(api.pickup.config), {
