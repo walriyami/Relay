@@ -352,6 +352,24 @@
   .brand span {
     display: inline;
   }
+  /* With large text the name gives way before the buttons beside it push the page wider. */
+  .brand,
+  .topbar-actions {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .topbar-actions .code-button {
+    flex-shrink: 1;
+    min-width: var(--control);
+  }
+  .brand-mark {
+    flex-shrink: 0;
+  }
+  .brand span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .nav {
     position: fixed;
     left: 0;
@@ -359,7 +377,8 @@
     bottom: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    /* Five equal tabs that never push the page wider than the screen, even with large text. */
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0;
     padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
     overflow: visible;
@@ -372,9 +391,15 @@
     flex-direction: column;
     justify-content: center;
     gap: 2px;
+    min-width: 0;
     height: 54px;
     padding: 0;
     font-size: 0.74rem;
+  }
+  .nav-link > span:last-child {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .nav-link.active {
     background: transparent;
@@ -810,7 +835,7 @@
   background: var(--well);
 }
 .composer-drop > .btn {
-  min-width: 200px;
+  min-width: min(200px, 100%);
 }
 .composer-drop > strong {
   color: var(--ink);

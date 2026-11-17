@@ -18,6 +18,8 @@
     color var(--fast),
     transform var(--fast) var(--ease);
   flex-shrink: 0;
+  /* A long label is cut short rather than pushing the page wider than a phone's screen. */
+  max-width: 100%;
   user-select: none;
 }
 /* Every button gives a little under a press, so a tap on a phone visibly lands. */
@@ -296,6 +298,11 @@ textarea.input {
   max-width: 100%;
 }
 .segmented button {
+  /* Options shrink and cut their label short rather than spilling past a narrow screen. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   height: 30px;
   padding: 0 var(--s3);
   white-space: nowrap;
