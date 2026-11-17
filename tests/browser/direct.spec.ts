@@ -12,7 +12,8 @@ const BASE = `http://localhost:${PORT}`;
 const PASSWORD = "Browser-test-password-only";
 let server: ChildProcess;
 
-test.use({ baseURL: BASE });
+// Direct downloads are handed to the browser by their own service worker (public/local-sw.js).
+test.use({ baseURL: BASE, serviceWorkers: "allow" });
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
