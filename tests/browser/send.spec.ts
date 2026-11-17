@@ -31,9 +31,8 @@ test("choosing files never uploads; picks accumulate until a destination is clic
   const presence = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/nearby/presence" && response.request().method() === "POST",
   );
-  await page.goto("/nearby");
-  expect((await presence).ok()).toBe(true);
   await page.goto("/");
+  expect((await presence).ok()).toBe(true);
   expect(writes).toContain("POST /api/nearby/presence");
   const a = unique("alpha");
   const b = unique("beta");
@@ -319,7 +318,7 @@ test("a finished transfer stays in the drop box until Done; there is no separate
   await expect(page.getByRole("list", { name: "Recent" })).toContainText(name);
   await box.getByRole("button", { name: "Done" }).click();
   await expect(box.locator(".transfer")).toHaveCount(0);
-  await expect(box.getByText(/Drop files or folders|Choose files to send/)).toBeVisible();
+  await expect(box.getByText(/Drop files or folders here|Add photos, files or text/)).toBeVisible();
   // Dropping or picking something new while a result is shown also starts the next one.
   await fileInput(page).setInputFiles([textFile(unique("again") + ".txt", "x")]);
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
@@ -352,7 +351,7 @@ test("a running transfer can shrink to a strip while you compose the next one", 
   await box.getByRole("button", { name: "Send something else" }).click();
   const strip = box.getByRole("list", { name: "Other transfers" }).getByRole("group");
   await expect(strip).toContainText(name);
-  await expect(box.getByText(/Drop files or folders|Choose files to send/)).toBeVisible();
+  await expect(box.getByText(/Drop files or folders here|Add photos, files or text/)).toBeVisible();
   // Pasting text anywhere on the page lands in the one message box. Firefox drops the
   // clipboard data of synthetic paste events, so this check runs in the other engines.
   if (browserName !== "firefox") {

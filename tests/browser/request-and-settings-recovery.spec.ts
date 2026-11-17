@@ -75,7 +75,7 @@ test("a guest can retry a request after an initial network failure", async ({ pa
     await guest.unroute(`**/api/r/${request.token}`);
     await guest.getByRole("button", { name: "Try again" }).click();
     await expect(guest.getByRole("heading", { name })).toBeVisible();
-    await expect(guest.getByRole("button", { name: /Browse files/ })).toBeEnabled();
+    await expect(guest.getByRole("button", { name: "Choose files" })).toBeEnabled();
   } finally {
     await context.close();
   }

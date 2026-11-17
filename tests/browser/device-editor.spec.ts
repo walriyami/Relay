@@ -150,9 +150,10 @@ test("offline devices are edited from Settings, and cancel and invalid names do 
   const offline: string = device.name;
   const target = ICONS[otherKind(device.kind)];
   expect(device.online).toBe(false);
-  // Destinations lists only devices that can receive now, so an offline one isn't there to edit.
-  await expect(destinations(page).getByRole("button", { name: offline, exact: true })).toHaveCount(0);
-  await expect(destinations(page).getByRole("button", { name: `Edit ${offline}`, exact: true })).toHaveCount(0);
+  // Send lists every signed-in device: one that isn't open is still a place to send, and says it's away.
+  await expect(destinations(page).getByRole("button", { name: offline, exact: true })).toHaveAccessibleDescription(
+    /Away/,
+  );
   await page.goto("/settings");
   const row = page.getByRole("region", { name: "Devices" }).getByRole("listitem").filter({ hasText: offline });
   const open = async () => {

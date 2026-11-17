@@ -1,19 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  HardDriveUpload,
-  History,
-  Link2,
-  PenLine,
-  Pencil,
-  QrCode,
-  X,
-} from "lucide-react";
-import { useOnlineDevices, useSession } from "../../app/session";
-import { DeviceIcon, ThisDeviceName, useEditDevice } from "../../app/devices";
+import { Check, ChevronDown, ChevronRight, HardDriveUpload, History, Link2, PenLine, QrCode, X } from "lucide-react";
+import { useSession } from "../../app/session";
+import { ThisDeviceName } from "../../app/devices";
 import {
   addSelection,
   clearDraft,
@@ -26,7 +14,7 @@ import {
   useDraft,
 } from "../../lib/draft";
 import { autoName as nameOf, bytes } from "../../lib/format";
-import { days, durations, KEEP_DAYS } from "../../lib/options";
+import { days } from "../../lib/options";
 import {
   NewLinkOptions,
   NewLinkSummary,
@@ -54,27 +42,32 @@ import {
 } from "../../lib/transfers";
 import { useLive } from "../../lib/live";
 import { useConnection } from "../../lib/connection";
-import { LIMITS, api, type Delivery, type DeliveryState } from "../../api";
-import { Button, IconButton, LoadFailed, Menu, Popover, dismissToastKey } from "../../components/ui";
+import { LIMITS, api, type Delivery, type Device } from "../../api";
+import { Button, IconButton, LoadFailed, Popover, dismissToastKey } from "../../components/ui";
 import { CollectionModal } from "../library/CollectionModal";
 import { AddDevice } from "../settings/AddDevice";
 import { errorToast, sendItem } from "../library/actions";
-import { TransferCard, TransferStrip, useTransfers } from "./TransferList";
+import { TransferCard, TransferStrip, useTransfers, type DeviceAnswer } from "./TransferList";
+import { OwnDevices } from "./Destinations";
 
 const DRAFT_UNDO = "draft-undo";
 
 /** Whether this tab chose "Send something else" (the drop box is free while transfers run). */
 let composingKept = false;
 
+/** Where a row sends, remembered when it was chosen before anything was added. */
+type Armed = { kind: "save" } | { kind: "link" } | { kind: "device"; device: Device };
+
+const armedName = (a: Armed) => (a.kind === "save" ? "Files" : a.kind === "link" ? "a new link" : a.device.name);
+
 /**
  * The Send page: the drop box and whatever you pass as children (Recent) on the
  * left, and the destinations on the right. A transfer you start shows inside the
- * drop box until you press Done; it also appears in Recent once saved.
+ * drop box until you press Done; it also appears in Recent once saved. Choosing a
+ * destination before adding anything opens the picker and sends there once chosen.
  */
 export function Composer({ children }: { children?: React.ReactNode }) {
-  const { me, refreshMe, devicesLoading, devicesError, reloadDevices } = useSession();
-  const devices = useOnlineDevices();
-  const editDevice = useEditDevice();
+  const { me, refreshMe, devices, devicesLoading, devicesError, reloadDevices } = useSession();
   const draft = useDraft();
   const list = useTransfers();
   // True while you compose the next thing; transfers still running show as one-line strips.
@@ -100,13 +93,13 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const [linkOptionsOpen, setLinkOptionsOpen] = useState(false);
   // A link was asked for with settings that can't make one (a password still to type).
   const [linkTried, setLinkTried] = useState(false);
-  const defaultKeep = me.user.retentionDays || 0;
-  const [keep, setKeep] = useState(defaultKeep);
+  // A destination chosen with nothing added: the picker opened for it.
+  const [armed, setArmed] = useState<Armed | null>(null);
+  const launch = useRef<Armed | null>(null);
   // The devices the finished item was also sent to from the panel.
   const [also, setAlso] = useState<string[]>([]);
   const [alsoBusy, setAlsoBusy] = useState("");
   useEffect(() => setLink((current) => ({ ...current, days: me.prefs.linkDays })), [me.prefs.linkDays]);
-  useEffect(() => setKeep(defaultKeep), [defaultKeep]);
   // The transfer just sent, and the control it was sent from, until focus has settled on it.
   const handoff = useRef<{ id: string; from: Element | null } | null>(null);
 
@@ -153,7 +146,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   );
   const finishedItem = savedItem.data?.id === finished?.itemId ? savedItem.data : null;
   const checkingItem = !!finished && !finishedItem;
-  const draftLifetime = Math.min(keep || Infinity, me.user.limits.keepDays ?? Infinity);
+  const draftLifetime = Math.min(me.user.retentionDays || Infinity, me.user.limits.keepDays ?? Infinity);
   const linkDeadline = finished
     ? finishedItem?.expires
     : Number.isFinite(draftLifetime)
@@ -176,8 +169,13 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     }
     setComposing(true);
   }
-  const answerOf = (t: Transfer): DeliveryState =>
-    (t.delivery && sent.data.find((d) => d.id === t.delivery!.id)?.state) || "available";
+  const answerOf = (t: Transfer): DeviceAnswer => {
+    const d = t.delivery && sent.data.find((x) => x.id === t.delivery!.id);
+    if (d && d.state !== "available") return d.state;
+    if (d?.delivered) return "delivered";
+    const to = t.destination.kind === "device" ? t.destination.device : "";
+    return devices.find((x) => x.id === to)?.online ? "sent" : "waiting";
+  };
 
   /** Empties the files, keeping the text; returns how to put them back. */
   function clearFiles() {
@@ -232,17 +230,41 @@ export function Composer({ children }: { children?: React.ReactNode }) {
       text: draft.text,
       name: name.trim() || null,
       destination,
-      retentionDays: keep === defaultKeep ? undefined : keep || null,
     });
-    // Each new transfer starts from your defaults, not from the last one's choices.
+    reset();
+    handoff.current = { id: t.id, from: document.activeElement };
+  }
+  /** Each new transfer starts from your defaults, not from the last one's choices. */
+  function reset() {
     clearDraft();
     setName("");
     setLink(newLinkChoice(me.prefs.linkDays));
     setLinkTried(false);
-    setKeep(defaultKeep);
     setComposing(false);
-    handoff.current = { id: t.id, from: document.activeElement };
   }
+  /** With nothing added, a destination opens the picker and sends there once something is chosen. */
+  function arm(target: Armed) {
+    setArmed(target);
+    filesInput.current?.click();
+  }
+  // Something was picked for an armed destination: send it there.
+  useEffect(() => {
+    const target = launch.current;
+    if (!target || !ready) return;
+    launch.current = null;
+    if (target.kind === "save") send({ kind: "save" });
+    else if (target.kind === "link") toLink();
+    else toDevice(target.device);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once the picked files are in the draft.
+  }, [items]);
+  // The picker's Cancel puts the destination down again.
+  useEffect(() => {
+    const input = filesInput.current;
+    if (!input || !armed) return;
+    const cancel = () => setArmed(null);
+    input.addEventListener("cancel", cancel);
+    return () => input.removeEventListener("cancel", cancel);
+  }, [armed]);
   async function alsoSend(key: string, work: () => Promise<unknown>) {
     setAlsoBusy(key);
     try {
@@ -254,12 +276,14 @@ export function Composer({ children }: { children?: React.ReactNode }) {
       setAlsoBusy("");
     }
   }
-  function toDevice(d: { id: string; name: string }) {
-    if (finished) void alsoSend(d.id, () => sendItem(finished.itemId!, d));
-    else send({ kind: "device", device: d.id, name: d.name });
+  function toDevice(d: Device) {
+    if (finished) return void alsoSend(d.id, () => sendItem(finished.itemId!, d));
+    if (!ready) return arm({ kind: "device", device: d });
+    send({ kind: "device", device: d.id, name: d.name });
   }
   function toLink() {
     if (checkingItem) return;
+    if (!ready && !finished) return arm({ kind: "link" });
     if (linkChoiceProblem(link)) {
       setLinkTried(true);
       setLinkOptionsOpen(true);
@@ -273,7 +297,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   const fd = finished?.destination;
   const linkDone = !!finished?.link;
   const sentTo = (id: string) => (fd?.kind === "device" && fd.device === id) || also.includes(id);
-  const canSend = finished ? true : ready && !showing;
   // While Relay can't be reached nothing can be sent; choosing what to send carries on.
   const { state: connectionState } = useConnection();
   const cut = connectionState === "offline" || connectionState === "no-network" || connectionState === "down";
@@ -289,10 +312,9 @@ export function Composer({ children }: { children?: React.ReactNode }) {
           : "Busy with this transfer. Choose “Send something else” to start another."
         : noSpace
           ? `Not enough space: ${bytes(free)} left, this needs ${bytes(need)}.`
-          : ready
-            ? null
-            : "Add something, then choose where it goes.";
-  const destinationsOff = !canSend || noSpace || cut;
+          : null;
+  // With nothing added the rows stay usable: each opens the picker for itself.
+  const destinationsOff = (showing && !finished) || noSpace || cut;
   // On a phone the destinations sit below the drop box; a bar brings them back into view.
   const panel = useRef<HTMLElement>(null);
   const [panelVisible, setPanelVisible] = useState(true);
@@ -318,7 +340,12 @@ export function Composer({ children }: { children?: React.ReactNode }) {
         <FilePickers
           files={filesInput}
           folder={folderInput}
-          onFiles={(files) => addSelection(files)}
+          onFiles={(files) => {
+            // Picked for a destination chosen first: it goes there once it's in the box.
+            if (armed) launch.current = armed;
+            setArmed(null);
+            addSelection(files);
+          }}
           testId="file-input"
           folderTestId="folder-input"
         />
@@ -373,6 +400,16 @@ export function Composer({ children }: { children?: React.ReactNode }) {
                 onView={(id) => setOpen(id)}
               />
             )}
+            {armed && (
+              <div className="send-armed" role="status">
+                <span>
+                  Choose what to send to <strong>{armedName(armed)}</strong>
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setArmed(null)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
             <ContentBox
               items={items}
               text={draft.text}
@@ -389,21 +426,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
             {ready && (
               <div className="composer-meta" role="group" aria-label="Details">
                 <NameChip name={name} placeholder={autoName} onChange={setName} />
-                <Menu
-                  label="Move to Trash after"
-                  trigger={
-                    <>
-                      <Clock size={14} aria-hidden />
-                      <span>{keep ? `Trash after ${days(keep)}` : "Keep until deleted"}</span>
-                      <ChevronDown size={14} aria-hidden />
-                    </>
-                  }
-                  items={durations(KEEP_DAYS, defaultKeep, me.user.limits.keepDays).map((v) => ({
-                    label: v ? days(v) : "Never",
-                    icon: v === keep ? <Check size={16} /> : <span className="menu-icon-gap" />,
-                    onSelect: () => setKeep(v),
-                  }))}
-                />
               </div>
             )}
             {ready && me.user.limits.keepDays !== null && (
@@ -442,7 +464,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
             label="Save to Files"
             detail="Keep it in your Files"
             disabled={destinationsOff}
-            onClick={() => send({ kind: "save" })}
+            onClick={() => (ready ? send({ kind: "save" }) : arm({ kind: "save" }))}
           />
         )}
         {!linkDone && (
@@ -491,50 +513,10 @@ export function Composer({ children }: { children?: React.ReactNode }) {
         {devicesError && !cut && (
           <LoadFailed banner title="Devices couldn’t be loaded" error={devicesError} onRetry={reloadDevices} />
         )}
-        {devices.length && !cut ? (
-          devices.map((d) => (
-            <DestinationRow
-              key={d.id}
-              icon={<DeviceIcon device={d} />}
-              label={d.name}
-              detail={
-                sentTo(d.id) ? (
-                  "Sent"
-                ) : (
-                  <>
-                    <span className="online-dot" aria-hidden /> Online now
-                  </>
-                )
-              }
-              disabled={destinationsOff || !!devicesError || sentTo(d.id)}
-              done={sentTo(d.id)}
-              busy={alsoBusy === d.id}
-              onClick={() => toDevice(d)}
-              revealAccessory
-              accessory={
-                <IconButton
-                  size="sm"
-                  label={`Edit ${d.name}`}
-                  icon={<Pencil size={15} aria-hidden />}
-                  onClick={(event) => {
-                    // Safari doesn't focus a clicked button; the editor returns focus to what had it.
-                    event.currentTarget.focus();
-                    editDevice(d);
-                  }}
-                />
-              }
-            />
-          ))
+        {devicesLoading ? (
+          <p className="send-panel-empty waiting">Loading devices…</p>
         ) : (
-          <p className={`send-panel-empty${!cut && devicesLoading ? " waiting" : ""}`}>
-            {cut
-              ? "Your devices show up here once you’re connected."
-              : devicesLoading
-                ? "Loading devices…"
-                : devicesError
-                  ? "Device availability is unknown. Retry to refresh."
-                  : "Devices show up here while Relay is open on them."}
-          </p>
+          <OwnDevices disabled={destinationsOff || !!devicesError} sentTo={sentTo} busy={alsoBusy} onSend={toDevice} />
         )}
         <DestinationRow
           quiet

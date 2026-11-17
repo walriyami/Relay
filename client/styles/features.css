@@ -764,28 +764,18 @@
     background-color 0.16s,
     border-color 0.16s;
 }
-.composer-drop:hover,
-.composer-drop:focus-visible {
+.composer-drop:hover {
   border-color: var(--line);
   background: var(--well);
 }
-.composer-drop:focus-visible {
-  outline: none;
-  box-shadow: var(--focus);
+.composer-drop > .btn {
+  min-width: 200px;
 }
 .composer-drop > strong {
   color: var(--ink);
   font-size: 1.2rem;
   font-weight: 500;
   letter-spacing: -0.01em;
-}
-.composer-browse {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 600;
 }
 .document-art {
   width: 96px;
@@ -1058,6 +1048,41 @@
   padding: var(--s2) var(--s3);
   border-radius: var(--r1);
   background: var(--well);
+}
+/* A new link, in full. */
+.link-panel-url {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+/* A destination chosen before anything was added: the picker is open for it. */
+.send-armed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+  padding: var(--s2) var(--s2) var(--s2) var(--s3);
+  border-radius: var(--r1);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.88rem;
+  animation: composer-mode-in 0.2s ease-out;
+}
+.send-panel-more {
+  align-self: flex-start;
+  margin: 2px 0 0 var(--s1);
+}
+/* What a devices list is for, in one line under its heading. */
+.send-panel-note {
+  margin: 0 var(--s1) var(--s1);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 .send-panel-empty {
   padding: 2px 0 var(--s1);
@@ -1597,7 +1622,9 @@
   .send-panel.is-showing-transfers .destination-wrap,
   .send-panel.is-showing-transfers .send-panel-heading,
   .send-panel.is-showing-transfers .send-panel-empty,
-  .send-panel.is-showing-transfers .this-device {
+  .send-panel.is-showing-transfers .this-device,
+  .send-panel.is-showing-transfers .send-panel-more,
+  .send-panel.is-showing-transfers .send-panel-note {
     display: none;
   }
   .send-panel.is-showing-transfers .send-panel-summary {

@@ -30,7 +30,7 @@ test("choosing a destination from the keyboard moves focus to its result", async
   await expect(save).toHaveCount(0);
   await expect(page.locator(".composer").getByRole("button", { name: "Done" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".composer")).toContainText("Nothing added yet");
+  await expect(page.locator(".composer")).toContainText(/Drop files or folders here|Add photos, files or text/);
   await expect(page.locator(".transfer")).toHaveCount(0);
 });
 

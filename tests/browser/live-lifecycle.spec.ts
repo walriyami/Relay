@@ -488,12 +488,14 @@ for (const guestFirst of [false, true]) {
       await fileInput(sender.page).setInputFiles(textFile(name, "delivered while this device polls"));
       const download = page.waitForEvent("download", { timeout: 32_000 });
       await destination.click();
-      await expect(sender.page.locator(".transfer").first()).toContainText(`Sent to ${receiverSession.device.name}`);
+      await expect(sender.page.locator(".transfer").first()).toContainText(
+        new RegExp(`(Sent|Delivered) to ${receiverSession.device.name}`),
+      );
       // The unchanged limited->ALL topics path discovers the delivery on its next real probe.
       expect((await download).suggestedFilename()).toBe(name);
       await expect(page.getByRole("dialog", { name })).toContainText("Accepted on this device");
       await expect(sender.page.locator(".transfer").first()).toContainText(
-        `Accepted on ${receiverSession.device.name}`,
+        `Downloaded on ${receiverSession.device.name} · copy kept in Files`,
       );
       expect(probes.length).toBeGreaterThanOrEqual(2);
       expect((await events()).every((event) => event === "limited")).toBe(true);

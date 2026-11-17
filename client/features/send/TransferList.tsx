@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import type { DeliveryState } from "../../api";
 import {
   Ban,
   CheckCircle2,
@@ -89,7 +88,7 @@ export function TransferStrip({
 }: {
   t: Transfer;
   /** For a transfer sent to a device, how that device answered it. */
-  answer: DeliveryState;
+  answer: DeviceAnswer;
   onShow: () => void;
 }) {
   const pct = t.totalBytes ? Math.floor((t.sentBytes / t.totalBytes) * 100) : 0;
@@ -150,14 +149,14 @@ export function TransferStrip({
  * Announces state changes (started, paused, done, failed) to screen readers without reading out
  * progress numbers that change several times a second.
  */
-function Announce({ t, answer = "available" }: { t: Transfer; answer?: DeliveryState }) {
+function Announce({ t, answer = "waiting" }: { t: Transfer; answer?: DeviceAnswer }) {
   return (
     <span className="visually-hidden" role="status">
       {phase(t, answer)}
     </span>
   );
 }
-function phase(t: Transfer, answer: DeliveryState): string {
+function phase(t: Transfer, answer: DeviceAnswer): string {
   switch (t.status) {
     case "preparing":
       return `Preparing ${t.name}`;
@@ -189,14 +188,21 @@ function destinationFailure(t: Transfer) {
   return "Saved, but not finished";
 }
 
-/** What the receiving device said: accepted, declined, or nothing yet. Never more than it said. */
-const DEVICE_ANSWER: Record<DeliveryState, (device: string) => string> = {
-  available: (device) => `Sent to ${device} · not accepted yet`,
-  accepted: (device) => `Accepted on ${device}`,
+/**
+ * Where a delivery to one of your devices stands: waiting for that device to open Relay, shown
+ * there, then accepted or declined. Never more than the device said.
+ */
+export type DeviceAnswer = "sent" | "waiting" | "delivered" | "accepted" | "declined";
+const DEVICE_ANSWER: Record<DeviceAnswer, (device: string) => string> = {
+  // On its way to a device that has Relay open; it shows there in a moment.
+  sent: (device) => `Sent to ${device} · copy kept in Files`,
+  waiting: (device) => `Waiting for ${device} to open Relay · copy kept in Files`,
+  delivered: (device) => `Delivered to ${device} · copy kept in Files`,
+  accepted: (device) => `Downloaded on ${device} · copy kept in Files`,
   declined: (device) => `Declined on ${device} · still in Files`,
 };
 
-function doneLabel(t: Transfer, answer: DeliveryState) {
+function doneLabel(t: Transfer, answer: DeviceAnswer) {
   const d = t.destination;
   // A saved or sent item can get a link afterwards; the link is then the news.
   const link = "Link ready";
@@ -222,7 +228,7 @@ function goingLabel(t: Transfer) {
 
 export function TransferCard({
   t,
-  answer = "available",
+  answer = "waiting",
   onOpen,
   embedded = false,
   onDismiss,
@@ -230,7 +236,7 @@ export function TransferCard({
 }: {
   t: Transfer;
   /** For a transfer sent to a device, how that device answered it. */
-  answer?: DeliveryState;
+  answer?: DeviceAnswer;
   onOpen: () => void;
   /** Shown inside the drop box, which has its own Done button. */
   embedded?: boolean;
@@ -522,7 +528,7 @@ function TransferHero({
   onDismiss,
 }: {
   t: Transfer;
-  answer: DeliveryState;
+  answer: DeviceAnswer;
   onDismiss?: () => void;
   status: React.ReactNode;
   body: React.ReactNode;

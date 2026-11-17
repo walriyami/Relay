@@ -21,7 +21,15 @@ export function SendPage() {
   });
   return (
     <div className="page">
-      <h1 className="visually-hidden">Send</h1>
+      <div className="page-head send-head">
+        <div>
+          <h1>Send</h1>
+          <p className="muted">
+            Goes through Relay and is kept in your Files: share it with a link, or send it to your devices, even ones
+            that are away.
+          </p>
+        </div>
+      </div>
       <Composer>
         <RecentGrid />
       </Composer>

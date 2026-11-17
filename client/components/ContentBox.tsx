@@ -144,10 +144,8 @@ export function ContentBox({
     <div className="content-box">
       {!pickers && <FilePickers files={filesInput} folder={folderInput} onFiles={onFiles} testId={fileInputTestId} />}
       <div className="composer-head">
-        <span className={`composer-summary${items.length || hasText ? "" : " muted"}`}>
-          {items.length || hasText
-            ? `${describePicks(items, hasText)}${size ? ` · ${bytes(size)}` : ""}`
-            : "Nothing added yet"}
+        <span className="composer-summary">
+          {(items.length > 0 || hasText) && `${describePicks(items, hasText)}${size ? ` · ${bytes(size)}` : ""}`}
         </span>
         <div className="composer-mode" role="group" aria-label="Content type" data-mode={mode}>
           <button type="button" aria-pressed={mode === "files"} onClick={() => switchMode("files")}>
@@ -162,11 +160,19 @@ export function ContentBox({
       </div>
       <div className="composer-pane" hidden={mode !== "files"}>
         {items.length === 0 ? (
-          <button type="button" className="composer-drop" onClick={() => filesInput.current?.click()}>
+          // The whole area takes a click, for a mouse; the button is the one action, for everyone.
+          <div
+            className="composer-drop"
+            onClick={(event) => {
+              if (!(event.target as Element).closest("button")) filesInput.current?.click();
+            }}
+          >
             <DocumentArt />
-            <strong>{touch ? "Choose files to send" : "Drop files or folders"}</strong>
-            <span className="composer-browse">Browse files</span>
-          </button>
+            <strong>{touch ? "Add photos, files or text" : "Drop files or folders here"}</strong>
+            <Button variant="primary" icon={<Plus size={18} aria-hidden />} onClick={() => filesInput.current?.click()}>
+              {touch ? "Choose photos or files" : "Choose files"}
+            </Button>
+          </div>
         ) : (
           <ul className="selection-list" aria-label="Selected items">
             {items.slice(0, shown).map((item) => (
