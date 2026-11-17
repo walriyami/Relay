@@ -1474,6 +1474,12 @@ button.card:focus-visible,
   align-self: center;
   justify-self: center;
 }
+.share-access-share {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s2);
+}
 .share-access-detail {
   font-size: 0.88rem;
   line-height: 1.45;

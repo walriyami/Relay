@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { CopyButton, QrCode } from "./ui";
+import { Share } from "lucide-react";
+import { Button, CopyButton, QrCode, toast } from "./ui";
+import { canShareLink, shareLink } from "../lib/pwa-share";
 import { api } from "../api";
 import { useLive } from "../lib/live";
 import { useCodeConfig } from "../features/codes/config";
@@ -39,15 +41,39 @@ export function ShareAccess({
       <div className="share-access-qr">
         <QrCode value={url} size={192} label={`QR code for this ${purpose}`} />
       </div>
-      <CopyButton
-        value={url}
-        label={copyLabel}
-        // Beside the QR code it is the main thing to do, so it looks like a button, not a link.
-        variant={compact ? "secondary" : "ghost"}
-        className="share-access-copy"
-        failureMessage="Couldn’t copy this link. Scan the QR code with another device."
-        autofocus
-      />
+      {canShareLink() ? (
+        // On a phone the share sheet reaches Messages, Mail and nearby devices; copying stays beside it.
+        <div className="share-access-copy share-access-share">
+          <Button
+            variant="primary"
+            icon={<Share size={16} />}
+            data-autofocus
+            onClick={() =>
+              void shareLink(url).then(
+                (shown) => shown || toast("Sharing isn’t available here. Copy the link instead."),
+              )
+            }
+          >
+            Share…
+          </Button>
+          <CopyButton
+            value={url}
+            label={copyLabel}
+            variant="ghost"
+            failureMessage="Couldn’t copy this link. Scan the QR code with another device."
+          />
+        </div>
+      ) : (
+        <CopyButton
+          value={url}
+          label={copyLabel}
+          // Beside the QR code it is the main thing to do, so it looks like a button, not a link.
+          variant={compact ? "secondary" : "ghost"}
+          className="share-access-copy"
+          failureMessage="Couldn’t copy this link. Scan the QR code with another device."
+          autofocus
+        />
+      )}
       <div className="share-access-code">
         <span className="share-access-code-label">{codeLabel}</span>
         <div className="share-access-code-value">

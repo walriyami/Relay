@@ -6,7 +6,8 @@ import { downloadZip, type ContentSource } from "../lib/source";
 import { EntryBrowser } from "./EntryBrowser";
 import { FilePreview, PreviewViewer } from "./PreviewViewer";
 import { TextBlock } from "./TextBlock";
-import { IconButton, InlineEmpty } from "./ui";
+import { savePhoto, savesToPhotos } from "../lib/pwa-share";
+import { IconButton, InlineEmpty, toast } from "./ui";
 
 /** The files of an item, text excluded: text is shown inline and never downloaded. */
 export const filesOf = (nodes: Node[]) => nodes.filter((n) => n.kind === "file");
@@ -16,9 +17,20 @@ export const isSingleFile = (nodes: Node[]) => filesOf(nodes).length === 1 && !n
 /** Downloads everything an item holds in place: a lone file as itself, anything else as a ZIP. */
 export function downloadContents(source: ContentSource, nodes: Node[], itemId: string) {
   const files = filesOf(nodes);
-  if (isSingleFile(nodes)) download(source.file(files[0].id), files[0].name);
-  else downloadZip(source, itemId);
+  if (!isSingleFile(nodes)) return downloadZip(source, itemId);
+  const [file] = files;
+  // On a phone, a photo or short video goes to the share sheet, where "Save Image" puts it in Photos.
+  if (file.size <= PHOTO_SHARE_LIMIT && savesToPhotos(file.name, file.mime))
+    return void savePhoto(source.file(file.id), file.name, (save) =>
+      toast(`“${file.name}” is ready`, {
+        key: `save:${file.id}`,
+        action: { label: "Save", onClick: () => void save() },
+      }),
+    ).catch(() => download(source.file(file.id), file.name));
+  download(source.file(file.id), file.name);
 }
+/** Larger videos download instead: the share sheet needs the whole file in memory first. */
+const PHOTO_SHARE_LIMIT = 100 * 1024 * 1024;
 
 /**
  * What an item holds, as the item window, the receive popup and a shared link all show it. A single
