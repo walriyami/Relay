@@ -308,6 +308,35 @@ test("image previews use small server thumbnails, never the original file", asyn
   expect(Number(thumb.headers()["content-length"] || (await thumb.body()).length)).toBeLessThan(200_000);
 });
 
+test("a preview the server is too busy for is asked for again, not left as an icon", async ({ page }) => {
+  const name = unique("busy");
+  let turnedAway = 0;
+  await page.route("**/thumbnail*", async (route) => {
+    if (turnedAway++ === 0)
+      return route.fulfill({ status: 503, headers: { "retry-after": "1" }, body: "busy" });
+    return route.continue();
+  });
+  // A 2×2 red PNG.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAE0lEQVQImWP4z8DwnwGM/zMwAAAf7gP9qS/A4gAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await fileInput(page).setInputFiles([{ name: `${name}.png`, mimeType: "image/png", buffer: png }]);
+  await destinations(page).getByRole("button", { name: "Save to Files" }).click();
+  await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
+  const card = page
+    .getByRole("list", { name: "Recent" })
+    .getByRole("button", { name: new RegExp(name) })
+    .first();
+  await expect
+    .poll(() => card.locator("img").evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth), {
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
+  expect(turnedAway).toBeGreaterThan(1);
+  await expect(card.locator(".thumb-icon")).toHaveCount(0);
+});
+
 test("unsupported types show an icon instead of a preview", async ({ page }) => {
   const name = unique("blob");
   await fileInput(page).setInputFiles([

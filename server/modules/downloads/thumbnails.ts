@@ -1,10 +1,13 @@
-// Bounded image renditions keyed by blob hash, so previews never ship originals. Rendering runs at
-// one at a time and a request for a rendition already in progress waits for that one.
+// Bounded image renditions keyed by blob hash, so previews never ship originals. A few long-lived
+// workers render one image each at a time; requests wait their turn, taken in rotation between the
+// people asking, and a request for a rendition already in progress waits for that one.
 import { createReadStream, type Stats } from "node:fs";
+import { availableParallelism } from "node:os";
 import { rename, stat, unlink, writeFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../../context.ts";
+import { authOf } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { sameFile, thumbnailFailure, thumbnailPath, type ThumbnailDecoder } from "../../storage/blobs.ts";
 
@@ -13,8 +16,18 @@ type Size = keyof typeof DIMENSIONS;
 export const MAX_SOURCE_BYTES = 50 * 1024 ** 2;
 export const MAX_PIXELS = 50_000_000;
 export const MAX_HEIF_PIXELS = 40_000_000;
-const RENDERERS = 1;
-export const MAX_QUEUED_RENDITIONS = 32;
+/** Images rendered at once. Two on a Raspberry Pi's four cores leaves the rest for transfers. */
+const RENDERERS = Math.max(1, Math.min(2, availableParallelism() - 2));
+/**
+ * Renditions waiting, in all and for one person. A phone opening an album asks for every visible
+ * photo at once; they wait their turn instead of failing. Past these, the page retries.
+ */
+export const MAX_QUEUED_RENDITIONS = 512;
+export const MAX_QUEUED_PER_PERSON = 128;
+/** An idle worker is stopped after this long, so its memory is returned when nobody is browsing. */
+const WORKER_IDLE_MS = 30_000;
+/** Renders before a worker is replaced, bounding what any slow leak can hold. */
+const RENDERS_PER_WORKER = 200;
 
 const TYPES = /^image\/(png|jpeg|webp|gif|avif|heic|heif)$/;
 const EXTENSIONS = /\.(png|jpe?g|webp|gif|avif|heic|heif)$/i;
@@ -46,15 +59,31 @@ class WorkerRenderError extends Error {
   }
 }
 
-function renderInWorker(input: { source: string; target: string; format: ThumbnailDecoder; width: number }) {
-  return new Promise<void>((resolve, reject) => {
+type RenderInput = { source: string; target: string; format: ThumbnailDecoder; width: number };
+type Renderer = { worker: Worker; renders: number; idle?: NodeJS.Timeout };
+
+/**
+ * Long-lived render workers. Starting a worker costs about as much as rendering a photo, so one is
+ * reused until it idles, has rendered many images, or rendered a HEIF photo (whose decoder keeps
+ * its memory). A worker that fails or times out is stopped and never reused.
+ */
+function createRenderers() {
+  const idle: Renderer[] = [];
+  const all = new Set<Renderer>();
+  let ids = 0;
+  let closed = false;
+
+  const retire = (renderer: Renderer) => {
+    clearTimeout(renderer.idle);
+    all.delete(renderer);
+    const index = idle.indexOf(renderer);
+    if (index !== -1) idle.splice(index, 1);
+    void renderer.worker.terminate();
+  };
+
+  const spawn = () => {
     const worker = new Worker(new URL("./thumbnail-worker.ts", import.meta.url), {
-      workerData: {
-        ...input,
-        maxSourceBytes: MAX_SOURCE_BYTES,
-        maxPixels: MAX_PIXELS,
-        maxHeifPixels: MAX_HEIF_PIXELS,
-      },
+      workerData: { maxSourceBytes: MAX_SOURCE_BYTES, maxPixels: MAX_PIXELS, maxHeifPixels: MAX_HEIF_PIXELS },
       resourceLimits: {
         maxOldGenerationSizeMb: 256,
         maxYoungGenerationSizeMb: 32,
@@ -62,40 +91,72 @@ function renderInWorker(input: { source: string; target: string; format: Thumbna
         stackSizeMb: 4,
       },
     });
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      void worker
-        .terminate()
-        .finally(() => reject(new WorkerRenderError("WORKER_TIMEOUT", "thumbnail rendering timed out")));
-    }, WORKER_TIMEOUT_MS);
-    worker.once("message", (message: { ok: boolean; code?: string; message?: string }) => {
-      if (settled) return;
-      clearTimeout(timer);
-      settled = true;
-      void worker.terminate().then(() => {
-        if (message.ok) resolve();
-        else reject(new WorkerRenderError(message.code ?? "RENDER_FAILED", message.message ?? "render failed"));
-      }, reject);
+    // An idle worker never keeps Relay from exiting.
+    worker.unref?.();
+    const renderer: Renderer = { worker, renders: 0 };
+    all.add(renderer);
+    worker.on("error", () => retire(renderer));
+    worker.once("exit", () => retire(renderer));
+    return renderer;
+  };
+
+  function render(input: RenderInput) {
+    const renderer = idle.pop() ?? spawn();
+    clearTimeout(renderer.idle);
+    const id = ++ids;
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (healthy: boolean, outcome: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        renderer.worker.off("message", answered);
+        renderer.worker.off("error", failed);
+        renderer.worker.off("exit", exited);
+        renderer.renders++;
+        if (healthy && !closed && input.format !== "heif" && renderer.renders < RENDERS_PER_WORKER) {
+          renderer.idle = setTimeout(() => retire(renderer), WORKER_IDLE_MS);
+          renderer.idle.unref();
+          idle.push(renderer);
+        } else retire(renderer);
+        outcome();
+      };
+      const timer = setTimeout(
+        () => finish(false, () => reject(new WorkerRenderError("WORKER_TIMEOUT", "thumbnail rendering timed out"))),
+        WORKER_TIMEOUT_MS,
+      );
+      const answered = (message: { id: number; ok: boolean; code?: string; message?: string }) => {
+        if (message.id !== id) return;
+        finish(true, () =>
+          message.ok
+            ? resolve()
+            : reject(new WorkerRenderError(message.code ?? "RENDER_FAILED", message.message ?? "render failed")),
+        );
+      };
+      const failed = (error: Error) => finish(false, () => reject(error));
+      const exited = (code: number) =>
+        finish(false, () => reject(new WorkerRenderError("WORKER_EXIT", `thumbnail worker exited with ${code}`)));
+      renderer.worker.on("message", answered);
+      renderer.worker.on("error", failed);
+      renderer.worker.on("exit", exited);
+      renderer.worker.postMessage({ id, ...input });
     });
-    worker.once("error", (error: Error) => {
-      clearTimeout(timer);
-      settled = true;
-      void worker.terminate();
-      reject(error);
-    });
-    worker.once("exit", (code) => {
-      clearTimeout(timer);
-      if (!settled && code !== 0) reject(new WorkerRenderError("WORKER_EXIT", `thumbnail worker exited with ${code}`));
-      else if (!settled) reject(new WorkerRenderError("WORKER_EXIT", "thumbnail worker exited before rendering"));
-    });
-  });
+  }
+
+  return {
+    render,
+    close() {
+      closed = true;
+      for (const renderer of [...all]) retire(renderer);
+    },
+  };
 }
 
 export function createThumbnails(ctx: Context) {
   type Job = {
     key: string;
+    /** Who asked first: the queue the job waits in. */
+    person: string;
     state: "waiting" | "active" | "done" | "cancelled";
     waiters: number;
     work: () => Promise<string>;
@@ -103,8 +164,11 @@ export function createThumbnails(ctx: Context) {
     resolve: (file: string) => void;
     reject: (error: unknown) => void;
   };
+  const renderers = createRenderers();
   const inflight = new Map<string, Job>();
-  const waiting: Job[] = [];
+  /** Waiting jobs per person, in the order their turns come round. */
+  const waiting = new Map<string, Job[]>();
+  let queued = 0;
   let active = 0;
   // Temporary outages are never persisted and have a short shared backoff for both sizes.
   const retryAfter = new Map<string, number>();
@@ -128,9 +192,21 @@ export function createThumbnails(ctx: Context) {
       });
   }
 
+  /** The next waiting job, taking one from each person in turn. */
+  function nextWaiting() {
+    for (const [person, jobs] of waiting) {
+      const job = jobs.shift()!;
+      queued--;
+      waiting.delete(person);
+      if (jobs.length) waiting.set(person, jobs);
+      return job;
+    }
+  }
+
   function startWaiting() {
-    while (active < RENDERERS && waiting.length) {
-      const next = waiting.shift()!;
+    while (active < RENDERERS) {
+      const next = nextWaiting();
+      if (!next) return;
       if (next.state !== "waiting") continue;
       if (next.waiters === 0) {
         next.state = "cancelled";
@@ -144,15 +220,21 @@ export function createThumbnails(ctx: Context) {
   function cancelIfUnobserved(job: Job) {
     if (job.waiters !== 0 || job.state !== "waiting") return;
     job.state = "cancelled";
-    const index = waiting.indexOf(job);
-    if (index !== -1) waiting.splice(index, 1);
+    const jobs = waiting.get(job.person);
+    const index = jobs?.indexOf(job) ?? -1;
+    if (index !== -1) {
+      jobs!.splice(index, 1);
+      queued--;
+      if (!jobs!.length) waiting.delete(job.person);
+    }
     if (inflight.get(job.key) === job) inflight.delete(job.key);
   }
 
-  function getJob(key: string, work: () => Promise<string>, reply: FastifyReply) {
+  function getJob(key: string, person: string, work: () => Promise<string>, reply: FastifyReply) {
     const existing = inflight.get(key);
     if (existing) return existing;
-    if (active >= RENDERERS && waiting.length >= MAX_QUEUED_RENDITIONS) {
+    const mine = waiting.get(person)?.length ?? 0;
+    if (active >= RENDERERS && (queued >= MAX_QUEUED_RENDITIONS || mine >= MAX_QUEUED_PER_PERSON)) {
       reply.header("Retry-After", "1");
       fail(503, "Preview rendering is busy. Retry shortly.");
     }
@@ -164,10 +246,15 @@ export function createThumbnails(ctx: Context) {
     });
     // An active render can finish after every interested request disconnects.
     void promise.catch(() => {});
-    const job: Job = { key, state: "waiting", waiters: 0, work, promise, resolve, reject };
+    const job: Job = { key, person, state: "waiting", waiters: 0, work, promise, resolve, reject };
     inflight.set(key, job);
     if (active < RENDERERS) start(job);
-    else waiting.push(job);
+    else {
+      const jobs = waiting.get(person);
+      if (jobs) jobs.push(job);
+      else waiting.set(person, [job]);
+      queued++;
+    }
     return job;
   }
 
@@ -245,7 +332,7 @@ export function createThumbnails(ctx: Context) {
         fail(415, "This image is too large to preview.");
       }
       try {
-        await renderInWorker({ source, target: publication.file, format, width: DIMENSIONS[size] });
+        await renderers.render({ source, target: publication.file, format, width: DIMENSIONS[size] });
         if (!(await unchanged(sha256, info))) return busy();
         await rename(publication.file, target);
         if (!(await unchanged(sha256, info))) return busy();
@@ -282,7 +369,7 @@ export function createThumbnails(ctx: Context) {
     return req.method === "HEAD" ? reply.send() : reply.send(createReadStream(file));
   }
 
-  return async function send(req: FastifyRequest, reply: FastifyReply, node: ThumbnailSource) {
+  async function send(req: FastifyRequest, reply: FastifyReply, node: ThumbnailSource) {
     const size: Size = (req.query as { size?: string }).size === "l" ? "l" : "s";
     const format = node.kind === "file" && node.blob ? kind(node.mime, node.name) : null;
     if (!format || !node.blob) return fail(415, "There is no image preview for this file.");
@@ -305,7 +392,9 @@ export function createThumbnails(ctx: Context) {
     }
     // A filename/MIME hint selects the decoder, so distinct decoder attempts cannot share failure.
     const key = `${node.blob}-${size}-${format}`;
-    const job = getJob(key, () => render(node.blob!, size, format), reply);
+    // A member's requests share one turn wherever they come from; anyone else's, by address.
+    const person = authOf(ctx, req).member?.userId ?? `ip:${req.ip}`;
+    const job = getJob(key, person, () => render(node.blob!, size, format), reply);
     let file: string | null;
     try {
       file = await waitForJob(job, req, reply);
@@ -316,5 +405,7 @@ export function createThumbnails(ctx: Context) {
     }
     if (!file) return;
     return sendFile(req, reply, node.blob, file);
-  };
+  }
+
+  return Object.assign(send, { close: () => renderers.close() });
 }

@@ -3,19 +3,18 @@ import { parentPort, workerData } from "node:worker_threads";
 import sharp from "sharp";
 import { ALLOWED_LOADERS, imageSignature } from "./image-signature.ts";
 
-type WorkerInput = {
-  source: string;
-  target: string;
-  format: "heif" | "image";
-  width: number;
-  maxSourceBytes: number;
-  maxPixels: number;
-  maxHeifPixels: number;
-};
+/** One rendition to make. A worker renders many, one at a time. */
+type Job = { id: number; source: string; target: string; format: "heif" | "image"; width: number };
+type Limits = { maxSourceBytes: number; maxPixels: number; maxHeifPixels: number };
 
-const data = workerData as WorkerInput;
+const limits = workerData as Limits;
+sharp.cache(false);
+sharp.concurrency(1);
+sharp.block({ operation: ["VipsForeignLoad"] });
+sharp.unblock({ operation: ALLOWED_LOADERS });
 
-async function render() {
+async function render(job: Job) {
+  const data = { ...job, ...limits };
   const sourceInfo = await stat(data.source);
   if (sourceInfo.size > data.maxSourceBytes) {
     const error = new Error("The source image is too large to preview.");
@@ -30,10 +29,6 @@ async function render() {
   const signature = imageSignature(buffer.subarray(0, 16));
   if (!signature || (data.format === "heif" && signature !== "heif"))
     throw Object.assign(new Error("This image format cannot be previewed."), { code: "INVALID_IMAGE" });
-  sharp.cache(false);
-  sharp.concurrency(1);
-  sharp.block({ operation: ["VipsForeignLoad"] });
-  sharp.unblock({ operation: ALLOWED_LOADERS });
   if (data.format === "image") {
     const image = sharp(buffer, {
       limitInputPixels: data.maxPixels,
@@ -53,7 +48,7 @@ async function render() {
   }
 
   // Read only after the source-size check and inspect dimensions before libheif allocates pixels.
-  // Loaded here, not up front: each thumbnail gets a fresh worker, and most images are not HEIF.
+  // Loaded here, not up front: most images are not HEIF, and a worker retires after a HEIF render.
   const { default: decodeHeic } = await import("heic-decode");
   const images = await decodeHeic.all({ buffer });
   if (!images.length) throw Object.assign(new Error("HEIF image not found"), { code: "INVALID_IMAGE" });
@@ -82,11 +77,12 @@ async function render() {
   }
 }
 
-if (parentPort) {
-  render().then(
-    () => parentPort!.postMessage({ ok: true }),
+parentPort?.on("message", (job: Job) => {
+  render(job).then(
+    () => parentPort!.postMessage({ id: job.id, ok: true }),
     (error: unknown) =>
       parentPort!.postMessage({
+        id: job.id,
         ok: false,
         code:
           (error as { code?: string }).code ??
@@ -98,4 +94,4 @@ if (parentPort) {
         message: error instanceof Error ? error.message : String(error),
       }),
   );
-}
+});
