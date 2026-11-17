@@ -352,6 +352,8 @@ export type AdminMember = User & {
   signedInDevices: number;
   /** When one of their devices was last seen, if any ever was. */
   lastActive: Time | null;
+  /** Their account is linked to a Walriyami identity, so they can sign in with Walriyami. */
+  walriyami: boolean;
 };
 /** What changing a member's limits did to what they already had. */
 export type LimitsApplied = { links: number; items: number; requests: number };
@@ -511,7 +513,8 @@ export type ActivityEvent =
       bytes: number;
       text: boolean;
     }
-  | { kind: "joined"; userId: Id; username: string; note: string | null }
+  /** A new member: with an invitation, or by signing in with Walriyami (`walriyami`). */
+  | { kind: "joined"; userId: Id; username: string; note: string | null; walriyami?: boolean }
   /** Someone opened a link, or downloaded from it, for the first time. `item` is its name then. */
   | { kind: "link"; linkId: Id; itemId: Id; item: string; action: "opened" | "downloaded"; device: string };
 export type ActivityKind = ActivityEvent["kind"];

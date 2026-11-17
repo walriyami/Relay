@@ -75,7 +75,9 @@ export function describeEntry(e: ActivityEntry): Described {
     case "joined":
       return {
         icon: <UserPlus size={16} />,
-        title: `${e.username} joined with your invitation`,
+        title: e.walriyami
+          ? `${e.username} joined by signing in with Walriyami`
+          : `${e.username} joined with your invitation`,
         detail: e.note ? `Invitation: ${e.note}` : "New member",
       };
   }

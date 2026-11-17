@@ -227,6 +227,22 @@ export const api = {
     finish: ok("POST", "/api/setup/finish", { auth: "admin", body: z.object({ capacity: quota }) }),
   },
 
+  /**
+   * Walriyami sign-in, on a server given the WAL_* settings. Signing in is the /api/sso/login
+   * redirect itself; linking and the provider's callback finish there too.
+   */
+  sso: {
+    /** Whether the sign-in page offers Walriyami. */
+    config: endpoint<{ enabled: boolean }>()("GET", "/api/sso/config", { auth: "public" }),
+    /** Whether Walriyami sign-in is on, and whether this member's account is linked to it. */
+    account: endpoint<{ enabled: boolean; linked: boolean }>()("GET", "/api/sso/account", { auth: "member" }),
+    /** Checks the member's password and returns the Walriyami address that finishes linking. */
+    link: endpoint<{ url: string }>()("POST", "/api/sso/link", {
+      auth: "member",
+      body: z.object({ password: text(1, 256) }),
+    }),
+  },
+
   pickup: {
     /**
      * The owner's working code for the recipient a code they were shown once named: the same code

@@ -176,6 +176,7 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
                   {u.name && <span className="member-username muted">{u.username}</span>}
                   {u.admin && <span className="pill">Admin</span>}
                   {u.disabled && <span className="pill danger">Suspended</span>}
+                  {u.walriyami && <span className="pill">Walriyami</span>}
                 </strong>
                 <span className="muted">
                   {storageSummary(u.usage, u.limits.storage)}

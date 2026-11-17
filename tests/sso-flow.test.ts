@@ -1,8 +1,8 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { start, Client } from "./support/harness.ts";
+import { admin, start, Client } from "./support/harness.ts";
 import { startProvider } from "./support/sso-provider.ts";
 import { api } from "../shared/api.ts";
 
@@ -76,6 +76,81 @@ test("a Walriyami member who isn't its administrator can't claim a fresh server"
       sharedSignIn: true,
     });
   } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("someone new signing in with Walriyami becomes an ordinary member the administrator can see", async () => {
+  const provider = await startProvider({ sub: "friend-1", username: "Friend" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  const browser = provider.browser(instance);
+  try {
+    const boss = await admin(instance);
+    assert.equal((await browser.signIn()).headers.location, "/");
+    const me = (await browser.request(api.session.get.path)).json<{ user: { username: string; admin: boolean } }>();
+    assert.deepEqual([me.user.username, me.user.admin], ["friend", false]);
+    const listed = (await boss.call(api.admin.overview)).members.find((m) => m.username === "friend");
+    assert.equal(listed?.walriyami, true, "Admin shows how they sign in");
+    assert.equal((await boss.call(api.admin.overview)).members.find((m) => m.username === "admin")?.walriyami, false);
+    const news = (await boss.call(api.activity.list)).entries.find((e) => e.kind === "joined");
+    assert.ok(news?.kind === "joined" && news.walriyami && news.username === "friend", "the administrator is told");
+    assert.deepEqual((await browser.request(api.sso.account.path)).json(), { enabled: true, linked: true });
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("Walriyami names that aren't valid usernames are asked to link an account instead", async () => {
+  const provider = await startProvider({ sub: "short-1", username: "ab" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  try {
+    assert.equal((await provider.browser(instance).signIn()).headers.location, "/?sso=link-required");
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("Walriyami Control being down signs nobody out; only its own no does", async () => {
+  const provider = await startProvider({ sub: "friend-1", username: "friend" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  const browser = provider.browser(instance);
+  const session = () => browser.request(api.session.get.path);
+  const sessions = () =>
+    instance.ctx.db.value<number>(
+      "SELECT count(*) FROM external_sessions e JOIN sessions s ON s.token_hash = e.session_hash",
+    );
+  try {
+    assert.equal((await browser.signIn()).headers.location, "/");
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    for (const outage of [502, "hang"] as const) {
+      provider.grants.outage = outage;
+      mock.timers.tick(11_000);
+      const checks = provider.grants.checks;
+      assert.equal((await session()).statusCode, 200, `still signed in during a ${outage} outage`);
+      assert.ok(provider.grants.checks > checks, "Relay did ask");
+    }
+    // Long after Control last said yes, requests wait for it, but the session survives.
+    mock.timers.tick(2 * 3_600_000);
+    const waiting = await session();
+    assert.equal(waiting.statusCode, 503);
+    assert.match(waiting.json<{ error: string }>().error, /can't reach Walriyami/);
+    assert.equal(sessions(), 1);
+    // A new sign-in needs Control's answer.
+    assert.equal((await provider.browser(instance).signIn()).headers.location, "/?sso=unavailable");
+
+    provider.grants.outage = undefined;
+    mock.timers.tick(11_000);
+    assert.equal((await session()).statusCode, 200, "back as soon as Control answers");
+
+    provider.grants.allowed = false;
+    mock.timers.tick(11_000);
+    assert.equal((await session()).statusCode, 401);
+    assert.equal(sessions(), 0, "Control's no ends the session");
+  } finally {
+    mock.timers.reset();
     await instance.close();
     await provider.close();
   }

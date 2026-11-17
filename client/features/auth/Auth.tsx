@@ -87,9 +87,8 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
   }, [sharedNotice]);
   const [sharedSignIn, setSharedSignIn] = useState(false);
   useEffect(() => {
-    void fetch("/api/sso/config")
-      .then((r) => r.json() as Promise<{ enabled: boolean }>)
-      .then((v) => setSharedSignIn(!!v.enabled))
+    call(api.sso.config)
+      .then((v) => setSharedSignIn(v.enabled))
       .catch(() => {});
   }, []);
   const [username, setUsername] = useState("");
@@ -178,7 +177,7 @@ export function SignIn({ onSignedIn, notice }: { onSignedIn: (me: Me) => void; n
         </p>
       )}
       {sharedSignIn && (
-        <a className="button button-secondary" href="/api/sso/login">
+        <a className="btn btn-secondary" href="/api/sso/login">
           Sign in with Walriyami
         </a>
       )}

@@ -41,10 +41,11 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.admin.overview, async () => {
     const free = storageFree(ctx);
     const members = ctx.db
-      .all<MemberRow & { signed_in: number; last_active: number | null }>(
+      .all<MemberRow & { signed_in: number; last_active: number | null; walriyami: number }>(
         `SELECT ${MEMBER_COLUMNS},
            (SELECT COUNT(DISTINCT device_id) FROM sessions s WHERE s.user_id = users.id AND s.expires > ?) AS signed_in,
-           (SELECT max(seen) FROM devices d WHERE d.user_id = users.id) AS last_active
+           (SELECT max(seen) FROM devices d WHERE d.user_id = users.id) AS last_active,
+           EXISTS(SELECT 1 FROM external_identities e WHERE e.user_id = users.id) AS walriyami
          FROM users ORDER BY created`,
         Date.now(),
       )
@@ -55,6 +56,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         usage: usageOf(ctx, row.id, free),
         signedInDevices: row.signed_in,
         lastActive: row.last_active,
+        walriyami: !!row.walriyami,
       }));
     const limits = limitsOf(ctx);
     const disk = await statfs(ctx.config.root);
