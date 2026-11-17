@@ -1,9 +1,11 @@
 import { test, expect } from "@playwright/test";
 import {
+  BASE,
   composer,
   destinations,
   deviceContext,
   deviceName,
+  deviceState,
   endingWith,
   fileInput,
   signedIn,
@@ -33,13 +35,18 @@ test("a device that isn't open is offered, and gets what was sent the next time 
     endingWith(`: Waiting for ${phoneName} to open Relay · copy kept in Files`),
   );
   await expect(destination).toHaveAccessibleDescription("Waiting for it to open Relay");
-  // Opening Relay on the phone later is enough: it arrives, and the laptop is told.
-  const phone = await deviceContext(browser, "Phone");
+  // Opening Relay on the phone later is enough: auto-accept is on, so a file alone downloads there
+  // and says so, and the laptop is told.
+  const phone = await browser.newContext({ baseURL: BASE, storageState: await deviceState("Phone") });
   try {
-    await expect(phone.page.getByRole("dialog", { name: `${name}.txt` })).toContainText("Accepted on this device");
+    const phonePage = await phone.newPage();
+    const download = phonePage.waitForEvent("download");
+    await phonePage.goto("/");
+    expect((await download).suggestedFilename()).toBe(`${name}.txt`);
+    await expect(phonePage.getByText(`Downloading “${name}.txt” from ${laptop}`)).toBeVisible();
     await expect(card.getByRole("status")).toHaveText(endingWith(`: Downloaded on ${phoneName} · copy kept in Files`));
   } finally {
-    await phone.context.close();
+    await phone.close();
   }
 });
 
