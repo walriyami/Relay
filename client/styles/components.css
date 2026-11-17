@@ -13,11 +13,16 @@
   white-space: nowrap;
   text-decoration: none;
   transition:
-    background-color 0.12s,
-    border-color 0.12s,
-    color 0.12s;
+    background-color var(--fast),
+    border-color var(--fast),
+    color var(--fast),
+    transform var(--fast) var(--ease);
   flex-shrink: 0;
   user-select: none;
+}
+/* Every button gives a little under a press, so a tap on a phone visibly lands. */
+.btn:active:not(:disabled, [aria-disabled="true"]) {
+  transform: scale(0.97);
 }
 .btn > span {
   overflow: hidden;
@@ -35,6 +40,13 @@
 }
 .btn-icon.btn-sm {
   width: var(--control-sm);
+}
+/* A button that is only an icon is the hardest to hit: on touch screens it gets the full 44px. */
+@media (pointer: coarse) {
+  .btn-icon.btn-sm {
+    width: 44px;
+    height: 44px;
+  }
 }
 .btn-primary {
   background: var(--accent);
@@ -102,8 +114,8 @@
   background: var(--surface);
   color: var(--ink);
   transition:
-    border-color 0.12s,
-    box-shadow 0.12s;
+    border-color var(--fast),
+    box-shadow var(--fast);
 }
 textarea.input {
   padding: 10px var(--s3);
@@ -297,6 +309,18 @@ textarea.input {
 .segmented button:hover {
   color: var(--ink);
 }
+.segmented button:active:not(.on) {
+  background: var(--line);
+}
+/* On touch screens each option is a full 44px target. */
+@media (pointer: coarse) {
+  .segmented {
+    padding: 2px;
+  }
+  .segmented button {
+    height: 44px;
+  }
+}
 .segmented button.on {
   background: var(--surface);
   color: var(--ink);
@@ -367,7 +391,7 @@ textarea.input {
   border-radius: var(--pill);
   background: var(--control-border);
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: background-color var(--fast);
 }
 .toggle-row input::after {
   content: "";
@@ -379,7 +403,7 @@ textarea.input {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
-  transition: transform 0.15s;
+  transition: transform var(--fast);
 }
 .toggle-row input:checked {
   background: var(--accent);
@@ -537,7 +561,7 @@ textarea.input {
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 0.3s ease;
+  transition: width var(--slow) var(--ease);
 }
 .spinner-row {
   display: flex;
@@ -550,7 +574,7 @@ textarea.input {
 /* Waiting is shown only once it's noticeable. A quick answer goes straight to what it brings, with
    no flash of a spinner or placeholder cards in between; a slower one eases them in. */
 .waiting {
-  animation: waiting 0.25s ease 0.3s backwards;
+  animation: waiting var(--base) var(--ease) 0.3s backwards;
 }
 @keyframes waiting {
   from {
@@ -659,7 +683,7 @@ textarea.input {
   justify-content: center;
   padding: var(--s5);
   background: var(--scrim);
-  animation: fade 0.14s ease-out;
+  animation: fade var(--fast) var(--ease);
 }
 .modal {
   display: flex;
@@ -671,7 +695,7 @@ textarea.input {
   border: 1px solid var(--line);
   border-radius: var(--r3);
   box-shadow: var(--shadow);
-  animation: rise 0.16s ease-out;
+  animation: rise var(--base) var(--ease);
 }
 :root[data-theme="dark"] .modal {
   background: var(--raised);
@@ -793,7 +817,7 @@ textarea.input {
   border: 1px solid var(--line);
   border-radius: var(--r2);
   box-shadow: var(--shadow);
-  animation: drop 0.12s ease-out;
+  animation: drop var(--fast) var(--ease);
 }
 :root[data-theme="dark"] .popover,
 :root[data-theme="dark"] .toast {
@@ -865,7 +889,7 @@ textarea.input {
   background: var(--surface);
   box-shadow: var(--shadow);
   pointer-events: auto;
-  animation: rise 0.16s ease-out;
+  animation: rise var(--base) var(--ease);
 }
 .toast-text {
   display: flex;
@@ -1079,9 +1103,9 @@ textarea.input {
   text-align: left;
   overflow: hidden;
   transition:
-    border-color 0.12s,
-    box-shadow 0.12s,
-    transform 0.12s;
+    border-color var(--fast),
+    box-shadow var(--fast),
+    transform var(--fast);
 }
 button.card:hover,
 .collection-card:hover {
@@ -1262,7 +1286,7 @@ button.card:focus-visible,
   display: block;
   height: 100%;
   background: var(--accent);
-  transition: width 0.3s ease;
+  transition: width var(--slow) var(--ease);
 }
 .thumb-uploading .thumb-icon {
   color: var(--muted);
@@ -1349,7 +1373,7 @@ button.card:focus-visible,
   background: var(--surface);
   text-align: left;
   overflow: hidden;
-  transition: border-color 0.12s;
+  transition: border-color var(--fast);
 }
 .tile-open:hover {
   border-color: var(--line-strong);

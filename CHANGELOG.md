@@ -31,6 +31,17 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The image's base is pinned by digest and no longer upgraded during the build, so the same commit builds the same image. It no longer carries npm, Yarn or browser-only packages.
 - The data volume is no longer marked resettable, so a walctl reset can't empty it.
 - Server libraries updated to versions without known security advisories.
+- While Relay opens, it shows the app's frame and placeholder rows instead of a blank "Opening Relay" screen.
+- Links and Requests show each one's state as small coloured chips (expires soon, opened, full, closed) with a picture of what's shared, instead of lines of grey text. A link's password lock sits in front of its name.
+- Card titles no longer show a sliver of a third line under long names.
+- Sign-in, code entry, shared links and request pages use one layout, with the brand above the card. Every code field is called **Code**.
+- When an item moves to Trash is changed from **Change** beside its date in the item's details, not from the card menu, and the dates are written plainly ("Relay removes it on 3 March").
+- Settings has fewer sections: **Sharing**, **Storage**, **This device**, **Activity**, **Devices**, **Account** and **Passkeys**. Every choice saves as it's made and shows a quiet "Saved" beside its section. Devices not used for 30 days are folded away.
+- What happens when your devices send something here is one choice, **Download it** or **Ask me**. A download no longer also opens a window asking to download it again; text still opens so you can read it.
+- A new member's welcome asks only for their name. How long links and files last starts with the defaults and is in Settings.
+- On phones and tablets, option pickers and icon-only buttons are full 44-pixel touch targets, buttons give a little when pressed, and the page clears the notch when the phone is held sideways.
+- With reduced motion on, spinners and placeholders pulse gently instead of freezing.
+- The **Direct** button in the top bar looks like its neighbours, and on phones it says "Direct" under its bolt instead of showing a bare icon.
 
 - `RELAY_ORIGIN` is optional. Unset, Relay answers at whatever address it's opened at. Set it to accept only one address.
 - `RELAY_SECRET` is no longer required. Relay generates one and keeps it with the data.
@@ -44,6 +55,8 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The maximum file size limit. A file only has to fit the member's storage and the service capacity.
 - The Compose files, `.env.example`, `scripts/redeploy.sh` and `npm run verify:compose`. They described a way of running Relay that production doesn't use and nobody tested.
 - Old bundled copies of the Walriyami sign-in package in `vendor/` that nothing installed; only the version in use remains.
+- The **One browser only** option for new links. A password, an expiry or **Turn off** covers the same need. Links that already have it keep it, and can lift it in **Link settings**.
+- The separate **Open items as soon as they arrive** setting, now part of the one arrivals choice.
 
 ## [1.0.0] - 2026-09-27
 

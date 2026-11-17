@@ -17,6 +17,10 @@ body {
   margin: 0;
   min-height: 100vh;
   background: var(--canvas);
+  /* The page reaches the screen's edges (viewport-fit=cover, so the tab bar can sit over the home
+     indicator); a phone held sideways keeps content clear of its notch. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 body.modal-open {
   overflow: hidden;
@@ -217,5 +221,19 @@ pre {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  /* Still visibly busy without motion across the screen: spinners and placeholders breathe
+     instead of freezing into a broken ring or a flat bar. */
+  .spin,
+  .skeleton {
+    animation: breathe 1.6s ease-in-out infinite !important;
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+    transform: none;
+  }
+}
+@keyframes breathe {
+  50% {
+    opacity: 0.45;
   }
 }

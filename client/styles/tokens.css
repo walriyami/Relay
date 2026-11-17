@@ -42,6 +42,25 @@
 
   --control: 40px;
   --control-sm: 32px;
+
+  /* Motion: three speeds and one curve. Fast answers a press or hover, base opens and closes
+     things, slow moves something across the screen or fills a bar. */
+  --fast: 120ms;
+  --base: 200ms;
+  --slow: 320ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Type: the sizes the app uses, smallest to largest (html is 15px). */
+  --t-xs: 0.78rem;
+  --t-sm: 0.85rem;
+  --t-md: 0.92rem;
+  --t-base: 1rem;
+  --t-lg: 1.15rem;
+  --t-xl: 1.4rem;
+  --t-2xl: 1.6rem;
+
+  /* Breakpoints, for reference (custom properties can't be used in media queries):
+     phone ≤ 560px, compact ≤ 720px (smaller gutter), tablet ≤ 900px, wide ≥ 1120px. */
   --content: 1120px;
   --gutter: 24px;
   --header: 60px;

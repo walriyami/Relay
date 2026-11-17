@@ -1956,23 +1956,18 @@ button.activity-open:focus-visible {
     display: none;
   }
 }
-/* Direct transfers: a pill that is green while transfers go straight to Relay, muted while off. */
+/* Direct transfers: a plain top-bar button like Enter code. On, its bolt is green; off, the bolt is
+   struck through and muted, so the state never rests on colour alone. */
 .direct-button {
   gap: var(--s2);
   padding-inline: var(--s3);
-  border-radius: var(--pill);
   color: var(--muted);
-  box-shadow: inset 0 0 0 1px var(--line);
 }
 .direct-button.on {
-  color: var(--success);
-  background: var(--success-soft);
-  box-shadow: none;
+  color: var(--ink);
 }
-.direct-button.on:hover,
-.direct-button.on[aria-expanded="true"] {
-  box-shadow: inset 0 0 0 1px currentColor;
-  background: var(--success-soft);
+.direct-button.on svg {
+  color: var(--success);
 }
 .direct-button-label {
   font-weight: 600;
@@ -1988,16 +1983,26 @@ button.activity-open:focus-visible {
 }
 .direct-body p {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: var(--t-md);
 }
-/* Where the code button drops its label, so does this one. */
+/* Where there's no room beside the bolt, the word sits under it instead: a touch screen never shows
+   the tooltip, and a bolt alone doesn't say what it does. */
 @media (min-width: 561px) and (max-width: 900px), (max-width: 480px) {
   .direct-button {
-    width: var(--control);
-    padding-inline: 0;
+    flex-direction: column;
+    gap: 1px;
+    width: auto;
+    min-width: var(--control);
+    padding-inline: var(--s1);
+  }
+  .direct-button svg {
+    width: 18px;
+    height: 18px;
   }
   .direct-button-label {
-    display: none;
+    font-size: 0.66rem;
+    line-height: 1;
+    letter-spacing: 0.01em;
   }
 }
 .code-entry-form > .link {
@@ -2392,6 +2397,37 @@ audio.preview-media {
 .settings-section-head .muted {
   font-size: 0.92rem;
 }
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+/* The quiet confirmation every choice on the page gets: it fades in beside the heading, then goes. */
+.saved-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--success);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.saved-tick:not(:empty) {
+  animation: saved-tick 2.4s var(--ease, ease) both;
+}
+@keyframes saved-tick {
+  0% {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  8%,
+  80% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 .settings-section-head code {
   font-family: var(--mono);
   font-size: 0.9em;
@@ -2452,42 +2488,24 @@ audio.preview-media {
   flex: 1;
   min-width: 0;
 }
-/* A long name shortens; the pill beside it stays whole. */
-.device-text strong {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  font-weight: 600;
-  white-space: nowrap;
+/* A long name shortens; where it is and when it was last seen sit below it as chips. */
+.device-text {
+  gap: var(--s1);
 }
 .device-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
 }
-.device-text strong .pill {
-  flex-shrink: 0;
+.device-older {
+  align-self: flex-start;
+  font-size: 0.92rem;
 }
-.device-text .muted {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-}
-.device-text .online-dot {
-  width: 7px;
-  height: 7px;
-}
-.device-here {
-  display: none;
-}
-/* On a phone the name needs the room: this browser is said on the line below, and the pencil says enough. */
+/* On a phone the name needs the room, and the pencil says enough. */
 @media (max-width: 560px) {
-  .device-text strong .pill,
   .device-edit > span {
     display: none;
-  }
-  .device-here {
-    display: inline;
   }
 }
 .login-code {
@@ -3286,74 +3304,18 @@ audio.preview-media {
   }
 }
 
-/* Sign in and public pages */
-.auth {
-  display: grid;
-  place-items: center;
-  min-height: 100vh;
-  padding: var(--s5) var(--s4);
-}
-.auth-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s5);
-  width: min(400px, 100%);
-  padding: var(--s6);
-}
-.auth-card h1 {
-  font-size: 1.4rem;
-}
-.auth-card .muted {
-  margin-top: var(--s1);
-}
-/* Centred like every other sign-in screen; side by side, the two cards share one height. */
-.auth-split {
-  grid-template-columns: repeat(2, minmax(0, 400px));
-  gap: var(--s5);
-  justify-content: center;
-  align-content: center;
-  align-items: stretch;
-}
-.auth-page-brand {
-  grid-column: 1 / -1;
-  width: 100%;
-}
-.auth-split .auth-card {
-  width: 100%;
-  max-width: 400px;
-  min-width: 0;
-}
-.auth-code-card {
-  justify-content: center;
-}
-.auth-code-card h2 {
-  font-size: 1.4rem;
-}
-@media (max-width: 860px) {
-  .auth-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.auth-alt {
-  padding-top: var(--s4);
-  border-top: 1px solid var(--line);
-  text-align: center;
-  font-size: 0.92rem;
-}
-.auth-card .auth-alt .muted {
-  margin-top: 0;
-}
+/* Sign in and public pages: one frame. The brand sits above the card's left edge and every card
+   starts at the same height, whether it signs in, takes a code, or shows what was shared. */
 .public {
   min-height: 100vh;
 }
-/* Header and card share one width so the brand lines up with the card edge. */
 .public-head,
 .public-main {
   max-width: calc(640px + 2 * var(--gutter));
   margin: 0 auto;
 }
 .public-head {
-  padding: var(--s4) var(--gutter);
+  padding: var(--s5) var(--gutter);
 }
 .public-main {
   padding: 0 var(--gutter) var(--s7);
@@ -3381,8 +3343,73 @@ audio.preview-media {
   gap: var(--s1);
   min-width: 0;
 }
-.public-title h1 {
+.public-title h1,
+.auth-code-card h2 {
+  font-size: 1.4rem;
   overflow-wrap: anywhere;
+}
+.auth-code-card .muted {
+  margin-top: var(--s1);
+}
+/* What a dead link or a closed request says, under the same kind of icon as an empty page. */
+.public-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--s2);
+  border-radius: 50%;
+  background: var(--well);
+  color: var(--muted);
+}
+.public-loading {
+  gap: var(--s3);
+}
+/* Sign-in and code entry side by side, one height; stacked on a narrow screen. */
+.auth-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s5);
+  align-items: stretch;
+}
+.auth-code-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--s5);
+  padding: var(--s6);
+}
+@media (max-width: 860px) {
+  .auth-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.auth-alt {
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  text-align: center;
+  font-size: 0.92rem;
+}
+.auth-card .auth-alt .muted {
+  margin-top: 0;
+}
+/* A link that stands alone as the way on is a full touch target, not a 20px line of text. */
+@media (pointer: coarse) {
+  .auth-alt .link,
+  .action-bar .link,
+  .public-card > .link,
+  .device-older {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+/* A row of next steps under a message: Retry beside "Have a code?". */
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s4);
 }
 .public-card .code-entry-form {
   padding: 0;
@@ -3477,8 +3504,11 @@ audio.preview-media {
   text-align: center;
 }
 @media (max-width: 720px) {
-  .auth-card,
-  .public-card {
+  .public-head {
+    padding-block: var(--s4);
+  }
+  .public-card,
+  .auth-code-card {
     padding: var(--s5) var(--s4);
   }
 }
@@ -3766,13 +3796,6 @@ audio.preview-media {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.5;
-}
-.share-note figcaption {
-  margin-top: 4px;
-  font-size: 0.83rem;
-}
-.share-note figcaption::before {
-  content: "— ";
 }
 
 /* First-start setup: one calm column, a step at a time. */

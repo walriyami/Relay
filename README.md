@@ -47,9 +47,9 @@ Uploads use the resumable [tus](https://tus.io) protocol, several files at a tim
 <tr>
 <td valign="top">
 
-### 🔗 Links with a QR code and a pickup code
+### 🔗 Links with a QR code and a code
 
-Every share gets a link, a QR code and a short numeric code. Links can expire, need a password, admit only one person, carry a note, and show you how many people opened and downloaded them.
+Every share gets a link, a QR code and a short numeric code. Links can expire, need a password, carry a note, and show you how many people opened and downloaded them.
 
 </td>
 <td valign="top">
