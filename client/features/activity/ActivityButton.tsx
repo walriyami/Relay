@@ -25,20 +25,22 @@ export function ActivityButton() {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const { waiting } = activity;
+  // The name says the count the badge shows, so past nine both say so rather than the exact number.
+  const many = waiting > 9;
   return (
     <>
       <button
         ref={button}
         type="button"
         className={`btn btn-ghost btn-md btn-icon activity-button ${open ? "active" : ""}`}
-        aria-label={waiting ? `Activity, ${waiting} new` : "Activity"}
+        aria-label={waiting ? `Activity, ${many ? "more than 9" : waiting} new` : "Activity"}
         title="Activity"
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen(!open)}
       >
         <Bell size={20} aria-hidden />
-        {waiting > 0 && <span className="badge">{waiting > 9 ? "9+" : waiting}</span>}
+        {waiting > 0 && <span className="badge">{many ? "9+" : waiting}</span>}
       </button>
       {open && (
         <Popover anchor={button} onClose={() => setOpen(false)} label="Activity" className="activity-popover">

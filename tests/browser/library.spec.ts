@@ -315,9 +315,11 @@ test("unsupported types show an icon instead of a preview", async ({ page }) => 
   ]);
   await destinations(page).getByRole("button", { name: "Save to Files" }).click();
   await expect(page.locator(".transfer").first()).toContainText("Saved to Files");
+  // The picture sits beside the card's button, so look in the whole card.
   const card = page
     .getByRole("list", { name: "Recent" })
-    .getByRole("button", { name: new RegExp(name) })
+    .locator(".collection-card")
+    .filter({ has: page.getByRole("button", { name: new RegExp(name) }) })
     .first();
   await expect(card.locator(".thumb-icon")).toBeVisible();
   await expect(card.locator("img")).toHaveCount(0);

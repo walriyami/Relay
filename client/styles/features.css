@@ -1185,6 +1185,7 @@
   width: 16px;
 }
 .destination {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--s3);
@@ -1193,26 +1194,47 @@
   padding: var(--s2) var(--s2) var(--s2) 10px;
   border: 1px solid transparent;
   border-radius: var(--r1);
-  background: none;
   color: var(--ink);
-  text-align: left;
-  cursor: pointer;
   transition:
     background-color 0.12s,
     border-color 0.12s;
 }
-.destination:hover:not([aria-disabled="true"]) {
+/* The button holds only the row's name, so that is what it is called, but it covers the whole row. */
+.destination-button {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.destination-button::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+}
+.destination-button:focus-visible {
+  outline: none;
+}
+.destination:not(.is-unavailable):hover {
   background: var(--well);
 }
-.destination:focus-visible {
-  outline: none;
+.destination:has(.destination-button:focus-visible) {
   box-shadow: var(--focus);
 }
-.destination[aria-disabled="true"] {
+.destination-button[aria-disabled="true"] {
   cursor: default;
 }
-.destination[aria-disabled="true"] .destination-text,
-.destination[aria-disabled="true"] .destination-icon {
+.destination.is-unavailable .destination-text,
+.destination.is-unavailable .destination-icon {
   opacity: 0.5;
 }
 .destination.is-primary {
@@ -1233,10 +1255,10 @@
   color: var(--accent-ink);
 }
 /* Nothing to send yet: the primary looks as quiet as the rest instead of a faded coral block. */
-.destination.is-primary[aria-disabled="true"] {
+.destination.is-primary.is-unavailable {
   border-color: transparent;
 }
-.destination.is-primary[aria-disabled="true"] .destination-icon {
+.destination.is-primary.is-unavailable .destination-icon {
   background: var(--well);
   color: var(--muted);
 }
@@ -1244,8 +1266,8 @@
   background: var(--success-soft);
   color: var(--success);
 }
-.destination.is-done[aria-disabled="true"] .destination-text,
-.destination.is-done[aria-disabled="true"] .destination-icon {
+.destination.is-done.is-unavailable .destination-text,
+.destination.is-done.is-unavailable .destination-icon {
   opacity: 1;
 }
 .destination-text {
@@ -1254,12 +1276,6 @@
   gap: 1px;
   flex: 1;
   min-width: 0;
-}
-.destination-text strong {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .destination-text small {
   display: flex;
@@ -1277,7 +1293,7 @@
   flex-shrink: 0;
   color: var(--muted);
 }
-.destination[aria-disabled="true"] .destination-go {
+.destination.is-unavailable .destination-go {
   visibility: hidden;
 }
 /* Add a device: always available, drawn as an empty slot so it doesn't read as a place to send. */
@@ -1291,9 +1307,6 @@
 .destination.is-quiet:hover .destination-icon {
   border-color: var(--muted);
   color: var(--ink);
-}
-.destination.is-quiet .destination-text strong {
-  font-weight: 600;
 }
 /* How the other devices list this one, at the foot of the panel: context, not a destination. */
 .this-device {

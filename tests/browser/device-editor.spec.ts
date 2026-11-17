@@ -125,7 +125,11 @@ test("editing another live device updates both browsers and preserves the pendin
     await expect(destinations(page).getByRole("button", { name: `Edit ${renamed}`, exact: true })).toBeFocused();
     const target = destinations(page).getByRole("button", { name: renamed, exact: true });
     await expect(target).toBeEnabled();
-    await expect(target.locator("svg").first()).toHaveClass(/lucide-smartphone/);
+    // The row's icon sits beside its button, which holds only the name.
+    const targetRow = destinations(page)
+      .locator(".destination")
+      .filter({ has: page.getByRole("button", { name: renamed, exact: true }) });
+    await expect(targetRow.locator(".destination-icon svg")).toHaveClass(/lucide-smartphone/);
     const remoteAccount = remote.page.getByRole("menuitem", { name: `Edit this device, ${renamed}`, exact: true });
     await expect(remoteAccount.locator("svg").first()).toHaveClass(/lucide-smartphone/);
     await expect(page.locator("#composer-text")).toHaveValue("Keep this draft while editing");
