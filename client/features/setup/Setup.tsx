@@ -442,7 +442,7 @@ function InviteStep({ onNext }: { onNext: () => void }) {
             code={invite.code}
             codeLabel="Invitation code"
             purpose="invitation"
-            detail={`Works once, until ${dateTime(invite.expires)}. The link can’t be shown again after you leave this page; the code stays listed in Admin, where you can also set limits until it’s used.`}
+            detail={`Works once, until ${dateTime(invite.expires)}. Copy the link now: for security, Relay keeps only the code, which stays listed in Admin until it’s used.`}
           />
         </div>
       ) : null}

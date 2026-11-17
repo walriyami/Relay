@@ -1162,6 +1162,62 @@ export function QrCode({
   return <div className="qr skeleton waiting" style={style} aria-hidden />;
 }
 
+/** Placeholder rows shaped like a list of links or requests, eased in only when loading is noticeable. */
+export type ChipTone = "neutral" | "good" | "warn" | "off";
+/**
+ * A short state read at a glance: "Expires in 5 h", "Opened by 2 browsers", "Full". One size and
+ * four tones everywhere: good (it worked), warn (needs attention soon), off (no longer active).
+ */
+export function Chip({
+  tone = "neutral",
+  icon,
+  title,
+  children,
+}: {
+  tone?: ChipTone;
+  icon?: React.ReactNode;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={`chip chip-${tone}`} title={title}>
+      {icon ?? (tone === "good" || tone === "warn" ? <span className="chip-dot" aria-hidden /> : null)}
+      <span>{children}</span>
+    </span>
+  );
+}
+
+export function ListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <ul className="list card-surface list-skeleton waiting" aria-hidden>
+      {Array.from({ length: rows }, (_, i) => (
+        <li key={i} className="list-row">
+          <span className="list-icon skeleton" />
+          <span className="list-text">
+            <span className="skeleton skeleton-line" />
+            <span className="skeleton skeleton-line short" />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Placeholder sections shaped like Settings, Usage or Admin. */
+export function SectionSkeleton({ sections = 2 }: { sections?: number }) {
+  return (
+    <div className="stack waiting" aria-hidden>
+      {Array.from({ length: sections }, (_, i) => (
+        <div key={i} className="card-surface section-skeleton">
+          <span className="skeleton skeleton-line short" />
+          <span className="skeleton skeleton-line" />
+          <span className="skeleton skeleton-line" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
     <div className="spinner-row waiting" role="status">

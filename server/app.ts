@@ -3,7 +3,6 @@ import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import staticFiles from "@fastify/static";
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
-import { statfs } from "node:fs/promises";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { core as zod } from "zod/mini";

@@ -142,7 +142,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
 
   function arrive(d: Delivery) {
     const prefs = getLocalPrefs();
-    const show = () => (prefs.popups ? setQueue((q) => [...q, d.id]) : announce(d, prefs.autoAccept));
+    // Asked to accept, or anything with text to read, it opens here; files alone just download.
+    const opens = !prefs.autoAccept || !d.item || d.item.texts > 0 || !hasDownloads(d.item);
+    const show = () => (opens ? setQueue((q) => [...q, d.id]) : announce(d, prefs.autoAccept));
     if (!prefs.autoAccept) return show();
     // Accepting is claimed on the server too, so only one tab downloads it.
     void answerDelivery(d, "accepted")

@@ -143,3 +143,20 @@ test("on Relay's network, uploads and downloads go direct, and can be switched o
   expect(plain.path).toMatch(/^\/api\/nodes\/[^/]+\/content$/);
   expect(sha256(plain.data)).toBe(sha256(small));
 });
+
+test("on a phone, the Direct button still says what it is", async ({ page }) => {
+  await page.goto("/");
+  test.skip(!(await canConnect(page)), "This browser can't make WebRTC connections here.");
+  await page.setViewportSize({ width: 390, height: 800 });
+  await signIn(page);
+  const button = page.getByRole("button", { name: "Direct transfers on" });
+  // A touch screen never shows the tooltip, so the word stays on screen, under the bolt.
+  await expect(button.getByText("Direct", { exact: true })).toBeVisible();
+  const [bolt, word] = await Promise.all([
+    button.locator("svg").boundingBox(),
+    button.getByText("Direct").boundingBox(),
+  ]);
+  expect(word!.y).toBeGreaterThan(bolt!.y + bolt!.height - 1);
+  // And it sits in the top bar without pushing anything off the edge.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});

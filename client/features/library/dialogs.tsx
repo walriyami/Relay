@@ -20,7 +20,7 @@ type Kept = Pick<ItemSummary, "id" | "expires" | "firstSavedAt" | "maxAgeDays" |
 /** When an item moves to Trash; starts from its current setting, never silently from "Never". */
 export function KeepDialog({ item, onClose }: { item: Kept; onClose: () => void }) {
   return (
-    <Modal title="Move to Trash after" size="sm" onClose={onClose}>
+    <Modal title="Auto-delete" size="sm" onClose={onClose}>
       <KeepBody item={item} />
     </Modal>
   );
@@ -55,10 +55,10 @@ function KeepBody({ item }: { item: Kept }) {
                 return expiry ? `Moves to Trash on ${dateTime(expiry)}.` : "Kept until you delete it.";
               })()}{" "}
         {item.hardExpires !== null
-          ? `Deleted forever by ${dateTime(item.hardExpires)}, including time in Trash. Renewal and restore cannot extend this deadline.`
+          ? `Relay removes it on ${dateTime(item.hardExpires)}, even from Trash. No choice here keeps it longer.`
           : max !== null
-            ? `Maximum total age is ${days(max)} from the first saved content, including Trash.`
-            : `Trash is kept for up to ${days(me.user.trashDays)}.`}
+            ? `Relay removes items ${days(max)} after they’re first saved, even from Trash.`
+            : `From Trash, you can restore it for up to ${days(me.user.trashDays)}.`}
       </p>
       {!expired && <Segmented label="Move to Trash after" value={value ?? -1} options={options} onChange={setValue} />}
       <div className="row end">

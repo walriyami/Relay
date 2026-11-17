@@ -9,7 +9,7 @@ import { useLive } from "../lib/live";
 export function ShareAccess({
   url,
   code,
-  codeLabel = "Pickup code",
+  codeLabel = "Code",
   purpose = "link",
   copyLabel = "Copy link",
   compact = false,

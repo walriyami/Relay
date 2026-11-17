@@ -143,7 +143,7 @@ test("a full request says so, hides the picker and never offers to send more", a
   // The owner sees it is full; raising the limit is offered, and closing stays in the menu.
   await page.getByRole("link", { name: "Requests" }).click();
   const row = requestRow(page, name);
-  await expect(row.locator(".pill")).toHaveText("Full");
+  await expect(row.locator(".chip-warn")).toHaveText("Full");
   await expect(row.getByRole("button", { name: "Raise limit" })).toBeVisible();
   await page.getByRole("button", { name: `More actions for ${name}` }).click();
   await page.getByRole("menu").getByRole("menuitem", { name: "Close request" }).click();

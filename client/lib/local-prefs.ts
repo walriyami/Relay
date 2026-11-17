@@ -3,10 +3,11 @@ import { useSyncExternalStore } from "react";
 // Preferences that belong to this browser only.
 export type LocalPrefs = {
   theme: "system" | "light" | "dark";
-  /** Items sent to this device from your others download as soon as they arrive. */
+  /**
+   * Items sent to this device from your others download as soon as they arrive ("Download it");
+   * otherwise they open here to be accepted ("Ask me").
+   */
   autoAccept: boolean;
-  /** Arrivals open the receive popup; otherwise they wait in Activity. */
-  popups: boolean;
   sound: boolean;
   system: boolean;
   /** Uploads and downloads go straight to Relay while this browser is on its network. */
@@ -16,7 +17,6 @@ const KEY = "relay-local-prefs";
 const defaults: LocalPrefs = {
   theme: "system",
   autoAccept: true,
-  popups: true,
   sound: false,
   system: false,
   direct: true,

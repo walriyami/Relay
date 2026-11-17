@@ -1,11 +1,22 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Link2, Link2Off, LockKeyhole, SlidersHorizontal } from "lucide-react";
 import { api, call, urls, type Link } from "../../api";
 import { ago, bytes, copyText, date, plural } from "../../lib/format";
 import { notifyChange, useLive } from "../../lib/live";
 import { useExpiryClock } from "../../lib/refresh";
 import { navigate, takeModalAddress, useRoute } from "../../lib/router";
-import { Button, EmptyState, InlineEmpty, LoadFailed, Menu, Spinner, confirmDialog, toast } from "../../components/ui";
+import {
+  Button,
+  Chip,
+  EmptyState,
+  InlineEmpty,
+  ListSkeleton,
+  LoadFailed,
+  Menu,
+  confirmDialog,
+  toast,
+} from "../../components/ui";
+import { Icon } from "../../components/icons";
+import { ItemThumb, StatusRow } from "../../components/StatusRow";
 import { CollectionModal } from "../library/CollectionModal";
 import { allFiles, composition, errorToast } from "../library/actions";
 import { LinkSettingsDialog } from "../library/dialogs";
@@ -25,18 +36,46 @@ function describe({ item }: Link) {
   return parts.join(" · ");
 }
 
-/** "Opened by 2 · 5 min ago", "Not opened yet": at a glance, whether it reached anyone. */
-function reach(s: Link, now: number) {
-  if (!s.visitors) return "Not opened yet";
-  const who = `Opened by ${plural(s.visitors, "browser")}`;
-  return s.lastVisit ? `${who} · ${ago(s.lastVisit, now)}` : who;
+const DAY = 86400000;
+
+/** When it stops working, how it is limited, and whether it reached anyone: at a glance. */
+function LiveChips({ link: s, now }: { link: Link; now: number }) {
+  const soon = s.expires !== null && s.expires - now < DAY;
+  return (
+    <>
+      <Chip tone={soon ? "warn" : "neutral"} icon={<Icon.time size={13} aria-hidden />}>
+        {linkLife(s.expires, now)}
+      </Chip>
+      {linkTraits({ ...s, locked: false }).map((trait) => (
+        <Chip key={trait}>{trait}</Chip>
+      ))}
+      {s.visitors ? (
+        <Chip tone="good">
+          Opened by {plural(s.visitors, "browser")}
+          {s.lastVisit ? ` · ${ago(s.lastVisit, now)}` : ""}
+        </Chip>
+      ) : (
+        <Chip>Not opened yet</Chip>
+      )}
+    </>
+  );
 }
 
-/** Why a link stopped working: turned off, expired, or its item left Files. */
-function inactiveReason(s: Link) {
-  if (s.revoked) return "Turned off";
-  if (s.expires !== null && s.expires <= Date.now()) return `Expired ${date(s.expires)}`;
-  return s.item?.trashed ? "Paused: item in Trash" : "Item no longer in Files";
+/** Why a link stopped working (turned off, expired, or its item left Files), and whether it was used. */
+function EndedChips({ link: s }: { link: Link }) {
+  const reason = s.revoked
+    ? "Turned off"
+    : s.expires !== null && s.expires <= Date.now()
+      ? `Expired ${date(s.expires)}`
+      : s.item?.trashed
+        ? "Paused: item in Trash"
+        : "Item no longer in Files";
+  return (
+    <>
+      <Chip tone="off">{reason}</Chip>
+      {s.visitors > 0 && <Chip>Opened by {plural(s.visitors, "browser")}</Chip>}
+    </>
+  );
 }
 
 export function LinksPage() {
@@ -79,30 +118,20 @@ export function LinksPage() {
   }
   // A live row opens its link (QR, code, who opened it); a dead one its item, when there is one.
   const row = (s: Link, live: boolean) => (
-    <li key={s.id} className={`list-row link-row-item ${live ? "" : "inactive"}`}>
-      <span className="list-icon">
-        <Link2 size={18} aria-hidden />
-      </span>
-      <button
-        type="button"
-        className="list-text"
-        disabled={!live && !s.item}
-        aria-haspopup="dialog"
-        onClick={() => (live ? setSharingId(s.id) : s.item && setOpen(s.itemId))}
-      >
-        <strong>
-          {s.item?.name || "Deleted item"}
-          {s.locked && <LockKeyhole size={13} className="link-row-lock" aria-label="Has a password" />}
-        </strong>
-        <span className="muted">
-          {(live
-            ? [linkLife(s.expires, now), ...linkTraits({ ...s, locked: false }), reach(s, now)]
-            : [inactiveReason(s), s.visitors ? `Opened by ${plural(s.visitors, "browser")}` : ""]
-          )
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
-      </button>
+    <StatusRow
+      key={s.id}
+      className="link-row-item"
+      inactive={!live}
+      media={<ItemThumb item={s.item} />}
+      marker={
+        s.locked ? <Icon.locked size={14} className="status-row-marker" role="img" aria-label="Has a password" /> : null
+      }
+      title={s.item?.name || "Deleted item"}
+      chips={live ? <LiveChips link={s} now={now} /> : <EndedChips link={s} />}
+      disabled={!live && !s.item}
+      opensDialog
+      onOpen={() => (live ? setSharingId(s.id) : s.item && setOpen(s.itemId))}
+    >
       {live && (
         <Button size="sm" className="link-copy" onClick={() => setSharingId(s.id)}>
           Share
@@ -115,7 +144,7 @@ export function LinksPage() {
             ? [
                 {
                   label: "Copy link",
-                  icon: <Link2 size={16} />,
+                  icon: <Icon.copy size={16} />,
                   onSelect: () =>
                     void copyText(linkUrl(s)).then((ok) =>
                       ok
@@ -123,17 +152,15 @@ export function LinksPage() {
                         : toast("Couldn’t copy. Open the item and copy the link there.", { tone: "error" }),
                     ),
                 },
-                { label: "Link settings", icon: <SlidersHorizontal size={16} />, onSelect: () => setEditingId(s.id) },
+                { label: "Link settings", icon: <Icon.options size={16} />, onSelect: () => setEditingId(s.id) },
               ]
             : []),
-          ...(s.item
-            ? [{ label: "Open item", icon: <FolderOpen size={16} />, onSelect: () => setOpen(s.itemId) }]
-            : []),
+          ...(s.item ? [{ label: "Open item", icon: <Icon.open size={16} />, onSelect: () => setOpen(s.itemId) }] : []),
           ...(live
             ? [
                 {
                   label: "Turn off link",
-                  icon: <Link2Off size={16} />,
+                  icon: <Icon.linkOff size={16} />,
                   danger: true,
                   separator: true,
                   onSelect: () => void revoke(s),
@@ -142,7 +169,7 @@ export function LinksPage() {
             : []),
         ]}
       />
-    </li>
+    </StatusRow>
   );
   return (
     <div className="page">
@@ -156,10 +183,10 @@ export function LinksPage() {
       {error && !data.length ? (
         <LoadFailed title="Links couldn’t be loaded" error={error} onRetry={reload} />
       ) : loading && !data.length ? (
-        <Spinner />
+        <ListSkeleton />
       ) : !active.length && !inactive.length ? (
         <EmptyState
-          icon={<Link2 size={28} />}
+          icon={<Icon.link size={28} />}
           title="No links yet"
           action={
             <Button variant="primary" onClick={() => navigate("/")}>
@@ -177,7 +204,7 @@ export function LinksPage() {
             </ul>
           ) : (
             <InlineEmpty
-              icon={<Link2 size={20} />}
+              icon={<Icon.link size={20} />}
               title="No active links"
               action={
                 <Button size="sm" onClick={() => navigate("/")}>

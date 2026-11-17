@@ -195,7 +195,7 @@ test("a failed setting is recovered before later queued choices save", async ({ 
     await expiry(page).getByRole("radio", { name: "1 day", exact: true }).click();
     await firstWrite.promise;
     await page
-      .getByRole("radiogroup", { name: "Move uploads to Trash after" })
+      .getByRole("radiogroup", { name: "Auto-delete new items after" })
       .getByRole("radio", { name: "30 days" })
       .click();
     await page.getByRole("switch", { name: "Sign-ins and security" }).click();

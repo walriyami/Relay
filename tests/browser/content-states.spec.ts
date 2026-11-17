@@ -102,6 +102,10 @@ test("an empty-folder delivery downloads automatically and can be downloaded aga
       ).ok(),
     ).toBeTruthy();
     expect((await download).suggestedFilename()).toMatch(/\.zip$/);
+    // Files alone just download, saying so; nothing opens over the page until asked.
+    const notice = phone.page.locator(".toast", { hasText: "Downloading" });
+    await expect(phone.page.getByRole("dialog")).toHaveCount(0);
+    await notice.getByRole("button", { name: "View" }).click();
     const dialog = phone.page.getByRole("dialog");
     await expect(dialog.getByText("This folder is empty", { exact: true })).toBeVisible();
     await expect(dialog).toContainText("Accepted on this device");

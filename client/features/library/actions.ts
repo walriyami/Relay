@@ -173,8 +173,8 @@ export async function addFilesTo(c: Pick<ItemSummary, "id" | "name">) {
         `These files will be added to “${current.name}”.`,
         current.linked && "Anyone with a working link can see each file as soon as it is saved.",
         current.hardExpires !== null
-          ? `All content in this item is deleted forever by ${dateTime(current.hardExpires)}, including time in Trash. Adding files does not extend this deadline.`
-          : "This item has no maximum age deadline.",
+          ? `Relay removes this item on ${dateTime(current.hardExpires)}, with the files you add. Adding files doesn’t change that date.`
+          : "",
       ]
         .filter(Boolean)
         .join(" "),

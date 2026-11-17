@@ -39,7 +39,7 @@ export function FileShareDialog({
       title={share.item?.name || "Share file"}
       subtitle={
         subtitle ||
-        (share.locked ? "People need the password to open it." : "Anyone with the link or pickup code can open it.")
+        (share.locked ? "People need the password to open it." : "Anyone with the link or code can open it.")
       }
       meta={
         <>

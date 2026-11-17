@@ -80,7 +80,7 @@ test("the sign-in page accepts a prefilled add-device code and removes it from t
   }
 });
 
-test("code entry has its own card beside sign-in and stacks below on a narrow screen", async ({ browser }) => {
+test("code entry has its own card beside sign-in, in the same frame as every public page", async ({ browser }) => {
   const context = await browser.newContext({ baseURL: BASE, viewport: { width: 1200, height: 800 } });
   const page = await context.newPage();
   try {
@@ -92,12 +92,14 @@ test("code entry has its own card beside sign-in and stacks below on a narrow sc
     const desktopSignIn = (await signIn.boundingBox())!;
     const desktopCode = (await code.boundingBox())!;
     expect(desktopCode.x).toBeGreaterThan(desktopSignIn.x + desktopSignIn.width);
-    // Side by side, the pair is centred in the window like every other sign-in screen, and the
-    // two cards share one height.
+    // Side by side, the two cards share one height and start where every public page's card
+    // starts: just under the brand, which lines up with the first card's left edge.
     expect(Math.abs(desktopCode.y - desktopSignIn.y)).toBeLessThan(2);
     expect(Math.abs(desktopCode.height - desktopSignIn.height)).toBeLessThan(2);
-    const brand = (await page.locator(".auth-page-brand").boundingBox())!;
-    expect(Math.abs(brand.y - (800 - (desktopSignIn.y + desktopSignIn.height)))).toBeLessThan(10);
+    const brand = (await page.locator(".public-head .brand").boundingBox())!;
+    expect(Math.abs(brand.x - desktopSignIn.x)).toBeLessThan(2);
+    expect(desktopSignIn.y).toBeGreaterThan(brand.y + brand.height);
+    expect(desktopSignIn.y - (brand.y + brand.height)).toBeLessThan(40);
     expect(Math.abs((desktopSignIn.x + desktopCode.x + desktopCode.width) / 2 - 600)).toBeLessThan(10);
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -230,12 +232,8 @@ test("a new member is welcomed, makes Relay theirs and adds a device, picking up
     await expect(guest.getByText("Welcome back. A few choices are left.")).toBeVisible();
 
     await guest.getByLabel("Your name").fill("Grace");
-    await guest
-      .getByRole("radiogroup", { name: "Move uploads to Trash after" })
-      .getByRole("radio", { name: "30 days" })
-      .click();
-    await guest.getByRole("radiogroup", { name: "Links expire after" }).getByRole("radio", { name: "30 days" }).click();
-    await guest.getByRole("radiogroup", { name: "Empty Trash after" }).getByRole("radio", { name: "90 days" }).click();
+    // A new member isn't asked how long links and files last before they've used Relay.
+    await expect(guest.getByRole("radiogroup")).toHaveCount(0);
     await guest.getByRole("button", { name: "Save and continue" }).click();
 
     // Adding a device shows a sign-in code, and says so when the other device uses it.
@@ -262,8 +260,7 @@ test("a new member is welcomed, makes Relay theirs and adds a device, picking up
     expect(new URL(guest.url()).pathname).toBe("/");
 
     const me = await (await guest.request.get(api.session.get.path)).json();
-    expect(me.user).toMatchObject({ username, name: "Grace", admin: false, retentionDays: 30, trashDays: 90 });
-    expect(me.prefs).toMatchObject({ linkDays: 30 });
+    expect(me.user).toMatchObject({ username, name: "Grace", admin: false });
   } finally {
     await context.close();
   }

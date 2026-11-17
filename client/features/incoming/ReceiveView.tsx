@@ -110,13 +110,13 @@ export function ShareUnlock({
   );
 }
 
-/** Who shared it, and what they wrote: quiet, above the contents. */
+/** What the sender wrote: quiet, above the contents. The line above already says who it's from. */
 export function ShareNote({ share }: { share: PublicShare }) {
   if (!share.note) return null;
   return (
     <figure className="share-note">
       <blockquote>{share.note}</blockquote>
-      <figcaption className="muted">{share.from}</figcaption>
+      <figcaption className="visually-hidden">Note from {share.from}</figcaption>
     </figure>
   );
 }

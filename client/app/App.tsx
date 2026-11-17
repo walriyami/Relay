@@ -9,23 +9,7 @@ import {
   type ComponentProps,
   type ComponentType,
 } from "react";
-import {
-  ChartColumn,
-  Compass,
-  Download,
-  FolderInput,
-  FolderOpen,
-  Link2,
-  LogOut,
-  Monitor,
-  Moon,
-  Pencil,
-  Radar,
-  Send,
-  Settings,
-  Shield,
-  Sun,
-} from "lucide-react";
+import { ChartColumn, Compass, Download, LogOut, Monitor, Moon, Pencil, Settings, Shield, Sun } from "lucide-react";
 import {
   ApiError,
   api,
@@ -49,7 +33,7 @@ import { clearDraft } from "../lib/draft";
 import { forgetPush } from "../lib/push";
 import { forgetShares } from "../lib/pwa-share";
 import { setLocalPrefs, useLocalPrefs } from "../lib/local-prefs";
-import { Button, ConfirmHost, Popover, Spinner, Toaster, confirmDialog, menuKeys } from "../components/ui";
+import { Button, ConfirmHost, Popover, Toaster, confirmDialog, menuKeys } from "../components/ui";
 import { AuthFrame, SignIn } from "../features/auth/Auth";
 import { Join } from "../features/join/Join";
 import { Setup } from "../features/setup/Setup";
@@ -74,6 +58,8 @@ import { DeviceEditorProvider, DeviceIcon, useEditDevice } from "./devices";
 import { ConnectionBar, ConnectionScreen } from "../components/ConnectionStatus";
 import { connection, onConnectivity } from "../lib/connection";
 import { Brand } from "./Brand";
+import { BootShell, PageSkeleton, rememberSignedIn } from "./BootShell";
+import { NAV, isCurrent, sectionOf } from "./nav";
 import { storageOf } from "../components/StorageMeter";
 import { PageBoundary, pageRetries } from "./PageBoundary";
 import type { SettingsPage as SettingsPageComponent } from "../features/settings/SettingsPage";
@@ -322,12 +308,11 @@ function Private() {
     startLink();
     return stopLink;
   }, [me?.user.id, me?.device.id, me?.local]);
-  if (loading)
-    return (
-      <main className="boot" tabIndex={-1}>
-        <Spinner label="Opening Relay" />
-      </main>
-    );
+  // The next open draws the app straight away when this browser is still signed in.
+  useEffect(() => {
+    if (!loading && !unreachable) rememberSignedIn(!!me);
+  }, [loading, unreachable, me]);
+  if (loading) return <BootShell route={route} />;
   if (unreachable && !me)
     return (
       <main className="boot" tabIndex={-1}>
@@ -407,14 +392,6 @@ function Private() {
   );
 }
 
-const NAV = [
-  { to: "/", label: "Send", icon: <Send size={20} aria-hidden /> },
-  { to: "/nearby", label: "Nearby", icon: <Radar size={20} aria-hidden /> },
-  { to: "/files", label: "Files", icon: <FolderOpen size={20} aria-hidden /> },
-  { to: "/links", label: "Links", icon: <Link2 size={20} aria-hidden /> },
-  { to: "/requests", label: "Requests", icon: <FolderInput size={20} aria-hidden /> },
-];
-
 function NotFound() {
   return (
     <div className="page not-found">
@@ -433,7 +410,7 @@ function NotFound() {
 function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   const { me } = useSession();
   const route = useRoute();
-  const section = "/" + (route.split("/")[1] || "");
+  const section = sectionOf(route);
   let page: React.ReactNode;
   switch (section) {
     case "/":
@@ -481,7 +458,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
             <Brand />
             <nav className="nav" aria-label="Main">
               {NAV.map((item) => {
-                const active = section === item.to || (item.to === "/files" && section === "/trash");
+                const active = isCurrent(item.to, section);
                 return (
                   <a
                     key={item.to}
@@ -511,15 +488,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
         </header>
         <main id="main" className="main" tabIndex={-1}>
           <PageBoundary key={section}>
-            <Suspense
-              fallback={
-                <div className="page">
-                  <Spinner />
-                </div>
-              }
-            >
-              {page}
-            </Suspense>
+            <Suspense fallback={<PageSkeleton section={section} />}>{page}</Suspense>
           </PageBoundary>
         </main>
       </div>
