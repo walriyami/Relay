@@ -1134,6 +1134,13 @@ button.card:focus-visible,
   text-align: left;
   cursor: pointer;
 }
+/* The picture sits outside the button, so the button is named only by what it says, but the button
+   covers the whole card. */
+.card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
 .card-open:focus-visible {
   outline: none;
 }
@@ -1189,6 +1196,7 @@ button.card:focus-visible,
 .card-media {
   position: relative;
   aspect-ratio: 1 / 1;
+  pointer-events: none;
   border-bottom: 1px solid var(--line);
   background: var(--well);
 }

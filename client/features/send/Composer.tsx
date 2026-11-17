@@ -320,7 +320,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
   function showDestinations() {
     panel.current?.scrollIntoView({ behavior: scrollMotion(), block: "start" });
     panel.current
-      ?.querySelector<HTMLButtonElement>(".destination:not([aria-disabled='true'])")
+      ?.querySelector<HTMLButtonElement>(".destination-button:not([aria-disabled='true'])")
       ?.focus({ preventScroll: true });
   }
   return (
@@ -557,35 +557,41 @@ export function DestinationRow({
   revealAccessory?: boolean;
   onClick: () => void;
 }) {
-  // Named by its label; the detail ("Online now", "Sent") is read as its description.
+  // Named by its label; the detail ("Online now", "Sent") is read as its description. Only the label
+  // is inside the button, so its name is exactly the words it shows; the button still covers the
+  // whole row, so the row is clicked anywhere as before.
   const id = useId();
+  const unavailable = disabled || busy;
   return (
     <div
       className={`destination-wrap${accessory && !revealAccessory ? " has-accessory" : ""}${revealAccessory ? " reveals-accessory" : ""}`}
     >
-      <button
-        type="button"
-        className={`destination${primary ? " is-primary" : ""}${quiet ? " is-quiet" : ""}${done ? " is-done" : ""}`}
-        // Unavailable rather than disabled: a destination just used keeps keyboard focus, so focus
-        // never falls to the page or jumps to a neighbour that a second Enter would send to.
-        aria-disabled={disabled || busy || undefined}
-        aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-detail`}
-        aria-haspopup={quiet ? "dialog" : undefined}
-        aria-busy={busy || undefined}
-        onClick={() => {
-          if (!disabled && !busy) onClick();
-        }}
+      <div
+        className={`destination${primary ? " is-primary" : ""}${quiet ? " is-quiet" : ""}${done ? " is-done" : ""}${unavailable ? " is-unavailable" : ""}`}
       >
         <span className="destination-icon" aria-hidden>
           {done ? <Check size={18} /> : icon}
         </span>
         <span className="destination-text">
-          <strong id={`${id}-label`}>{label}</strong>
+          <button
+            type="button"
+            className="destination-button"
+            // Unavailable rather than disabled: a destination just used keeps keyboard focus, so focus
+            // never falls to the page or jumps to a neighbour that a second Enter would send to.
+            aria-disabled={unavailable || undefined}
+            aria-describedby={`${id}-detail`}
+            aria-haspopup={quiet ? "dialog" : undefined}
+            aria-busy={busy || undefined}
+            onClick={() => {
+              if (!unavailable) onClick();
+            }}
+          >
+            {label}
+          </button>
           <small id={`${id}-detail`}>{detail}</small>
         </span>
         {(!accessory || revealAccessory) && <ChevronRight size={16} className="destination-go" aria-hidden />}
-      </button>
+      </div>
       {accessory && <div className="destination-accessory">{accessory}</div>}
     </div>
   );

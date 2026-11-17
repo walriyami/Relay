@@ -229,5 +229,7 @@ test("a submission without a name is named after its first file", async ({ page,
   await page.goto("/files");
   const card = page.getByRole("button", { name: new RegExp(`${name}-W-2\\.pdf.*Received through a request`) });
   await expect(card).toBeVisible();
-  await expect(card.locator('.card-badge[title="Received through a request"]')).toBeVisible();
+  // The badges sit beside the card's button, on its picture.
+  const badges = page.locator(".collection-card").filter({ has: card });
+  await expect(badges.locator('.card-badge[title="Received through a request"]')).toBeVisible();
 });

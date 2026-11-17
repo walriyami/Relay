@@ -148,86 +148,96 @@ export function CollectionCard({
     <div
       className={`card collection-card${trash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${selecting && selected ? " is-selected" : ""}`}
     >
+      {/* Outside the button, so the button's name is the words it shows. The picture and its badges
+          say nothing the name doesn't, so screen readers skip them; the button still covers them. */}
+      <div className={`card-media${parts > 1 ? " is-stack" : ""}`} aria-hidden>
+        {selecting && (
+          <span className="card-check" aria-hidden>
+            <Check size={14} strokeWidth={3} />
+          </span>
+        )}
+        {item.mosaic.length > 1 ? (
+          <div className={`mosaic mosaic-${Math.min(item.mosaic.length, 4)}`}>
+            {item.mosaic.slice(0, 4).map((n) => (
+              <Thumbnail key={n.id} compact source={ownerSource} entry={n} />
+            ))}
+          </div>
+        ) : preview && !onlyFolder ? (
+          // A text item previews as a short, bounded excerpt, as the product contract describes.
+          <Thumbnail
+            source={ownerSource}
+            entry={preview.kind === "text" ? { ...preview, text: item.textExcerpt } : preview}
+          />
+        ) : item.uploading && !onlyFolder ? (
+          <div className="thumb thumb-uploading" aria-hidden>
+            <div className="thumb-icon">
+              <Upload size={28} />
+            </div>
+          </div>
+        ) : (
+          <Thumbnail entry={{ path: item.name, kind: "folder" }} />
+        )}
+        {progress && (
+          <span className="card-progress" aria-hidden>
+            <span style={{ width: `${Math.max(progress.pct, 3)}%` }} />
+          </span>
+        )}
+        {((item.linked && !trash) || parts > 1 || item.requestId || damaged) && (
+          <span className="card-badges">
+            {damaged && (
+              <span className="card-badge card-badge-danger" title={damaged}>
+                <CircleAlert size={13} aria-hidden /> {item.damaged}
+              </span>
+            )}
+            {item.requestId && (
+              <span className="card-badge" title="Received through a request">
+                <Inbox size={13} aria-hidden />
+              </span>
+            )}
+            {item.linked && !trash && (
+              <span className="card-badge card-badge-link" title="Has an active link">
+                <Link2 size={13} />
+              </span>
+            )}
+            {parts > 1 && (
+              <span className="card-badge" title={meta}>
+                <Layers size={12} aria-hidden /> {parts}
+              </span>
+            )}
+          </span>
+        )}
+      </div>
       <button
         type="button"
         className="card-open"
         onClick={(event) => (selecting ? onToggle?.(event.shiftKey) : onOpen())}
         aria-pressed={selecting ? selected : undefined}
         disabled={selecting && selectionDisabled}
+        // What the card shows, in the order it shows it, then what only its badges say.
         aria-label={[
           item.name,
           meta,
           detail,
+          listed.match && (listed.match.in === "text" ? `“${listed.match.text}”` : `Contains ${listed.match.text}`),
           damaged,
           item.requestId && "Received through a request",
-          listed.match && (listed.match.in === "text" ? `Text: ${listed.match.text}` : `Contains ${listed.match.text}`),
+          item.linked && !trash && "Has an active link",
         ]
           .filter(Boolean)
           .join(". ")}
         title={selecting ? undefined : item.name}
       >
-        <div className={`card-media${parts > 1 ? " is-stack" : ""}`}>
-          {selecting && (
-            <span className="card-check" aria-hidden>
-              <Check size={14} strokeWidth={3} />
-            </span>
-          )}
-          {item.mosaic.length > 1 ? (
-            <div className={`mosaic mosaic-${Math.min(item.mosaic.length, 4)}`}>
-              {item.mosaic.slice(0, 4).map((n) => (
-                <Thumbnail key={n.id} compact source={ownerSource} entry={n} />
-              ))}
-            </div>
-          ) : preview && !onlyFolder ? (
-            // A text item previews as a short, bounded excerpt, as the product contract describes.
-            <Thumbnail
-              source={ownerSource}
-              entry={preview.kind === "text" ? { ...preview, text: item.textExcerpt } : preview}
-            />
-          ) : item.uploading && !onlyFolder ? (
-            <div className="thumb thumb-uploading" aria-hidden>
-              <div className="thumb-icon">
-                <Upload size={28} />
-              </div>
-            </div>
-          ) : (
-            <Thumbnail entry={{ path: item.name, kind: "folder" }} />
-          )}
-          {progress && (
-            <span className="card-progress" aria-hidden>
-              <span style={{ width: `${Math.max(progress.pct, 3)}%` }} />
-            </span>
-          )}
-          {((item.linked && !trash) || parts > 1 || item.requestId || damaged) && (
-            <span className="card-badges">
-              {damaged && (
-                <span className="card-badge card-badge-danger" title={damaged}>
-                  <CircleAlert size={13} aria-hidden /> {item.damaged}
-                </span>
-              )}
-              {item.requestId && (
-                <span className="card-badge" title="Received through a request">
-                  <Inbox size={13} aria-hidden />
-                </span>
-              )}
-              {item.linked && !trash && (
-                <span className="card-badge card-badge-link" title="Has an active link">
-                  <Link2 size={13} aria-label="Has an active link" />
-                </span>
-              )}
-              {parts > 1 && (
-                <span className="card-badge" title={meta}>
-                  <Layers size={12} aria-hidden /> {parts}
-                </span>
-              )}
-            </span>
-          )}
-        </div>
+        {/* The spaces keep the lines apart as words when the card's text is read as one string (as
+            the accessibility check reads it); in a column they take no room. */}
         <div className="card-body">
-          <span className="card-title">{item.name}</span>
-          <span className="card-meta">{meta}</span>
+          <span className="card-title">{item.name}</span> <span className="card-meta">{meta}</span>{" "}
           <span className={`card-meta${left?.soon ? " danger" : ""}`}>{detail}</span>
-          {listed.match && <MatchLine match={listed.match} query={query} />}
+          {listed.match && (
+            <>
+              {" "}
+              <MatchLine match={listed.match} query={query} />
+            </>
+          )}
         </div>
       </button>
       {!selecting && (
