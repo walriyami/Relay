@@ -1,18 +1,35 @@
 import { useEffect, useState } from "react";
 import { Button, Modal, toast } from "../../components/ui";
 import { chime, getLocalPrefs } from "../../lib/local-prefs";
-import { accept, decline, onNotice, useNearby, type NearbyTransfer } from "../../lib/nearby/engine";
+import { accept, decline, nearbySnapshot, onNotice, useNearby, type NearbyTransfer } from "../../lib/nearby/engine";
+import { usePresence } from "../../lib/nearby/presence";
+import { touch } from "../../lib/nearby/save";
 import { notifySystem } from "../activity/ActivityProvider";
-import { contents } from "./NearbyTransfers";
+import { contents, save, unsaved } from "./NearbyTransfers";
 
 const LISTED = 5;
 
 /**
  * Announces Nearby wherever you are: asks about what someone wants to send, and says when things
- * arrive. `view` goes to the Nearby page, when this isn't it.
+ * arrive. `view` goes to the Nearby page, when this isn't it. What arrives from your own
+ * devices downloads by itself on a computer when this browser accepts arrivals automatically, and
+ * leaving the page with received files not saved yet asks first: they exist only in this tab.
  */
 export function NearbyAlerts({ view }: { view?: () => void }) {
   const { transfers } = useNearby();
+  const presence = usePresence();
+  const peers = presence.state?.peers;
+  const ownDevice = (t: NearbyTransfer) => peers?.some((p) => p.id === t.peer && p.kind === "device") ?? false;
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (!unsaved(nearbySnapshot().transfers).length) return;
+      event.preventDefault();
+      // Older browsers show their own message only when this is set.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, []);
   // Offers put off with "Later": they wait on the Nearby page instead.
   const [later, setLater] = useState<string[]>([]);
   useEffect(
@@ -25,14 +42,18 @@ export function NearbyAlerts({ view }: { view?: () => void }) {
         } else if (kind === "receiving" && view) {
           toast(`Receiving ${contents(t)} from ${t.peerName}`, { key: `nearby:${t.id}`, action });
         } else if (kind === "received") {
-          if (getLocalPrefs().sound) chime();
+          const prefs = getLocalPrefs();
+          if (prefs.sound) chime();
+          // A phone's share sheet needs a tap, so there it waits for Save.
+          if (prefs.autoAccept && !touch && ownDevice(t)) void save(t).catch(() => {});
           if (view) toast(`Received ${contents(t)} from ${t.peerName}`, { key: `nearby:${t.id}`, action });
           notifySystem(`Received ${contents(t)} from ${t.peerName}.`, `nearby:${t.id}`, view);
         } else if (kind === "failed") {
           toast(t.reason || "Nearby couldn’t finish receiving this.", { key: `nearby:${t.id}`, tone: "error", action });
         }
       }),
-    [view],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads the latest peers when a notice comes.
+    [view, peers],
   );
   const asking = transfers.filter((t) => t.state === "incoming" && !later.includes(t.id));
   // The oldest first: the list is newest first.

@@ -96,7 +96,9 @@ export function NearbyPage() {
       <div className="page-head">
         <div>
           <h1>Nearby</h1>
-          <p className="muted">Send straight to devices on this network. Nothing goes through Relay or into Files.</p>
+          <p className="muted">
+            Live, straight from this device to another on the same network. Nothing is stored on Relay.
+          </p>
         </div>
       </div>
       {presence.role === "elsewhere" && (
@@ -125,6 +127,9 @@ export function NearbyPage() {
             />
           )}
           <h3 className="send-panel-heading">Your devices</h3>
+          <p className="send-panel-note muted">
+            Works while Relay is open on both, on the same network. For a device that’s away, use Send.
+          </p>
           {own.length ? (
             own.map(row)
           ) : (

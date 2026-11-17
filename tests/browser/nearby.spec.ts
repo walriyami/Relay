@@ -43,11 +43,15 @@ test("sends files and text between your own devices", async ({ browser }) => {
     await row.click();
 
     // Your own devices take it without asking.
-    await expect(transfers(ipad.page).getByRole("listitem", { name: `To ${iphone.name}` })).toContainText("Sent", {
-      timeout: 30_000,
-    });
+    await expect(transfers(ipad.page).getByRole("listitem", { name: `To ${iphone.name}` })).toContainText(
+      `Delivered to ${iphone.name} · no copy kept on Relay`,
+      {
+        timeout: 30_000,
+      },
+    );
     const received = transfers(iphone.page).getByRole("listitem", { name: `From ${ipad.name}` });
-    await expect(received).toContainText("Received");
+    // From your own device, on a computer, it's saved without asking, so closing the page loses nothing.
+    await expect(received).toContainText("Received · saved");
     await expect(received.getByRole("list", { name: "Files received" }).getByRole("listitem")).toHaveCount(2);
     await expect(received.locator("pre")).toHaveText(text);
     // Nothing went into Files.
@@ -87,7 +91,7 @@ test("trying again takes the stopped transfer's place on both devices", async ({
     await expect(received).toContainText("stopped sending");
 
     await sent.getByRole("button", { name: "Try again" }).click();
-    await expect(sent).toContainText("Sent", { timeout: 60_000 });
+    await expect(sent).toContainText("Delivered to", { timeout: 60_000 });
     await expect(received).toContainText("Received");
     await expect(sent).toHaveCount(1);
     await expect(received).toHaveCount(1);
@@ -127,11 +131,22 @@ test("someone without an account joins with a code, and asks before sending", as
     const offer = laptop.page.getByRole("dialog", { name: /Sam wants to send you a file/ });
     await expect(offer).toContainText("from-sam.bin");
     await offer.getByRole("button", { name: "Accept" }).click();
-    await expect(transfers(guest).getByRole("listitem", { name: `To ${laptop.name}` })).toContainText("Sent", {
+    await expect(transfers(guest).getByRole("listitem", { name: `To ${laptop.name}` })).toContainText("Delivered to", {
       timeout: 30_000,
     });
     await laptop.page.getByRole("link", { name: "Nearby" }).click();
-    await expect(transfers(laptop.page).getByRole("listitem", { name: "From Sam" })).toContainText("Received");
+    const fromSam = transfers(laptop.page).getByRole("listitem", { name: "From Sam" });
+    // Nothing from Nearby is kept anywhere, so the page says so, and asks before it's closed.
+    await expect(fromSam).toContainText("Received · download it before you close this page");
+    const asked = laptop.page.waitForEvent("dialog");
+    void laptop.page.close({ runBeforeUnload: true });
+    const leaving = await asked;
+    expect(leaving.type()).toBe("beforeunload");
+    await leaving.dismiss();
+    const saved = laptop.page.waitForEvent("download");
+    await fromSam.getByRole("button", { name: "Download", exact: true }).click();
+    expect((await saved).suggestedFilename()).toBe("from-sam.bin");
+    await expect(fromSam).toContainText("Received · saved");
 
     // And the other way: the guest decides too.
     const toSam = sendTo(laptop.page).getByRole("button", { name: "Sam", exact: true });
