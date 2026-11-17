@@ -134,13 +134,19 @@ export function onChange(topic: Topic, fn: Listener) {
     listeners.get(topic)!.delete(fn);
   };
 }
+type Stamp = ChangeStamp | null | undefined;
 /**
- * Like `onChange`, but a stream that opens runs `fn` only if the answer last read, stamped `read()`,
- * may lack something it won't send. For state kept outside `useLive`.
+ * Like `onChange`, but a stream that opens runs `fn` only if the answer shown, stamped `read()`,
+ * may lack something it won't send. For state kept outside `useLive`. While a load is on its way,
+ * `read()` gives that load's stamp to come.
  */
-export function onChangeSince(topic: Topic, read: () => ChangeStamp | null | undefined, fn: () => void) {
+export function onChangeSince(topic: Topic, read: () => Stamp | Promise<Stamp>, fn: () => void) {
   return onChange(topic, (opened) => {
-    if (!opened || missed(read(), opened)) fn();
+    if (!opened) fn();
+    else
+      void Promise.resolve(read()).then((stamp) => {
+        if (missed(stamp, opened)) fn();
+      });
   });
 }
 /** Local changes made by this tab refresh its own views without waiting for the stream. */

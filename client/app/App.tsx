@@ -180,11 +180,12 @@ function Private() {
   const [notice, setNotice] = useState("");
   const previousPrincipal = useRef<string | null>(null);
   const sessionRevision = useRef(0);
-  // Where changes stood when the session shown was read; unknown after a sign-in's own answer.
-  const sessionRead = useRef<ChangeStamp | null>(null);
+  // Where changes stood when the session shown was read, or will once the read under way is;
+  // unknown after a sign-in's own answer.
+  const sessionRead = useRef<Promise<ChangeStamp | null>>(Promise.resolve(null));
   const signedIn = useCallback((data: Me, read: ChangeStamp | null = null) => {
     sessionRevision.current++;
-    sessionRead.current = read;
+    sessionRead.current = Promise.resolve(read);
     const principal = `${data.user.id}:${data.device.id}`;
     if (previousPrincipal.current && previousPrincipal.current !== principal) {
       // Another sign-in in this tab starts clean: it never inherits someone else's work or draft.
@@ -260,7 +261,13 @@ function Private() {
       coalesce(
         async () => {
           const revision = ++sessionRevision.current;
-          const { data, changes } = await stamped(api.session.get);
+          const loading = stamped(api.session.get);
+          const before = sessionRead.current;
+          sessionRead.current = loading.then(
+            (loaded) => loaded.changes,
+            () => before,
+          );
+          const { data, changes } = await loading;
           if (revision === sessionRevision.current) signedIn(data, changes);
         },
         { delay: 150, interval: 1000 },
