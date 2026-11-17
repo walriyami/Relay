@@ -74,9 +74,11 @@ test("origin configuration rejects credentials and non-web origins", () => {
   assert.equal(configFromEnv({ RELAY_ORIGIN: "https://relay.example:443/" }).origin, "https://relay.example");
 });
 
-test("the setup key is off unless RELAY_SETUP_KEY turns it on, and a typo stops startup", () => {
-  assert.equal(configFromEnv({}).setupKey, false);
-  for (const value of ["", "false", "0", " FALSE "])
+test("the setup key is on unless RELAY_SETUP_KEY turns it off, and a typo stops startup", () => {
+  // A fresh or reset server must not be claimable by whoever opens it first.
+  assert.equal(configFromEnv({}).setupKey, true);
+  assert.equal(configFromEnv({ RELAY_SETUP_KEY: "" }).setupKey, true);
+  for (const value of ["false", "0", " FALSE "])
     assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, false);
   for (const value of ["true", "1", "True"]) assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, true);
   for (const value of ["yes", "on", "ture"])
@@ -128,7 +130,7 @@ test("client addresses come only from trusted proxies, given by address, range o
   for (const trustProxy of [["localhost"], ["127.0.0.0/8"]]) {
     const behind = await start({ trustProxy }, undefined, { setup: false });
     try {
-      for (let i = 1; i <= 5; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 4 ? 404 : 429);
+      for (let i = 1; i <= 6; i++) assert.equal((await pickup(behind, "198.51.100.1")).statusCode, i <= 5 ? 404 : 429);
       assert.equal((await pickup(behind, "198.51.100.2")).statusCode, 404);
     } finally {
       await behind.close();
@@ -138,7 +140,7 @@ test("client addresses come only from trusted proxies, given by address, range o
   for (const trustProxy of [["192.0.2.1"], ["relay-proxy.invalid"]]) {
     const open = await start({ trustProxy }, undefined, { setup: false });
     try {
-      for (let i = 1; i <= 4; i++) await pickup(open, "198.51.100.1");
+      for (let i = 1; i <= 5; i++) await pickup(open, "198.51.100.1");
       assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
     } finally {
       await open.close();
@@ -159,6 +161,56 @@ test("client addresses come only from trusted proxies, given by address, range o
   proxy.checkForwarded("::ffff:198.51.100.1", "203.0.113.1");
   proxy.checkForwarded("198.51.100.2", "203.0.113.1");
   assert.deepEqual(warnings, [{ address: "198.51.100.1" }]);
+});
+
+test("behind Cloudflare each visitor is counted on their own, never as the tunnel", async () => {
+  assert.equal(configFromEnv({ RELAY_CLIENT_IP_HEADER: " CF-Connecting-IP " }).clientIpHeader, "cf-connecting-ip");
+  assert.equal(configFromEnv({}).clientIpHeader, undefined);
+  assert.throws(() => configFromEnv({ RELAY_CLIENT_IP_HEADER: "cf connecting ip" }), /RELAY_CLIENT_IP_HEADER/);
+  // As the gateway sends it: X-Forwarded-For names the tunnel connector, the same for everyone.
+  const pickup = (instance: Instance, peer: string, visitor: string) =>
+    instance.app.inject({
+      method: "POST",
+      url: api.pickup.resolve.path,
+      remoteAddress: peer,
+      headers: { host: "relay.test", "x-forwarded-for": "172.18.0.5", "cf-connecting-ip": visitor },
+      payload: { code: "short" },
+    });
+  const behind = await start(
+    { trustProxy: ["127.0.0.1", "172.18.0.0/16"], clientIpHeader: "cf-connecting-ip" },
+    undefined,
+    { setup: false },
+  );
+  try {
+    for (let i = 1; i <= 6; i++)
+      assert.equal((await pickup(behind, "127.0.0.1", "198.51.100.1")).statusCode, i <= 5 ? 404 : 429);
+    assert.equal((await pickup(behind, "127.0.0.1", "2001:db8::1")).statusCode, 404, "another visitor still gets in");
+    // A value that isn't an address is ignored, leaving the forwarded chain.
+    for (let i = 1; i <= 5; i++) await pickup(behind, "127.0.0.1", "not-an-address");
+    assert.equal((await pickup(behind, "127.0.0.1", "also-not")).statusCode, 429, "both count as the tunnel");
+    // Anyone reaching Relay without the proxy can't choose their own address with the header.
+    for (let i = 1; i <= 5; i++) await pickup(behind, "203.0.113.9", `198.51.100.${10 + i}`);
+    assert.equal((await pickup(behind, "203.0.113.9", "198.51.100.99")).statusCode, 429);
+  } finally {
+    await behind.close();
+  }
+});
+
+test("visitors aren't shown a running count of their request budget", async () => {
+  const instance = await start(undefined, undefined, { setup: false });
+  try {
+    const response = await instance.app.inject({
+      method: "GET",
+      url: api.sso.config.path,
+      headers: { host: "relay.test" },
+      remoteAddress: "198.51.100.1",
+    });
+    assert.equal(response.statusCode, 200);
+    for (const header of ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"])
+      assert.equal(response.headers[header], undefined, header);
+  } finally {
+    await instance.close();
+  }
 });
 
 test("existing data directories are made private at startup", async () => {

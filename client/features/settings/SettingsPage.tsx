@@ -339,7 +339,7 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         </div>
       </Section>
       <Section id="s-account" title="Account">
-        <SharedIdentitySettings me={me} />
+        <SharedIdentitySettings />
         <div className="setting-row">
           <span className="setting-label">
             <strong>{displayName(me.user)}</strong>
@@ -697,7 +697,7 @@ function DevicesSection() {
   );
 }
 
-function SharedIdentitySettings({ me }: { me: Me }) {
+function SharedIdentitySettings() {
   const [enabled, setEnabled] = useState(false);
   const [linked, setLinked] = useState(false);
   const [password, setPassword] = useState("");
@@ -705,11 +705,10 @@ function SharedIdentitySettings({ me }: { me: Me }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    void fetch("/api/sso/account")
-      .then((r) => r.json() as Promise<{ enabled: boolean; linked: boolean }>)
+    call(api.sso.account)
       .then((v) => {
-        setEnabled(!!v.enabled);
-        setLinked(!!v.linked);
+        setEnabled(v.enabled);
+        setLinked(v.linked);
       })
       .catch(() => {});
   }, []);
@@ -734,14 +733,7 @@ function SharedIdentitySettings({ me }: { me: Me }) {
               setBusy(true);
               setError("");
               try {
-                const response = await fetch("/api/sso/link", {
-                  method: "POST",
-                  headers: { "content-type": "application/json", "x-relay-csrf": me.csrf },
-                  body: JSON.stringify({ password }),
-                });
-                const result = (await response.json()) as { url?: string; error?: string };
-                if (!response.ok || !result.url) throw new Error(result.error || "Could not start account linking.");
-                location.assign(result.url);
+                location.assign((await call(api.sso.link, { body: { password } })).url);
               } catch (e) {
                 setError((e as Error).message);
                 setBusy(false);

@@ -430,10 +430,11 @@ CREATE TABLE traffic (
   failures INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
--- Every numeric pickup code ever assigned, across all kinds, in one namespace. `nonce` is the step
--- of the target's code sequence, so the code can be shown again without storing it. A retired row
--- stays as a tombstone, so a printed code that expired, was revoked or was replaced is never given
--- to anyone else.
+-- Pickup codes across all kinds, in one namespace. `nonce` is the step of the target's code
+-- sequence, so the code can be shown again without storing it. A code works for a day after
+-- `created`. An ended code keeps its row for 30 days, so a remembered code never opens someone
+-- else's share; after that its digits are free again, and the target's last row is kept with a
+-- placeholder hash so its id is never reused.
 CREATE TABLE pickup_codes (
   code_hash TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('share', 'request', 'invitation', 'device', 'nearby')),

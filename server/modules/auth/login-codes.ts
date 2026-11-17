@@ -6,14 +6,16 @@ import { uuidv7 } from "../../../shared/ids.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { normalizeCode, sha256 } from "../../lib/secrets.ts";
-import { issuePickupCode } from "../../lib/pickup-codes.ts";
+import { CODE_LIFE_MS, issuePickupCode } from "../../lib/pickup-codes.ts";
 import { finishSignIn, insertSession, newDevice, type NewDevice } from "./sessions.ts";
 import { addressKey, perAddress } from "./limits.ts";
 import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
-import { checkPickupCodeAttempt, recordPickupCodeFailure } from "../../lib/pickup-code-guard.ts";
-import { codeLengthOf, ensurePickupCodeResolutionAvailable, reconcilePickupCodeMode } from "../../lib/pickup-codes.ts";
+import { checkCodeAttempt, recordCodeFailure } from "../../lib/pickup-code-guard.ts";
 
 const CODE_MS = DEFAULTS.loginCodeMinutes * 60_000;
+const DAY_MS = 86_400_000;
+/** Sign-in codes one account may make in a day: far more than adding devices ever needs. */
+const CODES_PER_DAY = 100;
 const invalid = () =>
   fail(410, "This sign-in code is invalid, expired or already used. Create a new one on your signed-in device.");
 
@@ -86,10 +88,17 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
     ctx,
     api.loginCodes.create,
     ({ member }) => {
-      reconcilePickupCodeMode(ctx);
       const now = Date.now();
       const id = uuidv7(now);
       const issued = ctx.db.tx(() => {
+        // Each code holds six digits for a while after it ends, so one account can't use them all up.
+        const today = ctx.db.value<number>(
+          "SELECT count(*) FROM login_codes WHERE user_id = ? AND created > ?",
+          member.userId,
+          now - DAY_MS,
+        );
+        if (today! >= CODES_PER_DAY)
+          fail(429, "You’ve made a lot of sign-in codes today. Use the sign-in link, or try again tomorrow.");
         ctx.db.run(
           "UPDATE login_codes SET revoked = ? WHERE session_hash = ? AND used IS NULL AND revoked IS NULL",
           now,
@@ -144,18 +153,15 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
     ctx,
     api.session.code,
     ({ body, reply, req }) => {
-      const address = addressKey(req.ip);
       const now = Date.now();
-      reconcilePickupCodeMode(ctx, now);
-      ensurePickupCodeResolutionAvailable(ctx.db);
-      checkPickupCodeAttempt(ctx, address, now);
+      checkCodeAttempt(ctx, req.ip, now);
       let failed = false;
       const reject = (): never => {
         failed = true;
         return invalid();
       };
       try {
-        const code = normalizeCode(body.code, codeLengthOf(ctx.db)) ?? reject();
+        const code = normalizeCode(body.code) ?? reject();
         const session = redeemLoginCode(
           ctx,
           newDevice(req, body),
@@ -164,9 +170,10 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
               `SELECT c.id, c.user_id FROM login_codes c
            JOIN sessions s ON s.token_hash = c.session_hash JOIN users u ON u.id = c.user_id
            JOIN pickup_codes p ON p.code_hash = c.code_hash AND p.kind = 'device'
-           AND p.target_id = c.id AND p.retired IS NULL
+           AND p.target_id = c.id AND p.retired IS NULL AND p.created > ?
            WHERE c.code_hash = ? AND c.expires > ? AND c.used IS NULL AND c.revoked IS NULL
              AND s.expires > ? AND u.disabled = 0`,
+              time - CODE_LIFE_MS,
               ctx.secrets.pickupCodeHash(code),
               time,
               time,
@@ -174,12 +181,7 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
         );
         return finishSignIn(ctx, reply, session);
       } catch (error) {
-        if (failed) {
-          const outcome = recordPickupCodeFailure(ctx, address, now);
-          if (outcome.addressTriggered || outcome.globalTriggered) reconcilePickupCodeMode(ctx, now);
-          if (outcome.addressTriggered || outcome.globalTriggered)
-            fail(429, "Too many incorrect codes. Code entry is temporarily paused.");
-        }
+        if (failed) recordCodeFailure(ctx, req.ip, now);
         throw error;
       }
     },

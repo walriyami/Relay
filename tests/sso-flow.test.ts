@@ -1,110 +1,157 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { once } from "node:events";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { start, Client } from "./support/harness.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { admin, start, Client } from "./support/harness.ts";
+import { startProvider } from "./support/sso-provider.ts";
 import { api } from "../shared/api.ts";
 
 test("shared sign-in requires explicit linking, creates a real session, and revokes only shared sessions", async () => {
-  const { publicKey, privateKey } = await generateKeyPair("RS256");
-  const jwk = { ...(await exportJWK(publicKey)), kid: "test-key", alg: "RS256", use: "sig" };
-  let issuer = "",
-    nonce = "",
-    allowed = true;
-  const provider = createServer((req, reply) => {
-    void (async () => {
-      reply.setHeader("content-type", "application/json");
-      if (req.url === "/.well-known/openid-configuration")
-        return reply.end(
-          JSON.stringify({
-            issuer,
-            authorization_endpoint: issuer + "/authorize",
-            token_endpoint: issuer + "/token",
-            jwks_uri: issuer + "/jwks",
-            userinfo_endpoint: issuer + "/userinfo",
-          }),
-        );
-      if (req.url === "/jwks") return reply.end(JSON.stringify({ keys: [jwk] }));
-      if (req.url === "/userinfo")
-        return reply.end(JSON.stringify({ sub: "central-owner", preferred_username: "admin", name: "Owner" }));
-      if (req.url === "/token") {
-        assert.equal(req.headers.authorization, "Basic " + Buffer.from("relay-test:client-secret").toString("base64"));
-        const token = await new SignJWT({ nonce })
-          .setProtectedHeader({ alg: "RS256", kid: "test-key" })
-          .setIssuer(issuer)
-          .setAudience("relay-test")
-          .setSubject("central-owner")
-          .setIssuedAt()
-          .setExpirationTime("5m")
-          .sign(privateKey);
-        return reply.end(JSON.stringify({ id_token: token, access_token: "test-profile-token" }));
-      }
-      if (req.url?.includes("/grants/")) return reply.end(JSON.stringify({ allowed, administrator: true }));
-      reply.writeHead(404);
-      reply.end("{}");
-    })().catch((error: unknown) => {
-      reply.statusCode = 500;
-      reply.end(JSON.stringify({ error: error instanceof Error ? error.message : "provider failure" }));
-    });
-  });
-  provider.listen(0, "127.0.0.1");
-  await once(provider, "listening");
-  issuer = `http://127.0.0.1:${(provider.address() as { port: number }).port}`;
-  const instance = await start({
-    origin: "http://localhost",
-    sso: {
-      issuer,
-      clientId: "relay-test",
-      clientSecret: "client-secret",
-      controlOrigin: issuer,
-      appToken: "test-app-token",
-      projectId: "relay",
-    },
-  });
-  const jar = new Map<string, string>();
-  let csrf = "";
-  async function request(url: string, method: "GET" | "POST" = "GET", payload?: object) {
-    const r = await instance.app.inject({
-      method,
-      url,
-      headers: { "x-relay-csrf": csrf, cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; ") },
-      payload,
-    });
-    for (const c of r.cookies) {
-      if (!c.value || c.maxAge === 0) jar.delete(c.name);
-      else jar.set(c.name, c.value);
-    }
-    return r;
-  }
-  async function finish(location: string) {
-    const url = new URL(location);
-    nonce = url.searchParams.get("nonce")!;
-    return request(`/api/sso/callback?state=${url.searchParams.get("state")}&code=test-code`);
-  }
+  const provider = await startProvider();
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  const browser = provider.browser(instance);
   try {
-    const rejected = await finish((await request("/api/sso/login")).headers.location!);
+    const rejected = await browser.signIn();
     assert.equal(rejected.headers.location, "/?sso=link-required");
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM users"), 1);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM external_identities"), 0);
     const local = new Client(instance);
     await local.signIn("admin", "Test-admin-password-only");
-    csrf = local.csrf;
-    for (const [k, v] of local.cookies) jar.set(k, v);
-    assert.equal((await request("/api/sso/link", "POST", { password: "incorrect-password" })).statusCode, 403);
-    const link = await request("/api/sso/link", "POST", { password: "Test-admin-password-only" });
+    browser.csrf = local.csrf;
+    for (const [k, v] of local.cookies) browser.jar.set(k, v);
+    assert.equal((await browser.request("/api/sso/link", "POST", { password: "incorrect-password" })).statusCode, 403);
+    const link = await browser.request("/api/sso/link", "POST", { password: "Test-admin-password-only" });
     assert.equal(link.statusCode, 200);
-    assert.equal((await finish(link.json<{ url: string }>().url)).headers.location, "/");
+    assert.equal((await browser.finish(link.json<{ url: string }>().url)).headers.location, "/");
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM external_identities"), 1);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM external_sessions"), 1);
 
-    assert.equal((await finish((await request("/api/sso/login")).headers.location!)).headers.location, "/");
-    allowed = false;
-    assert.equal((await request("/api/session")).statusCode, 401);
+    assert.equal((await browser.signIn()).headers.location, "/");
+    provider.grants.allowed = false;
+    assert.equal((await browser.request("/api/session")).statusCode, 401);
     assert.equal((await local.call(api.session.get)).user.username, "admin");
   } finally {
     await instance.close();
-    provider.closeAllConnections();
-    await new Promise<void>((r) => provider.close(() => r()));
+    await provider.close();
+  }
+});
+
+test("Walriyami's administrator can claim a fresh server by signing in, and setup continues with their choices", async () => {
+  const provider = await startProvider();
+  const instance = await start({ origin: "http://localhost", sso: provider.config, setupKey: true }, undefined, {
+    setup: false,
+  });
+  const browser = provider.browser(instance);
+  try {
+    const status = await browser.request("/api/setup");
+    assert.deepEqual(status.json(), { state: "account", keyRequired: true, sharedSignIn: true });
+    assert.equal((await browser.signIn()).headers.location, "/");
+    assert.equal(instance.ctx.db.value("SELECT admin FROM users WHERE username = 'admin'"), 1);
+    assert.deepEqual((await browser.request("/api/setup")).json(), {
+      state: "choices",
+      keyRequired: false,
+      sharedSignIn: false,
+    });
+    assert.ok(!existsSync(join(instance.root, "setup.key")), "the setup key no longer guards anything");
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("a Walriyami member who isn't its administrator can't claim a fresh server", async () => {
+  const provider = await startProvider();
+  provider.grants.administrator = false;
+  const instance = await start({ origin: "http://localhost", sso: provider.config, setupKey: true }, undefined, {
+    setup: false,
+  });
+  const browser = provider.browser(instance);
+  try {
+    assert.match((await browser.signIn()).headers.location!, /^\/\?sso=/);
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM users"), 0);
+    assert.equal((await browser.request("/api/session")).statusCode, 401);
+    assert.deepEqual((await browser.request("/api/setup")).json(), {
+      state: "account",
+      keyRequired: true,
+      sharedSignIn: true,
+    });
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("someone new signing in with Walriyami becomes an ordinary member the administrator can see", async () => {
+  const provider = await startProvider({ sub: "friend-1", username: "Friend" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  const browser = provider.browser(instance);
+  try {
+    const boss = await admin(instance);
+    assert.equal((await browser.signIn()).headers.location, "/");
+    const me = (await browser.request(api.session.get.path)).json<{ user: { username: string; admin: boolean } }>();
+    assert.deepEqual([me.user.username, me.user.admin], ["friend", false]);
+    const listed = (await boss.call(api.admin.overview)).members.find((m) => m.username === "friend");
+    assert.equal(listed?.walriyami, true, "Admin shows how they sign in");
+    assert.equal((await boss.call(api.admin.overview)).members.find((m) => m.username === "admin")?.walriyami, false);
+    const news = (await boss.call(api.activity.list)).entries.find((e) => e.kind === "joined");
+    assert.ok(news?.kind === "joined" && news.walriyami && news.username === "friend", "the administrator is told");
+    assert.deepEqual((await browser.request(api.sso.account.path)).json(), { enabled: true, linked: true });
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("Walriyami names that aren't valid usernames are asked to link an account instead", async () => {
+  const provider = await startProvider({ sub: "short-1", username: "ab" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  try {
+    assert.equal((await provider.browser(instance).signIn()).headers.location, "/?sso=link-required");
+  } finally {
+    await instance.close();
+    await provider.close();
+  }
+});
+
+test("Walriyami Control being down signs nobody out; only its own no does", async () => {
+  const provider = await startProvider({ sub: "friend-1", username: "friend" });
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  const browser = provider.browser(instance);
+  const session = () => browser.request(api.session.get.path);
+  const sessions = () =>
+    instance.ctx.db.value<number>(
+      "SELECT count(*) FROM external_sessions e JOIN sessions s ON s.token_hash = e.session_hash",
+    );
+  try {
+    assert.equal((await browser.signIn()).headers.location, "/");
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    for (const outage of [502, "hang"] as const) {
+      provider.grants.outage = outage;
+      mock.timers.tick(11_000);
+      const checks = provider.grants.checks;
+      assert.equal((await session()).statusCode, 200, `still signed in during a ${outage} outage`);
+      assert.ok(provider.grants.checks > checks, "Relay did ask");
+    }
+    // Long after Control last said yes, requests wait for it, but the session survives.
+    mock.timers.tick(2 * 3_600_000);
+    const waiting = await session();
+    assert.equal(waiting.statusCode, 503);
+    assert.match(waiting.json<{ error: string }>().error, /can't reach Walriyami/);
+    assert.equal(sessions(), 1);
+    // A new sign-in needs Control's answer.
+    assert.equal((await provider.browser(instance).signIn()).headers.location, "/?sso=unavailable");
+
+    provider.grants.outage = undefined;
+    mock.timers.tick(11_000);
+    assert.equal((await session()).statusCode, 200, "back as soon as Control answers");
+
+    provider.grants.allowed = false;
+    mock.timers.tick(11_000);
+    assert.equal((await session()).statusCode, 401);
+    assert.equal(sessions(), 0, "Control's no ends the session");
+  } finally {
+    mock.timers.reset();
+    await instance.close();
+    await provider.close();
   }
 });

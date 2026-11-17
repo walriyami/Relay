@@ -63,7 +63,6 @@ import { ActivityProvider } from "../features/activity/ActivityProvider";
 import { ActivityButton } from "../features/activity/ActivityButton";
 import { CodeButton } from "../features/codes/CodeButton";
 import { DirectButton } from "../features/direct/DirectButton";
-import { CodeProtectionBanner } from "../features/codes/CodeProtectionNotice";
 import { LinksPage } from "../features/links/LinksPage";
 import { RequestsPage } from "../features/requests/RequestsPage";
 // Usage ships with the app because Admin shares its charts, and WebKit can't retry a page chunk
@@ -185,7 +184,7 @@ function Private() {
   const [me, setMe] = useState<Me | null>(null);
   /** Stays as it was at load until setup's last screen is left, however far setup got meanwhile. */
   const [setup, setSetup] = useState<SetupState>("done");
-  const [setupKeyRequired, setSetupKeyRequired] = useState(false);
+  const [setupProof, setSetupProof] = useState({ keyRequired: false, sharedSignIn: false });
   const [loading, setLoading] = useState(true);
   /** The first session check failed for a reason other than being signed out. */
   const [unreachable, setUnreachable] = useState(false);
@@ -235,7 +234,7 @@ function Private() {
         if (cancelled) return;
         setUnreachable(false);
         setSetup(status.state);
-        setSetupKeyRequired(status.keyRequired);
+        setSetupProof({ keyRequired: status.keyRequired, sharedSignIn: status.sharedSignIn });
         if (data) signedIn(data);
         else setMe(null);
       })
@@ -341,7 +340,8 @@ function Private() {
       <Public>
         <Setup
           state={setup}
-          keyRequired={setupKeyRequired}
+          keyRequired={setupProof.keyRequired}
+          sharedSignIn={setupProof.sharedSignIn}
           me={me}
           setMe={updateMe}
           onSignedIn={signedInHere}
@@ -510,7 +510,6 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <ConnectionBar />
         </header>
         <main id="main" className="main" tabIndex={-1}>
-          <CodeProtectionBanner />
           <PageBoundary key={section}>
             <Suspense
               fallback={

@@ -1,23 +1,122 @@
+// Limits on wrong passwords that cost the person guessing, not the account's owner.
+//
+// - Each network (an IPv4 /24 or IPv6 /48) gets a few wrong passwords per account an hour.
+// - Each account gets a few more an hour from browsers it has never signed in on. A browser the
+//   account has signed in on before carries a signed "known browser" cookie and skips that limit,
+//   so someone guessing from elsewhere can't lock the owner out of their own devices.
+// - Each network may have only a couple of password checks running at once, and known browsers
+//   have room of their own in the password queue, so a flood can't starve everyone's sign-ins.
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../../context.ts";
+import { cookieOptions, knownBrowserCookie } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
 import { verifyPassword } from "../../lib/secrets.ts";
-import { FailureLog } from "./limits.ts";
+import { FailureLog, wideNetworkOf } from "./limits.ts";
 
-/** Wrong passwords per username, on top of the per-address limits: distributed guessing stays slow. */
-const PER_USERNAME = { max: 20, windowMs: 3_600_000 };
-const registry = new WeakMap<Context, FailureLog>();
+const HOUR = 3_600_000;
+/** Wrong passwords for one account from one network in an hour: plenty of room for typos. */
+const PER_NETWORK = { max: 10, windowMs: HOUR };
+/** Wrong passwords for one account from browsers it has never signed in on, in an hour. */
+const PER_ACCOUNT = { max: 20, windowMs: HOUR };
+/** Password checks one network may have running or waiting at once. */
+const CONCURRENT_PER_NETWORK = 2;
+/** How long a browser stays known to the accounts that signed in on it. */
+const KNOWN_MS = 400 * 24 * HOUR;
+/** Accounts one browser remembers, newest first. */
+const KNOWN_ACCOUNTS = 5;
 
-/** Verifies a password for `username`, counting failures and refusing once the account's limit is hit. */
-export async function checkPassword(ctx: Context, username: string, password: string, hash: string): Promise<boolean> {
-  let failures = registry.get(ctx);
-  if (!failures) registry.set(ctx, (failures = new FailureLog(PER_USERNAME.windowMs)));
-  if (!failures.reserve(username, Date.now(), PER_USERNAME.max))
-    fail(429, "Too many failed sign-in attempts for this account. Try again later.");
+type Limits = { network: FailureLog; account: FailureLog; running: Map<string, number> };
+const registry = new WeakMap<Context, Limits>();
+function limitsOf(ctx: Context) {
+  let limits = registry.get(ctx);
+  if (!limits)
+    registry.set(
+      ctx,
+      (limits = {
+        network: new FailureLog(PER_NETWORK.windowMs),
+        account: new FailureLog(PER_ACCOUNT.windowMs),
+        running: new Map(),
+      }),
+    );
+  return limits;
+}
+
+/** The accounts that have signed in on this browser before, as verified user ids. */
+function knownAccounts(ctx: Context, req: FastifyRequest): string[] {
+  const value = req.cookies?.[knownBrowserCookie(ctx, req)] ?? "";
+  return value
+    .split("~")
+    .slice(0, KNOWN_ACCOUNTS)
+    .map((entry) => entry.split("."))
+    .filter(([id, mac]) => id && mac && ctx.secrets.knownBrowserMac(id) === mac)
+    .map(([id]) => id);
+}
+
+/** Marks this browser as one the account signs in on, so guessing elsewhere never locks it out. */
+export function rememberBrowser(ctx: Context, reply: FastifyReply, userId: string) {
+  const others = knownAccounts(ctx, reply.request).filter((id) => id !== userId);
+  const value = [userId, ...others]
+    .slice(0, KNOWN_ACCOUNTS)
+    .map((id) => `${id}.${ctx.secrets.knownBrowserMac(id)}`)
+    .join("~");
+  reply.setCookie(knownBrowserCookie(ctx, reply.request), value, cookieOptions(ctx, reply.request, KNOWN_MS));
+}
+
+const minutesUntil = (log: FailureLog, key: string, max: number, now: number) =>
+  Math.max(1, Math.ceil(log.waitFor(key, max, now) / 60_000));
+
+/**
+ * Verifies a password for an account, counting wrong ones. `userId` is null for a username that
+ * doesn't exist, which is counted the same way so the answer doesn't reveal which names exist.
+ */
+export async function checkPassword(
+  ctx: Context,
+  req: FastifyRequest,
+  /** `signedIn` is for a member confirming their own password, whose browser is known by definition. */
+  account: { username: string; userId: string | null; signedIn?: boolean },
+  password: string,
+  hash: string,
+): Promise<boolean> {
+  const limits = limitsOf(ctx);
+  const now = Date.now();
+  const network = wideNetworkOf(req.ip);
+  const pair = `${account.username}\n${network}`;
+  const known = !!account.signedIn || (!!account.userId && knownAccounts(ctx, req).includes(account.userId));
+
+  if (!limits.network.reserve(pair, now, PER_NETWORK.max)) {
+    const minutes = minutesUntil(limits.network, pair, PER_NETWORK.max, now);
+    fail(429, `Too many wrong passwords for this account. Try again in about ${minutes} minutes, or use a passkey.`);
+  }
+  let reservedAccount = false;
   try {
-    const valid = await verifyPassword(password, hash);
-    if (!valid) failures.add(username, Date.now());
-    return valid;
+    if (!known) {
+      if (!limits.account.reserve(account.username, now, PER_ACCOUNT.max)) {
+        const minutes = minutesUntil(limits.account, account.username, PER_ACCOUNT.max, now);
+        fail(
+          429,
+          `Too many wrong passwords for this account from new devices. Sign in on a device you've used before, ` +
+            `use a passkey, or try again in about ${minutes} minutes.`,
+        );
+      }
+      reservedAccount = true;
+    }
+    const running = limits.running.get(network) ?? 0;
+    if (running >= CONCURRENT_PER_NETWORK) fail(429, "Too many sign-ins from your network at once. Try again shortly.");
+    limits.running.set(network, running + 1);
+    try {
+      const valid = await verifyPassword(password, hash, { priority: known });
+      if (!valid) {
+        limits.network.add(pair, Date.now());
+        if (!known) limits.account.add(account.username, Date.now());
+      }
+      return valid;
+    } finally {
+      const left = (limits.running.get(network) ?? 1) - 1;
+      if (left) limits.running.set(network, left);
+      else limits.running.delete(network);
+    }
   } finally {
-    failures.release(username);
+    limits.network.release(pair);
+    if (reservedAccount) limits.account.release(account.username);
   }
 }

@@ -59,6 +59,22 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - File times in a ZIP are no longer shifted by the time zone. They show as the time the file was added, in the downloader's own zone.
 - Members now see when one of their files is damaged or missing on disk: Files says how many, the item shows a red warning, and the item window marks each damaged file and explains that uploading the same file again repairs it. Admin lists which members are affected and how many files, without naming the files.
 
+### Security
+
+- Responses no longer tell visitors how much of their request budget is left; a refusal still says when to try again.
+- Link passwords need at least 8 characters, and wrong guesses are counted per network, so someone guessing a link's password can no longer lock out the person it was meant for. A link still takes at most 100 wrong passwords an hour in all.
+- A fresh or reset server can no longer be claimed by whoever opens it first. Setup asks for a one-time key that Relay prints in its server log (and keeps in `<data>/setup.key` until setup is done). With Walriyami sign-in configured, Walriyami's administrator can instead claim it by signing in. `RELAY_SETUP_KEY` is now on by default; set it to `false` only on a machine nobody else can reach.
+- One person typing wrong codes can no longer pause code entry for everyone. Each network gets a few wrong tries; when many networks guess at once, each wider network gets only a few a day, Admin shows when it happened, and right codes keep working for everyone else.
+- Pickup and sign-in codes are always six digits and work for a day; the owner's screen shows a fresh code when the old one ends, and links and QR codes don't change. An ended code's digits can be used again after 30 days, so Relay never runs out of codes. The four-digit setting is gone.
+- One account can make at most 100 sign-in codes a day.
+- Strangers guessing a member's password can no longer lock them out: a browser the member has signed in on before keeps working, each network gets only a few wrong tries, and a flood of guesses can't crowd out everyone's sign-ins. Joins with a dead invitation are turned away before any password work.
+- New passwords need at least 10 characters. Existing shorter passwords keep working.
+- Walriyami Control being unreachable no longer signs out everyone who signed in with Walriyami. Sessions it confirmed within the last hour keep working, and after that requests wait for Control instead of ending. Only Control's own answer ends a session.
+- People who join by signing in with Walriyami now show in Admin with a **Walriyami** label, and administrators are told when they join. Their usernames follow the same rules as everyone else's.
+- Image previews only ever decode PNG, JPEG, GIF, WebP and HEIF/AVIF, judged by the file's bytes. A file named like a photo but holding another format, such as SVG or TIFF, never reaches a decoder.
+- An upload that stops receiving bytes gives its reserved room back: after 30 minutes for someone using a request link, after a day for a member. One visitor can no longer fill a request for everyone by declaring a large upload and sending nothing.
+- `RELAY_CLIENT_IP_HEADER` reads the visitor's address from a header such as Cloudflare's `CF-Connecting-IP`, sent by a trusted proxy. Behind a tunnel with a gateway in front of Relay, every visitor shared one set of limits; now each gets their own.
+
 ## [1.0.0] - 2026-09-27
 
 The first public release.

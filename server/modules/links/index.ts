@@ -4,7 +4,6 @@ import type { PublicShare, ShareOpen } from "../../../shared/model.ts";
 import { api } from "../../../shared/api.ts";
 import { fail } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
 import { hashPassword } from "../../lib/secrets.ts";
 import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
 import { perAddress } from "../auth/limits.ts";
@@ -62,10 +61,6 @@ export function registerLinks(app: FastifyInstance, ctx: Context) {
       if (body.visitorLimit !== undefined)
         ctx.db.run("UPDATE links SET visitor_limit = ? WHERE id = ?", body.visitorLimit, link.id);
       if (body.note !== undefined) ctx.db.run("UPDATE links SET note = ? WHERE id = ?", body.note, link.id);
-      if (!getPickupCode(ctx.db, ctx.secrets, "share", link.id)) {
-        const issued = issuePickupCode(ctx.db, ctx.secrets, "share", link.id);
-        ctx.db.run("UPDATE links SET code_hash = ? WHERE id = ?", issued.codeHash, link.id);
-      }
       return toLinks(ctx, [ownedLink(ctx, member.userId, link.id, now)], now)[0];
     });
     ctx.events.publish(member.userId, "links", "items");

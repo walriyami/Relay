@@ -1,7 +1,7 @@
 import { buildApp } from "./app.ts";
 import { configFromEnv } from "./config.ts";
 import { setupStateOf } from "./modules/setup/index.ts";
-import { setupKeyPath } from "./modules/setup/setup-key.ts";
+import { ensureSetupKey, setupKeyPath } from "./modules/setup/setup-key.ts";
 
 /**
  * Problems the owner can act on (a damaged or refused database, a second copy of Relay on the same
@@ -29,9 +29,10 @@ if (ctx.db.rebuiltStoredTypes) app.log.info("storage totals by file type rebuilt
 const port = Number(process.env.PORT || 3090);
 await app.listen({ port, host: process.env.HOST || "127.0.0.1" });
 if (setupStateOf(ctx) !== "done") {
+  // The owner reads the key here (walctl logs, docker logs, the terminal); only they see the log.
   const key =
     config.setupKey && setupStateOf(ctx) === "account"
-      ? ` The setup key is stored at ${setupKeyPath(config.root)}.`
+      ? ` Setup key: ${ensureSetupKey(config.root)} (also saved in ${setupKeyPath(config.root)} until setup).`
       : "";
   app.log.info(
     `Relay is ready to be set up. Open ${config.origin ?? `http://localhost:${port}`} in your browser to continue.${key}`,

@@ -28,7 +28,13 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
       const username = body.username.trim().toLowerCase();
       const user = ctx.db.get<Row>("SELECT id, password_hash, disabled FROM users WHERE username = ?", username);
       // Always run scrypt so response time does not reveal which usernames exist.
-      const valid = await checkPassword(ctx, username, body.password, user?.password_hash ?? dummyPasswordHash());
+      const valid = await checkPassword(
+        ctx,
+        req,
+        { username, userId: user?.id ?? null },
+        body.password,
+        user?.password_hash ?? dummyPasswordHash(),
+      );
       if (!user || !valid) fail(401, "Incorrect username or password.");
       if (user.disabled) fail(403, "This account is disabled. Contact the administrator.");
       const session = ctx.db.tx(() => {
@@ -65,10 +71,16 @@ export function registerSession(app: FastifyInstance, ctx: Context) {
     ctx,
     api.session.join,
     async ({ body, req, reply }) => {
+      // A dead invitation is turned away before the costly password hashing, so junk joins
+      // can't crowd out everyone's sign-ins. It's checked again below, when it's taken.
+      const invite = sha256(body.token);
+      if (
+        !ctx.db.get("SELECT 1 FROM invites WHERE token_hash = ? AND used IS NULL AND expires > ?", invite, Date.now())
+      )
+        fail(410, INVITE_GONE);
       const passwordHash = await hashPassword(body.password);
       const now = Date.now();
       const session = ctx.db.tx(() => {
-        const invite = sha256(body.token);
         const used = ctx.db.run(
           "UPDATE invites SET used = ? WHERE token_hash = ? AND used IS NULL AND expires > ?",
           now,

@@ -118,8 +118,15 @@ test("audit auth: origin, CSRF and session cookies block ambient-credential chan
     const login = new Client(instance);
     const signedIn = await raw(login, api.session.password, { username: "admin", password: ADMIN_PASSWORD });
     assert.equal(signedIn.statusCode, 200);
-    const cookie = signedIn.headers["set-cookie"] as string;
-    assert.match(cookie, /__Host-relay=.*; Max-Age=.*; Path=\/; HttpOnly; Secure; SameSite=Lax/);
+    const cookies = signedIn.headers["set-cookie"] as string[];
+    assert.ok(
+      cookies.some((cookie) => /^__Host-relay=.*; Max-Age=.*; Path=\/; HttpOnly; Secure; SameSite=Lax$/.test(cookie)),
+    );
+    assert.ok(
+      cookies.some((cookie) =>
+        /^__Host-relay_known=.*; Max-Age=.*; Path=\/; HttpOnly; Secure; SameSite=Lax$/.test(cookie),
+      ),
+    );
     const publicWrites: [Endpoint, object][] = [
       [api.session.password, { username: "admin", password: ADMIN_PASSWORD }],
       [api.session.passkeyOptions, {}],

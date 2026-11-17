@@ -7,8 +7,6 @@ const shown = async (page: Page) => (await boxes(page).allTextContents()).join("
 const selection = async (page: Page) =>
   field(page).evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd]);
 
-let configuredLength: 4 | 6 = 6;
-
 async function paste(page: Page, text: string) {
   await field(page).focus();
   await field(page).evaluate((el, value) => {
@@ -19,10 +17,6 @@ async function paste(page: Page, text: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  configuredLength = 6;
-  await page.route("**/api/pickup/config", async (route) => {
-    await route.fulfill({ json: { codeLength: configuredLength } });
-  });
   await page.route("**/api/pickup", async (route) => {
     await route.fulfill({ status: 404, json: { error: "No match" } });
   });
@@ -77,7 +71,9 @@ test("six numeric digits auto-submit once and preserve leading zeroes", async ({
   await page.keyboard.type("012345");
   await expect(field(page)).toHaveValue("012-345");
   await expect(boxes(page)).toHaveText(["0", "1", "2", "3", "4", "5"]);
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   expect(attempts).toEqual(["012345"]);
 });
 
@@ -129,7 +125,9 @@ test("a chosen box is the one that changes and keyboard navigation follows it", 
 test("a failed lookup preserves the final selection for correction", async ({ page }) => {
   await field(page).click();
   await page.keyboard.type("123456");
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(field(page)).toBeFocused();
   await expect(boxes(page).nth(5)).toHaveAttribute("data-current", "true");
   expect(await selection(page)).toEqual([6, 7]);
@@ -166,61 +164,14 @@ test("a delayed failure preserves a chosen box and does not steal another field'
   } finally {
     releaseResponse();
   }
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(page.getByLabel("Username")).toBeFocused();
   await expect(boxes(page).nth(3)).toHaveAttribute("data-current", "true");
   expect(await selection(page)).toEqual([4, 5]);
   await expect(field(page)).not.toBeFocused();
   expect(attempts).toBe(1);
-});
-
-test("four-digit mode preserves a leading zero and displays four boxes", async ({ page }) => {
-  configuredLength = 4;
-  await page.goto("/?login=0123");
-  await expect(field(page)).toHaveValue("0123");
-  await expect(boxes(page)).toHaveText(["0", "1", "2", "3"]);
-  await expect(field(page)).toHaveAttribute("placeholder", "XXXX");
-});
-
-test("refreshing a changed deployment length clears partial input with an explanation", async ({ page }) => {
-  await field(page).fill("12");
-  configuredLength = 4;
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(field(page)).toHaveValue("");
-  await expect(page.getByRole("alert")).toHaveText("Code length changed to 4 digits. Enter the code again.");
-  await expect(boxes(page)).toHaveCount(4);
-});
-
-test("pre-submit refresh refuses a stale six-digit code when deployment switches to four", async ({ page }) => {
-  const attempts: string[] = [];
-  await page.route("**/api/pickup", async (route) => {
-    attempts.push(route.request().postDataJSON().code);
-    await route.fulfill({ status: 404, json: { error: "No match" } });
-  });
-  await field(page).click();
-  await page.keyboard.type("12345");
-  configuredLength = 4;
-  await page.keyboard.type("6");
-  await expect(field(page)).toHaveValue("");
-  await expect(page.getByRole("alert")).toHaveText("Code length changed to 4 digits. Enter the code again.");
-  expect(attempts).toEqual([]);
-});
-
-test("config load failures block entry and can be retried", async ({ page }) => {
-  await page.unroute("**/api/pickup/config");
-  let shouldFail = true;
-  await page.route("**/api/pickup/config", async (route) => {
-    if (shouldFail) await route.fulfill({ status: 503, json: { error: "Unavailable" } });
-    else await route.fulfill({ json: { codeLength: configuredLength } });
-  });
-  await page.reload();
-  await expect(page.getByRole("alert")).toContainText("Could not load the current code settings.");
-  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
-  configuredLength = 4;
-  shouldFail = false;
-  await page.getByRole("button", { name: "Retry" }).click();
-  await expect(field(page)).toBeVisible();
-  await expect(boxes(page)).toHaveCount(4);
 });
 
 test("a tapped box is the one that changes on a touch screen", async ({ page }, { project }) => {

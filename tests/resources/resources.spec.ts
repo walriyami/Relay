@@ -446,10 +446,7 @@ async function deviceFixture(page: Page, expiresIn = 300_000) {
       document.dispatchEvent(new Event("visibilitychange"));
     };
   });
-  await page.route("**/api/pickup/config", (route) =>
-    route.fulfill({ json: { codeLength: 6, protection: { mode: "open" } } }),
-  );
-  await page.route("**/api/pickup/current", (route) => route.fulfill({ json: { code: "234-567" } }));
+  await page.route("**/api/pickup/current", (route) => route.fulfill({ json: { code: "234-567", expires: null } }));
   await page.route("**/api/login-codes", (route) =>
     route.fulfill({ json: { id: "code", code: "234-567", token: "fixture", expiresIn } }),
   );

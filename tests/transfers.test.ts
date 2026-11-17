@@ -492,7 +492,7 @@ test("guest retries preserve identity and repeated filenames remain isolated bet
   }
 });
 
-test("guest reservations survive stale byte progress while their tab lease remains active", async () => {
+test("guest reservations survive short pauses while their tab is open, but not half an hour without bytes", async () => {
   const instance = await start();
   try {
     const owner = await member(instance, "tia");
@@ -521,23 +521,30 @@ test("guest reservations survive stale byte progress while their tab lease remai
     );
     const memberTransfer = await owner.call(api.transfers.create, { body: body(owner, [{ size: 10 }]) });
     const now = Date.now();
-    const hour = 60 * 60_000;
-    instance.ctx.db.run("UPDATE transfers SET created = ?", now - 2 * hour);
-    instance.ctx.db.run("UPDATE uploads SET touched = ?", now - hour);
+    const minute = 60_000;
+    instance.ctx.db.run("UPDATE transfers SET created = ?", now - 120 * minute);
+    instance.ctx.db.run("UPDATE uploads SET touched = ?", now - 20 * minute);
     instance.ctx.db.run("UPDATE uploads SET touched = ? WHERE transfer = ?", now, transfers[0].id);
-    instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", now + 3 * hour);
+    instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", now + 180 * minute);
     await instance.ctx.transfers.sweep(now);
     const state = (id: string) => instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", id);
     assert.equal(state(transfers[0].id), "open", "recent byte progress retains the reservation");
-    assert.equal(state(transfers[1].id), "open", "stale bytes do not override the renewed tab lease");
-    assert.equal(state(transfers[2].id), "open", "stale empty transfers remain open while the tab is active");
-    assert.equal(state(memberTransfer.id), "open", "members may pause indefinitely within their lease");
-    await instance.ctx.transfers.sweep(now + hour);
-    assert.equal(state(transfers[1].id), "open", "the byte inactivity age does not shorten the active lease");
-    instance.ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE principal LIKE 'grant:%'", now + 2 * hour);
-    await instance.ctx.transfers.sweep(now + 2 * hour);
-    assert.equal(state(transfers[1].id), undefined, "lease expiry cancels and removes an empty guest submission");
+    assert.equal(state(transfers[1].id), "open", "a short pause keeps the reservation while the tab is active");
+    assert.equal(state(transfers[2].id), "open");
+    assert.equal(state(memberTransfer.id), "open");
+
+    // Half an hour without a byte gives a guest's room back, however long the tab stays open.
+    await instance.ctx.transfers.sweep(now + 15 * minute);
+    assert.equal(state(transfers[0].id), "open", "progress 15 minutes ago still counts");
+    assert.notEqual(state(transfers[1].id), "open", "no bytes for 35 minutes gives the reservation up");
+    assert.notEqual(state(transfers[2].id), "open");
     assert.equal(instance.ctx.db.get("SELECT 1 FROM items WHERE id = ?", transfers[1].itemId), undefined);
+    assert.equal(state(memberTransfer.id), "open", "members may pause for up to a day within their lease");
+
+    // A guest whose tab goes away loses their reservation sooner.
+    instance.ctx.db.run("UPDATE tabs SET lease_expires = ? WHERE principal LIKE 'grant:%'", now + 16 * minute);
+    await instance.ctx.transfers.sweep(now + 17 * minute);
+    assert.notEqual(state(transfers[0].id), "open", "lease expiry cancels the guest's last submission");
     assert.equal(state(memberTransfer.id), "open");
   } finally {
     await instance.close();

@@ -46,7 +46,9 @@ test("the pickup code field shows six segments and keeps keyboard editing in pla
   await input.pressSequentially("012345");
   await expect(input).toHaveValue("012-345");
   await expect(boxes).toHaveText(["0", "1", "2", "3", "4", "5"]);
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(page.getByRole("button", { name: /open|continue/i })).toHaveCount(0);
   expect(await boxes.nth(5).evaluate((el) => getComputedStyle(el).boxShadow)).not.toBe("none");
   await boxes.nth(3).click({ force: true });
@@ -126,7 +128,9 @@ test("a failed code stays editable and a correction retries automatically", asyn
   await page.goto("/pickup");
   const input = page.getByLabel("Pickup code");
   await input.pressSequentially("234567");
-  await expect(page.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await expect(input).toHaveValue("234-567");
   await expect(input).toBeEditable();
   await input.fill("234568");
@@ -193,7 +197,9 @@ test("the signed-in Enter code button uses the same six-box code field", async (
   await expect(popover.locator(".code-entry-field-slot")).toHaveCount(6);
   await input.pressSequentially("123456");
   await expect(input).toHaveValue("123-456");
-  await expect(popover.getByRole("alert")).toHaveText("That code isn’t valid or has expired.");
+  await expect(popover.getByRole("alert")).toHaveText(
+    "That code isn’t valid or has expired. Ask whoever gave it to you for a new one.",
+  );
   await input.press("Backspace");
   await expect(input).toHaveValue("123-45");
   await expect(popover.getByRole("alert")).toHaveCount(0);

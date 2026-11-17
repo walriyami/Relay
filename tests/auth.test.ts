@@ -1,3 +1,4 @@
+import type { FastifyRequest } from "fastify";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api } from "../shared/api.ts";
@@ -77,13 +78,18 @@ test("IPv6 address buckets use /64 and normalize mapped IPv4", () => {
   assert.equal(addressKey("0:0:0:0:0:FFFF:C000:0201"), "192.0.2.1");
 });
 
-test("failed password checks are capped per username, including concurrent attempts", async () => {
+test("failed password checks from new devices are capped per account, including concurrent attempts", async () => {
   const instance = await start();
   try {
     const user = await member(instance, "finn");
+    const userId = instance.ctx.db.value<string>("SELECT id FROM users WHERE username = ?", "finn")!;
     const hash = instance.ctx.db.value<string>("SELECT password_hash FROM users WHERE username = ?", "finn")!;
+    // Each from a network of its own, so only the account's limit applies.
+    const from = (i: number) => ({ ip: `203.0.${i}.1`, cookies: {} }) as unknown as FastifyRequest;
     const attempts = await Promise.allSettled(
-      Array.from({ length: 21 }, () => checkPassword(instance.ctx, "finn", "Wrong-password-entirely", hash)),
+      Array.from({ length: 21 }, (_, i) =>
+        checkPassword(instance.ctx, from(i), { username: "finn", userId }, "Wrong-password-entirely", hash),
+      ),
     );
     assert.equal(attempts.filter((result) => result.status === "fulfilled" && !result.value).length, 20);
     const limited = attempts.find((result) => result.status === "rejected");

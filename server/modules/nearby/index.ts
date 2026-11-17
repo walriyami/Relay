@@ -17,7 +17,7 @@ import { clearCookie, cookieOptions, nearbyCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { cleanLabel } from "../../lib/names.ts";
-import { getPickupCode, issuePickupCode } from "../../lib/pickup-codes.ts";
+import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "../auth/limits.ts";
 import { browserOf, openStream, sessionKey, streamsOf, type EndReason } from "../auth/streams.ts";
@@ -93,7 +93,7 @@ export function registerNearby(app: FastifyInstance, ctx: Context) {
       now,
     );
     if (!row) return null;
-    const code = getPickupCode(ctx.db, ctx.secrets, "nearby", row.id);
+    const code = livePickupCode(ctx, "nearby", row.id, true, now)?.code;
     if (!code) return null;
     const guests = ctx.db.all<{ id: string; name: string; kind: DeviceKind }>(
       "SELECT id, name, kind FROM nearby_guests WHERE invite_id = ? ORDER BY created DESC",

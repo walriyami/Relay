@@ -70,7 +70,16 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
 
   route(app, ctx, api.account.password, async ({ member, body, req }) => {
     const before = ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", member.userId)!;
-    if (!(await checkPassword(ctx, member.username, body.current, before))) fail(403, "Current password is incorrect.");
+    if (
+      !(await checkPassword(
+        ctx,
+        req,
+        { username: member.username, userId: member.userId, signedIn: true },
+        body.current,
+        before,
+      ))
+    )
+      fail(403, "Current password is incorrect.");
     const next = await hashPassword(body.password);
     // Password changes keep passkeys; the member can remove any they no longer trust in Settings.
     ctx.db.tx(() => {

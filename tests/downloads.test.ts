@@ -9,6 +9,7 @@ import { join } from "node:path";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
 import { MAX_QUEUED_RENDITIONS, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
+import { imageSignature } from "../server/modules/downloads/image-signature.ts";
 import { Client, member, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
@@ -284,6 +285,46 @@ test("thumbnails: failed image renders are cached and TIFF is not admitted", asy
     await client.call(api.items.trash, { params: { id: result.itemId } });
     await client.call(api.items.remove, { params: { id: result.itemId } });
     assert.equal(existsSync(marker), false, "collecting the blob removes its cached failure");
+  } finally {
+    await instance.close();
+  }
+});
+
+test("thumbnails: only real PNG, JPEG, GIF, WebP and HEIF bytes reach a decoder, whatever the name says", async () => {
+  const pixel = () => sharp({ create: { width: 8, height: 8, channels: 3, background: "teal" } });
+  const real = {
+    png: await pixel().png().toBuffer(),
+    jpeg: await pixel().jpeg().toBuffer(),
+    gif: await pixel().gif().toBuffer(),
+    webp: await pixel().webp().toBuffer(),
+    heif: await pixel().avif().toBuffer(),
+  };
+  for (const [format, data] of Object.entries(real)) assert.equal(imageSignature(data), format);
+  const svg = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>',
+  );
+  const tiff = await pixel().tiff().toBuffer();
+  for (const other of [svg, tiff, Buffer.from("GIF8"), Buffer.alloc(0)]) assert.equal(imageSignature(other), null);
+
+  const instance = await start();
+  try {
+    const client = await member(instance, "decoder-owner");
+    const { result } = await send(client, [
+      ...Object.entries(real).map(([format, data]) => ({ path: `real.${format === "heif" ? "avif" : format}`, data })),
+      { path: "drawing.png", data: svg, mime: "image/png" },
+      { path: "drawing.heic", data: Buffer.concat([svg, Buffer.from(" ")]), mime: "image/heic" },
+    ]);
+    const nodes = new Map(
+      (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => [n.name, n]),
+    );
+    for (const name of ["real.png", "real.jpeg", "real.gif", "real.webp", "real.avif"])
+      assert.equal((await get(client, urls.nodeThumbnail(nodes.get(name)!.id))).statusCode, 200, name);
+    assert.equal((await get(client, urls.nodeThumbnail(nodes.get("drawing.png")!.id))).statusCode, 415);
+    assert.equal(
+      (await get(client, urls.nodeThumbnail(nodes.get("drawing.heic")!.id))).statusCode,
+      415,
+      "nor with a HEIF name",
+    );
   } finally {
     await instance.close();
   }

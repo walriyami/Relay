@@ -293,7 +293,31 @@ export function closeTab(
     abandon(ctx, receivers, transferRow(ctx, t.id)!);
 }
 
+/**
+ * How long an unfinished transfer may go without any of its files receiving bytes before its
+ * reserved room is given back. Someone with a request link gets half an hour, so one visitor who
+ * declares a large upload and sends nothing can't fill the request for everyone else; a member's
+ * own transfer survives being paused for most of a day.
+ */
+export const STALLED_GUEST_MS = 30 * 60_000;
+export const STALLED_MEMBER_MS = DAY_MS;
+
 export async function sweep(ctx: Context, receivers: Receivers, now: number) {
+  for (const t of ctx.db.all<{ id: string }>(
+    `SELECT t.id FROM transfers t
+     WHERE t.state = 'open'
+       AND EXISTS (SELECT 1 FROM uploads u WHERE u.transfer = t.id AND u.completed IS NULL)
+       AND (SELECT max(u.touched) FROM uploads u WHERE u.transfer = t.id)
+           <= CASE WHEN t.principal LIKE 'grant:%' THEN ? ELSE ? END`,
+    now - STALLED_GUEST_MS,
+    now - STALLED_MEMBER_MS,
+  )) {
+    const uploads = ctx.db.all<{ id: string }>("SELECT id FROM uploads WHERE transfer = ?", t.id);
+    if (uploads.some((upload) => receivers.receiving(upload.id))) continue;
+    const transfer = transferRow(ctx, t.id);
+    if (transfer?.state === "open") abandon(ctx, receivers, transfer);
+  }
+
   // Request/grant expiry releases guest reservations even when no endpoint is visited. Member
   // appends to a saved submission have their own lifetime and remain valid after the request ends.
   for (const t of ctx.db.all<{ id: string }>(

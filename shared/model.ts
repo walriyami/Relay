@@ -1,6 +1,3 @@
-import type { CodeLength, PickupProtection } from "./codes.ts";
-export type { PickupProtection } from "./codes.ts";
-
 // Domain shapes exchanged between the server and the client. Every API response is built from these.
 
 export type Id = string;
@@ -24,7 +21,7 @@ export const LIMITS = {
   linkDaysMax: 365,
   retentionDaysMax: 3650,
   trashDaysMax: 365,
-  passwordMin: 6,
+  passwordMin: 10,
   /** The optional name a guest gives with a submission. */
   senderLength: 80,
   inviteNoteLength: 80,
@@ -39,7 +36,7 @@ export const LIMITS = {
   displayNameLength: 60,
   /** A note shown to whoever opens a link. */
   linkNoteLength: 500,
-  linkPasswordMin: 4,
+  linkPasswordMin: 8,
   linkPasswordMax: 128,
   /** The most people one link can be limited to. */
   linkVisitorsMax: 100,
@@ -361,6 +358,8 @@ export type AdminMember = User & {
   signedInDevices: number;
   /** When one of their devices was last seen, if any ever was. */
   lastActive: Time | null;
+  /** Their account is linked to a Walriyami identity, so they can sign in with Walriyami. */
+  walriyami: boolean;
 };
 /** What changing a member's limits did to what they already had. */
 export type LimitsApplied = { links: number; items: number; requests: number };
@@ -394,9 +393,8 @@ export type AdminOverview = {
   usageBuffer: { pending: number; failed: boolean; discarded: number };
   /** The last failed database write, until a write succeeds again (or for good, when it is damaged). */
   database: { failure: { at: Time; message: string; damaged: boolean } | null };
-  /** The administrator's preference, even when security temporarily lengthens public codes. */
-  codeLength: CodeLength;
-  codeProtection: Omit<PickupProtection, "addressPausedUntil"> & { effectiveCodeLength: CodeLength };
+  /** When Relay last saw someone guessing pickup codes, or null. */
+  codeAttackAt: Time | null;
   members: AdminMember[];
   storage: {
     used: number;
@@ -483,7 +481,7 @@ export type AdminUsageReport = UsageReportBase & {
 };
 
 /** Server-sent event topics. A client refetches whatever a topic covers. */
-/** `codes`: the deployment's pickup-code length or protection changed. */
+/** `codes`: Relay noticed someone guessing pickup codes (Admin shows when). */
 export type Topic =
   "items" | "links" | "deliveries" | "devices" | "requests" | "account" | "activity" | "codes" | "nearby";
 export type ChangeEvent = { topics: Topic[] };
@@ -537,7 +535,8 @@ export type ActivityEvent =
       bytes: number;
       text: boolean;
     }
-  | { kind: "joined"; userId: Id; username: string; note: string | null }
+  /** A new member: with an invitation, or by signing in with Walriyami (`walriyami`). */
+  | { kind: "joined"; userId: Id; username: string; note: string | null; walriyami?: boolean }
   /** Someone opened a link, or downloaded from it, for the first time. `item` is its name then. */
   | { kind: "link"; linkId: Id; itemId: Id; item: string; action: "opened" | "downloaded"; device: string };
 export type ActivityKind = ActivityEvent["kind"];

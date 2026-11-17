@@ -1,4 +1,3 @@
-import type { CodeLength } from "./codes.ts";
 // The complete JSON API. Server routes are registered from these definitions and the client calls
 // them through the same objects, so request validation, auth and response types live in one place.
 // Byte streams (downloads, ZIPs, thumbnails, tus uploads, server-sent events) are addressed by `urls`.
@@ -207,8 +206,13 @@ export const api = {
 
   /** First start: the administrator's account, then their choices and the total storage. See SetupState. */
   setup: {
-    /** `keyRequired`: creating the administrator needs the setup key from the server's data folder. */
-    status: endpoint<{ state: M.SetupState; keyRequired: boolean }>()("GET", "/api/setup", { auth: "public" }),
+    /**
+     * `keyRequired`: creating the administrator needs the one-time key from the server's log.
+     * `sharedSignIn`: a Walriyami administrator can claim it by signing in instead (/api/sso/login).
+     */
+    status: endpoint<{ state: M.SetupState; keyRequired: boolean; sharedSignIn: boolean }>()("GET", "/api/setup", {
+      auth: "public",
+    }),
     /** Creates the administrator and signs them in; refused once anyone has an account. */
     account: endpoint<M.Me>()("POST", "/api/setup/account", {
       auth: "public",
@@ -219,14 +223,30 @@ export const api = {
     finish: ok("POST", "/api/setup/finish", { auth: "admin", body: z.object({ capacity: quota }) }),
   },
 
+  /**
+   * Walriyami sign-in, on a server given the WAL_* settings. Signing in is the /api/sso/login
+   * redirect itself; linking and the provider's callback finish there too.
+   */
+  sso: {
+    /** Whether the sign-in page offers Walriyami. */
+    config: endpoint<{ enabled: boolean }>()("GET", "/api/sso/config", { auth: "public" }),
+    /** Whether Walriyami sign-in is on, and whether this member's account is linked to it. */
+    account: endpoint<{ enabled: boolean; linked: boolean }>()("GET", "/api/sso/account", { auth: "member" }),
+    /** Checks the member's password and returns the Walriyami address that finishes linking. */
+    link: endpoint<{ url: string }>()("POST", "/api/sso/link", {
+      auth: "member",
+      body: z.object({ password: text(1, 256) }),
+    }),
+  },
+
   pickup: {
-    /** Refresh an owned handoff after a deployment-wide code rotation. */
-    current: endpoint<{ code: string | null }>()("POST", "/api/pickup/current", {
+    /**
+     * The owner's working code for the recipient a code they were shown once named: the same code
+     * until it `expires` a day after it was issued, then a fresh one. Null once the recipient ends.
+     */
+    current: endpoint<{ code: string | null; expires: M.Time | null }>()("POST", "/api/pickup/current", {
       auth: "member",
       body: z.object({ code: text(1, 32) }),
-    }),
-    config: endpoint<{ codeLength: CodeLength; protection: M.PickupProtection }>()("GET", "/api/pickup/config", {
-      auth: "public",
     }),
     /** Resolves a share, request, invitation or device sign-in code to its recipient route. */
     resolve: endpoint<M.PickupResolution>()("POST", "/api/pickup", {
@@ -583,7 +603,6 @@ export const api = {
         capacity: z.optional(quota),
         /** Required when changing capacity: the value shown when the editor opened. */
         expectedCapacity: z.optional(quota),
-        codeLength: z.optional(z.union([z.literal(4), z.literal(6)])),
       }),
     }),
   },
