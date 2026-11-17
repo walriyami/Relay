@@ -511,7 +511,7 @@ export class Receivers {
     this.receivers.delete(upload.id);
     unlinkIfPresent(file);
     this.ctx.usage.add(upload.owner, { files: 1 });
-    publishItemChange(this.ctx, upload.owner, upload.item);
+    publishItemChange(this.ctx, upload.owner, upload.item, { sharedSpace: false });
   }
 
   /**

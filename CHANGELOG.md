@@ -30,6 +30,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The interface font is cached for a year instead of being checked again on every page load.
 - Folders of many small files upload faster: each file that arrives in one request is saved with one disk-synced database write fewer.
 - Opening a large photo album shows every picture. Previews used to fail for good when more than about 30 were asked for at once. Now they wait their turn, one person's album can't hold up anyone else's, and a preview the server is too busy for is asked for again. Previews also render about three times faster, because the render workers are reused instead of started for each photo.
+- While someone sends a folder, other members' open pages no longer reload their account details after every file. Only the sender and administrators hear about each finished file.
 - The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
 - Editing `server/db/schema.sql` no longer locks Relay out of existing data. At startup Relay adds new tables, columns and indexes itself, ignores comments and formatting, and refuses only an edit that would remove or reshape stored data, with a message naming it. The one-off upgrade from the first schema is gone.
 - A damaged database stops Relay at startup with a plain explanation and recovery steps instead of a stack trace. Startup errors Relay understands are printed the same way.
