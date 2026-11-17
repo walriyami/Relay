@@ -37,7 +37,7 @@ Production is updated from a saved commit only, never from the files on disk, wh
 walctl deploy relay-production --commit main
 ```
 
-walctl takes a `git archive` of that commit, builds the image on the Mac, saves a snapshot of the data on the Pi, swaps versions, waits for the health check and puts the previous version back if the new one isn't healthy. Relay stops for the swap: transfers in progress pause and resume by themselves, and downloads that take longer than about a minute are cut.
+walctl takes a `git archive` of that commit, builds the image on the Mac, saves a snapshot of the data on the Pi, swaps versions, waits for the health check and puts the previous version back if the new one isn't healthy. Relay stops for the swap within seconds: requests still running get five seconds to finish, then their connections close. Transfers in progress pause and resume by themselves, uploads from their last saved byte and downloads from where they stopped.
 
 Every image records the commit it holds, shown under **Admin → Service health → Details → Version** and in `/api/health`. The image build stops with an explanation when it can't tell which commit it holds, so a plain `walctl deploy relay-production` (which builds the working tree) is refused. For a local or CI image, name the commit: `docker build --build-arg RELAY_COMMIT=$(git rev-parse HEAD) .`.
 
