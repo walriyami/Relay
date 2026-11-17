@@ -173,7 +173,21 @@ test("thumbnail publication and cleanup directory sync failures keep intent unti
     assert.equal(existsSync(thumbnailPath(instance.root, sha, "s")), false);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM blob_cleanup WHERE sha256 = ?", sha), 1);
     failing = false;
-    await instance.sweep();
+    // Maintenance retries in the background, syncing asynchronously; count those syncs too.
+    const probe = await fsPromises.open(join(instance.root, "thumbnails"), "r");
+    const handles = Object.getPrototypeOf(probe) as { sync: () => Promise<void>; stat: () => Promise<fs.Stats> };
+    await probe.close();
+    const asyncSync = handles.sync;
+    handles.sync = async function (this: typeof handles) {
+      const info = await this.stat();
+      if (info.dev === directory.dev && info.ino === directory.ino) syncs++;
+      return asyncSync.call(this);
+    };
+    try {
+      await instance.sweep();
+    } finally {
+      handles.sync = asyncSync;
+    }
     assert.equal(syncs, 3, "retry must sync even when the prior cleanup already removed the rendition");
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM blob_cleanup WHERE sha256 = ?", sha), 0);
     assert.deepEqual(readFileSync(instance.ctx.blobs.path(sha)), data);

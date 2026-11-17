@@ -51,6 +51,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 ### Fixed
 
 - Moving an item to Trash pauses its links and codes instead of turning them off for good. Restoring it, or **Undo**, makes them work again, including links an earlier version turned off this way.
+- Deleting forever, emptying Trash and the automatic purge no longer freeze Relay for everyone while files are removed (about 15 ms per file before). Items go at once and their files are deleted in the background in small batches; left-over clean-up from before is worked through right away instead of 100 files a minute, and at startup without holding it up.
 - Opening a share page no longer counts as a download or tells the owner “Someone downloaded”. Only saving a whole file or a ZIP counts.
 
 ## [1.0.0] - 2026-09-27

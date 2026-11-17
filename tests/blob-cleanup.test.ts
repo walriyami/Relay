@@ -45,7 +45,9 @@ test("cleanup retains failed blobs and continues independently; maintenance retr
     syncBuiltinESMExports();
     await client.call(api.items.trash, { params: { id: result.itemId } });
     // The item transaction has committed even when its following physical cleanup fails.
-    await client.call(api.items.remove, { params: { id: result.itemId } }).catch(() => {});
+    await client.call(api.items.remove, { params: { id: result.itemId } });
+    // Files go in the background; one that fails stays journaled while the others are deleted.
+    await assert.rejects(instance.ctx.blobs.drain(), /retry required/);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM items WHERE id = ?", result.itemId), 0);
     assert.equal(recorded(instance, hash("retry me")), 1);
     assert.equal(existsSync(failed), true);
@@ -309,6 +311,55 @@ test("reconciliation does not mark an adoption after its directory snapshot miss
     await reconciliation;
     fsPromises.readdir = readdir;
     syncBuiltinESMExports();
+    await instance.close();
+  }
+});
+
+test("a large deletion backlog goes in batches, with other requests answered in between", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "backlog-owner");
+    const entries = Array.from({ length: 300 }, (_, i) => seed(instance, `backlog ${i}`));
+    // What deleting an item with 300 files forever leaves: journaled, unreferenced blobs.
+    instance.ctx.db.tx(() => {
+      for (const { sha256 } of entries) instance.ctx.db.run("INSERT INTO blob_cleanup(sha256) VALUES(?)", sha256);
+    });
+    const order: string[] = [];
+    const drained = storage(instance)
+      .drain()
+      .then(() => order.push("drained"));
+    const answered = client.call(api.items.list, { query: {} }).then(() => order.push("request"));
+    await Promise.all([drained, answered]);
+    assert.deepEqual(order, ["request", "drained"]);
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM blob_cleanup"), 0);
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM blobs"), 0);
+    assert.equal(
+      entries.some((e) => existsSync(e.path)),
+      false,
+    );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("Empty Trash journals every file and deletes them in the background", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "empty-owner");
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const { result } = await send(client, [{ path: `f${i}.txt`, data: `only here ${i}` }]);
+      ids.push(result.itemId);
+      await client.call(api.items.trash, { params: { id: result.itemId } });
+    }
+    const shared = await send(client, [{ path: "kept.txt", data: "only here 0" }]);
+    assert.deepEqual(await client.call(api.items.emptyTrash), { removed: 3 });
+    await storage(instance).drain();
+    for (let i = 1; i < 3; i++) assert.equal(existsSync(instance.ctx.blobs.path(hash(`only here ${i}`))), false);
+    // Content another item still uses stays.
+    assert.equal(existsSync(instance.ctx.blobs.path(hash("only here 0"))), true);
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM items WHERE id = ?", shared.result.itemId), 1);
+  } finally {
     await instance.close();
   }
 });

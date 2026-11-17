@@ -224,7 +224,16 @@ export async function buildApp(config: Config): Promise<App> {
         const stages: [string, () => unknown][] = [
           ["Library retention", () => ctx.library.sweep(now)],
           ["Upload cleanup", () => ctx.transfers.sweep(now)],
-          ["Blob cleanup", () => ctx.blobs.sweep()],
+          [
+            "Blob cleanup",
+            async () => {
+              try {
+                await ctx.blobs.drain();
+              } finally {
+                ctx.blobs.sweep();
+              }
+            },
+          ],
           ["Session cleanup", () => sweepAuth(ctx, now)],
           ["Activity cleanup", () => ctx.activity.sweep(now)],
           ["Usage statistics", () => ctx.usage.sweep(now)],

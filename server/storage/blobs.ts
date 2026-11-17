@@ -27,6 +27,8 @@ export const sameBytes = (a: Stats, b: Stats) =>
 type Integrity = "ok" | "missing" | "corrupt" | "unreadable";
 type BlobRow = { sha256: string; size: number; created: number; integrity: Integrity; checked_at: number | null };
 type ScanProgress = { after: string; started: number; errors: number };
+/** Blobs deleted per step of background cleanup, between which other requests run. */
+const CLEANUP_BATCH = 64;
 const PROGRESS = "blob_scrub_progress";
 const FULL_CHECK = "blob_scrub_last_full_check";
 
@@ -147,6 +149,124 @@ export function createBlobStore(ctx: Context): BlobStore {
       }
     }
     return { removedFiles, errors };
+  };
+
+  /**
+   * `collect` for many blobs without holding the event loop: each unlink is still decided and done
+   * with no await between the reference check and the unlink (an upload of the same bytes could
+   * otherwise be adopted in between), but the directory syncs run asynchronously, once per directory
+   * for the whole batch, and one transaction forgets the batch. Only the exact cleanup rows seen are
+   * removed, after rechecking each blob, since uploads may have staged or adopted it meanwhile.
+   */
+  const collectBatch = async (candidates: string[]) => {
+    const errors: unknown[] = [];
+    let removedFiles = 0;
+    const done: { sha256: string; referenced: boolean; rows: string[] }[] = [];
+    const directories = new Set<string>();
+    let thumbnailsChanged = false;
+    for (const sha256 of new Set(candidates)) {
+      try {
+        if (leased(sha256)) continue;
+        const referenced = !!ctx.db.get("SELECT 1 FROM nodes WHERE blob = ? LIMIT 1", sha256);
+        const pending = ctx.db.all<{ temporary: string; kind: "blob" | "thumbnail" }>(
+          "SELECT temporary, kind FROM blob_cleanup WHERE sha256 = ?",
+          sha256,
+        );
+        if (referenced && !pending.length) continue;
+        if (!recorded(sha256) && !pending.length) {
+          ctx.db.run("INSERT INTO blob_cleanup(sha256) VALUES(?)", sha256);
+          pending.push({ temporary: "", kind: "blob" });
+        }
+        const directory = dirname(path(sha256));
+        for (const { temporary, kind } of pending)
+          if (temporary && unlinkIfPresent(join(kind === "thumbnail" ? thumbnails : directory, temporary)))
+            removedFiles++;
+        if (pending.length) for (const dir of [root, dirname(directory), directory]) directories.add(dir);
+        if (!referenced) {
+          changing(sha256);
+          if (unlinkIfPresent(path(sha256))) removedFiles++;
+          directories.add(directory);
+        }
+        for (const file of renditionFiles(sha256)) if (unlinkIfPresent(file)) removedFiles++;
+        thumbnailsChanged = true;
+        done.push({ sha256, referenced, rows: pending.map((row) => row.temporary) });
+      } catch (error) {
+        ctx.log.error({ err: error, blob: sha256 }, "blob cleanup failed; retry required");
+        errors.push(error);
+      }
+    }
+    if (!done.length) return { removedFiles, errors };
+    try {
+      const sync = (dir: string) =>
+        fsyncDirectory(dir, true).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
+      await Promise.all([...directories].map(sync));
+      if (thumbnailsChanged) await fsyncDirectory(thumbnails, true);
+    } catch (error) {
+      // The unlinks may not be durable: keep every row for the next attempt.
+      ctx.log.error({ err: error }, "blob cleanup failed; retry required");
+      return { removedFiles, errors: [...errors, error] };
+    }
+    ctx.db.tx(() => {
+      for (const { sha256, referenced, rows } of done) {
+        const stillUnused =
+          !referenced && !leased(sha256) && !ctx.db.get("SELECT 1 FROM nodes WHERE blob = ? LIMIT 1", sha256);
+        if (stillUnused) ctx.db.run("DELETE FROM blobs WHERE sha256 = ?", sha256);
+        for (const temporary of rows)
+          ctx.db.run("DELETE FROM blob_cleanup WHERE sha256 = ? AND temporary = ?", sha256, temporary);
+      }
+    });
+    return { removedFiles, errors };
+  };
+  const yieldToRequests = () => new Promise((resolve) => setImmediate(resolve));
+  /** Runs `collectBatch` over many blobs, a few dozen at a time, letting requests run in between. */
+  const collectAll = async (candidates: string[]) => {
+    const errors: unknown[] = [];
+    let removedFiles = 0;
+    for (let i = 0; i < candidates.length; i += CLEANUP_BATCH) {
+      if (closing.signal.aborted) break;
+      const batch = await collectBatch(candidates.slice(i, i + CLEANUP_BATCH));
+      removedFiles += batch.removedFiles;
+      errors.push(...batch.errors);
+      await yieldToRequests();
+    }
+    return { removedFiles, errors };
+  };
+  let draining: Promise<unknown[]> | null = null;
+  let drainAgain = false;
+  /** Works through blob_cleanup until it holds only leased or failing rows. Calls while running join it. */
+  const drain = (): Promise<unknown[]> => {
+    if (draining) {
+      drainAgain = true;
+      return draining;
+    }
+    draining = (async () => {
+      // Start on the next microtask, so `draining` is set before a run with nothing to do clears it.
+      await Promise.resolve();
+      const errors: unknown[] = [];
+      try {
+        do {
+          drainAgain = false;
+          let after = "";
+          while (!closing.signal.aborted) {
+            const rows = ctx.db.all<{ sha256: string }>(
+              "SELECT DISTINCT sha256 FROM blob_cleanup WHERE sha256 > ? ORDER BY sha256 LIMIT ?",
+              after,
+              CLEANUP_BATCH,
+            );
+            if (!rows.length) break;
+            after = rows[rows.length - 1].sha256;
+            errors.push(...(await collectBatch(rows.map((row) => row.sha256))).errors);
+            await yieldToRequests();
+          }
+        } while (drainAgain && !closing.signal.aborted);
+      } finally {
+        draining = null;
+      }
+      return errors;
+    })();
+    return draining;
   };
   const unavailable = () => fail(503, "A stored file is unavailable. Contact the administrator.");
   const mark = (row: BlobRow, integrity: Integrity) =>
@@ -423,7 +543,7 @@ export function createBlobStore(ctx: Context): BlobStore {
 
     async close() {
       closing.abort();
-      await running;
+      await Promise.all([running, draining]);
     },
 
     async stage(file, sha256, expected) {
@@ -534,6 +654,11 @@ export function createBlobStore(ctx: Context): BlobStore {
       if (errors.length) throw new AggregateError(errors, "Stored files could not be cleaned up; retry required.");
     },
 
+    async drain() {
+      const errors = await drain();
+      if (errors.length) throw new AggregateError(errors, "Stored files could not be cleaned up; retry required.");
+    },
+
     sweep() {
       // Bound work by inspected rows, not only matches. Advance past failures and active uploads so
       // a stubborn first candidate cannot starve later cleanup; the next pass retries retained rows.
@@ -549,8 +674,9 @@ export function createBlobStore(ctx: Context): BlobStore {
     },
 
     async reconcile() {
-      // Only unreferenced blobs and pending cleanup have work to do; `collect` rechecks each one.
-      const collected = collect(
+      // Only unreferenced blobs and pending cleanup have work to do; each is rechecked. A backlog
+      // goes in batches, so even a long one leaves startup responsive.
+      const collected = await collectAll(
         ctx.db
           .all<{ sha256: string }>(
             `SELECT sha256 FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.blob = b.sha256)

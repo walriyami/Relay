@@ -12,9 +12,11 @@ const blobFiles = (root: string) =>
     .filter((e) => e.isFile())
     .map((e) => e.name);
 
+/** Deletes an item forever and waits for its files to go, which happens in the background. */
 async function trashAndDelete(client: Awaited<ReturnType<typeof member>>, id: string) {
   await client.call(api.items.trash, { params: { id } });
   await client.call(api.items.remove, { params: { id } });
+  await client.instance.ctx.blobs.drain();
 }
 
 test("identical content is stored once and lives until the last item referencing it is purged", async () => {

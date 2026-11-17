@@ -87,6 +87,12 @@ export interface BlobStore {
   stageThumbnail(sha256: string): { file: string; finish(): void; discard(): void };
   /** Deletes the given blobs if no node references them any more. Synchronous. */
   collect(candidates: Iterable<string>): void;
+  /**
+   * Deletes every blob in the cleanup journal (blob_cleanup) that nothing uses any more, in small
+   * batches between other requests. Calls while it runs join the same run. Rejects with the failures,
+   * which stay journaled for the next attempt.
+   */
+  drain(): Promise<void>;
   /** Retries a bounded batch of durable unreferenced blob cleanup. */
   sweep(): void;
   /** Startup reconciliation: removes files with no row and reports rows with no file. */
@@ -117,9 +123,12 @@ export interface Library {
   summaries(itemIds: string[]): Map<string, M.ItemSummary>;
   /** All nodes of an item with their paths, texts included, ordered by path. */
   nodes(itemId: string): M.Node[];
-  /** Moves an item to Trash and revokes its links. Idempotent. */
+  /** Moves an item to Trash, which pauses its links. Idempotent. */
   trash(owner: string, itemId: string): void;
-  /** Removes an item permanently and collects its blobs. Synchronous. */
+  /**
+   * Removes an item permanently. Its rows go at once; files nothing else uses are journaled and
+   * deleted in the background (BlobStore.drain).
+   */
   purge(itemId: string): void;
   sweep(now: number): Promise<void>;
 }

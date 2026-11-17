@@ -339,30 +339,60 @@ export function removeItem(ctx: Context, owner: string, itemId: string) {
   purge(ctx, itemId);
 }
 
-export function emptyTrash(ctx: Context, owner: string) {
-  const ids = ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ? AND trashed IS NOT NULL", owner);
-  for (const { id } of ids) purge(ctx, id);
-  return { removed: ids.length };
+/** Items deleted per transaction when emptying Trash, between which other requests run. */
+const PURGE_BATCH = 25;
+
+export async function emptyTrash(ctx: Context, owner: string) {
+  const ids = ctx.db
+    .all<{ id: string }>("SELECT id FROM items WHERE owner = ? AND trashed IS NOT NULL", owner)
+    .map((r) => r.id);
+  let removed = 0;
+  for (let i = 0; i < ids.length; i += PURGE_BATCH) {
+    ctx.db.tx(() => {
+      for (const id of ids.slice(i, i + PURGE_BATCH)) if (purgeRows(ctx, id, { trashedOnly: true })) removed++;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  purged(ctx, owner);
+  return { removed };
 }
 
-export function purge(ctx: Context, itemId: string) {
-  const owner = ctx.db.value<string>("SELECT owner FROM items WHERE id = ?", itemId);
-  if (owner === undefined) return;
-  const blobs = ctx.db
-    .all<{ blob: string }>("SELECT DISTINCT blob FROM nodes WHERE item = ? AND blob IS NOT NULL", itemId)
-    .map((r) => r.blob);
-  ctx.db.tx(() => {
-    ctx.transfers.cancelForItem(itemId);
-    ctx.db.run("DELETE FROM items WHERE id = ?", itemId);
-  });
-  try {
-    ctx.blobs.collect(blobs);
-  } catch (error) {
-    // Unreferenced blob rows are durable cleanup work; maintenance retries after filesystem recovery.
-    ctx.log.error({ err: error, item: itemId }, "Physical deletion pending; blob cleanup will retry");
-  }
+/**
+ * Deletes an item's rows and journals the blobs only it used, in the caller's transaction. With
+ * `trashedOnly`, an item restored meanwhile is left alone. Returns whether it deleted anything.
+ */
+function purgeRows(ctx: Context, itemId: string, { trashedOnly = false } = {}) {
+  if (!ctx.db.get(`SELECT 1 FROM items WHERE id = ?${trashedOnly ? " AND trashed IS NOT NULL" : ""}`, itemId))
+    return false;
+  const blobs = JSON.stringify(
+    ctx.db
+      .all<{ blob: string }>("SELECT DISTINCT blob FROM nodes WHERE item = ? AND blob IS NOT NULL", itemId)
+      .map((r) => r.blob),
+  );
+  ctx.transfers.cancelForItem(itemId);
+  ctx.db.run("DELETE FROM items WHERE id = ?", itemId);
+  // The intent commits with the deletion, so a crash before the files go leaves work, not orphans.
+  ctx.db.run(
+    `INSERT OR IGNORE INTO blob_cleanup(sha256)
+     SELECT value FROM json_each(?) WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE blob = value)`,
+    blobs,
+  );
+  return true;
+}
+
+/** After items are deleted: their files go in the background, and screens refresh. */
+function purged(ctx: Context, owner: string) {
+  // Failures stay journaled and are logged per file; maintenance retries them.
+  void ctx.blobs.drain().catch(() => {});
   ctx.events.publish(owner, "items", "links", "deliveries", "requests");
   ctx.events.broadcast("account");
+}
+
+/** Removes an item permanently; its files are deleted in the background. */
+export function purge(ctx: Context, itemId: string, options: { trashedOnly?: boolean } = {}) {
+  const owner = ctx.db.value<string>("SELECT owner FROM items WHERE id = ?", itemId);
+  if (owner === undefined) return;
+  if (ctx.db.tx(() => purgeRows(ctx, itemId, options))) purged(ctx, owner);
 }
 
 /**
@@ -390,7 +420,7 @@ export async function sweep(ctx: Context, now: number) {
     now,
   )) {
     try {
-      purge(ctx, item.id);
+      purge(ctx, item.id, { trashedOnly: true });
     } catch (error) {
       errors.push(error);
     }
