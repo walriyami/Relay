@@ -8,6 +8,7 @@ Relay runs at **https://relay.walriyami.com** on the owner's Raspberry Pi 5, man
 - [Settings](#settings)
 - [Data, backups and resets](#data-backups-and-resets)
 - [Logs and health](#logs-and-health)
+- [Direct transfers on your network](#direct-transfers-on-your-network)
 - [Nearby](#nearby)
 - [First start and members](#first-start-and-members)
 - [Limits and storage](#limits-and-storage)
@@ -60,7 +61,8 @@ Settings live in the environment's `settings` in walctl, which keeps them privat
 | `RELAY_TRUST_PROXY`                                                                                                                     | `127.0.0.1,::1,wal-gateway`                  | Comma-separated proxies whose `X-Forwarded-For` Relay believes: addresses, CIDR ranges, or host names such as the gateway's container name, looked up every 15 seconds. Relay gives each visitor their own rate limits by that address, and Nearby uses it to tell who shares a network. |
 | `RELAY_SECRET`                                                                                                                          | generated                                    | Key that derives share-link and request tokens, at least 32 characters. If unset, Relay generates `/data/secret.key`. Moving the data to a different key keeps every file, but all existing links stop working.                                                                          |
 | `RELAY_SETUP_KEY`                                                                                                                       | off                                          | `true` makes first setup ask for a one-time key from `/data/setup.key`, so only someone who can read the server's data can create the administrator. walctl has no way to read that file, so on the Pi it would lock setup.                                                              |
-| `RELAY_DIRECT`                                                                                                                          | `false`                                      | Direct transfers, which can't work in walctl's container. Keep `false`.                                                                                                                                                                                                                  |
+| `RELAY_DIRECT`                                                                                                                          | `false`                                      | `false` turns [direct transfers](#direct-transfers-on-your-network) off. Unset, they're on. Production keeps them off until walctl can give Relay the UDP port they need.                                                                                                                |
+| `RELAY_DIRECT_PORT`                                                                                                                     | unset (`3090`)                               | UDP port direct transfers use.                                                                                                                                                                                                                                                           |
 | `WAL_SSO_ISSUER`, `WAL_SSO_CLIENT_ID`, `WAL_SSO_CLIENT_SECRET`, `WAL_CONTROL_ORIGIN`, `WAL_CONTROL_APP_TOKEN`, `WAL_CONTROL_PROJECT_ID` | all written by `walctl sso relay-production` | Sign-in with a Walriyami account. Relay checks each person's access with Walriyami Control at `WAL_CONTROL_ORIGIN`. The first five must all be set, or Walriyami sign-in is off and only Relay's own accounts work.                                                                      |
 
 The image itself sets `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=3090` and `RELAY_DATA=/data`. Don't copy those into the environment's settings: settings win over the image, so a copy would silently pin old values after a base-image update. An invalid value stops Relay at startup with a message naming the variable.
@@ -82,6 +84,24 @@ Run one Relay per data storage, and never point a test copy at production's data
 Integrity checks run in the background, one at a time. Each batch admits up to 100 files, 256 MiB or 30 seconds of work. Continue batches in Admin until the full scan completes. Healthy files stay available when another file is damaged; downloading known-damaged content fails, and uploading a valid copy repairs it. Hashes detect damage but cannot reconstruct lost bytes.
 
 The build stores Brotli and gzip copies of the web app's text files, and Relay serves whichever the browser accepts. Fingerprinted bundles cache for a year; HTML and other files revalidate. Relay itself compresses its large metadata responses, and only for requests its own pages make, so another site can never measure a compressed response.
+
+## Direct transfers on your network
+
+When a member is on the same network as the server, their uploads and downloads can skip the internet connection and go straight to Relay, at the speed of the local network. Nothing needs setting up on their devices: no addresses, certificates, host names or apps.
+
+**They're off on relay.walriyami.com for now.** Direct transfers need a UDP port that devices on the Pi's home network can reach, and walctl runs Relay in a container that publishes only its web port, to the Pi itself. Until walctl can give Relay that port, production keeps `RELAY_DIRECT=false`, and everyone's transfers go the usual way through the internet connection. Nothing else changes.
+
+After someone signs in, their browser tries a direct connection in the background. If it works, a **Direct** button appears in the top bar and their transfers go direct. The button switches this off, and on again, for that browser. Anywhere the connection never works, the button never appears and nothing changes. If a direct connection drops mid-transfer, the transfer carries on the usual way from where it was.
+
+How it works: Relay runs a helper process beside itself that accepts WebRTC connections, encrypted end to end, on UDP port `RELAY_DIRECT_PORT` (default `3090`). Relay introduces each signed-in browser to it. The browser names its own addresses, usually hidden behind random `.local` names that only devices on its network can look up, and the helper names the server's. Each side checks the other's, only ever at local network addresses, so the connection comes up only on the server's own networks. The helper passes the browser's upload chunks and file and ZIP downloads to Relay through a private socket, as the member who signed in. Nothing else travels that way, so sign-in, links, upload requests and guests always use the usual way.
+
+What it needs from the host:
+
+- **Relay on the host's network.** Browsers reach the helper at the server's private addresses (`10.x`, `172.16–31.x`, `192.168.x` and unique local IPv6), whichever it has at the time. Running Relay with Node directly (`npm run dev` or `npm start`) works as it is. In a container on Linux, that means host networking (`docker run --network host`), not a published port. Docker Desktop on a Mac or Windows works without it, because the helper makes the first contact through the computer, unless one of Docker's own networks covers the local network's addresses (an iPhone's Personal Hotspot uses `172.20.10.x`, for example).
+- **The UDP port open to the local network.** If the host has a firewall, allow UDP `RELAY_DIRECT_PORT` from the local network only; with ufw, for example, `sudo ufw allow from 192.168.1.0/24 to any port 3090 proto udp`. Don't forward it on the router.
+- **Devices that can reach the server.** Guest Wi-Fi and access points with client isolation keep devices apart, and so do most VPNs; their transfers go the usual way.
+
+**Admin → Overview** shows whether direct transfers are on and how many browsers are connected, and warns when they're unavailable, with the reason, such as the UDP port being taken by another program. Relay starts the helper again by itself if it stops.
 
 ## Nearby
 

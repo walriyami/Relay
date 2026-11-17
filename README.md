@@ -40,7 +40,7 @@ Drop or paste files, whole folders and text into one draft. Nothing uploads unti
 
 ### ⏯️ Large files that survive
 
-Uploads use the resumable [tus](https://tus.io) protocol, several files at a time, in chunks sized to what the connection is achieving (256 KiB to 32 MiB). A dropped network or a server restart picks up where it left off. You can pause or cancel any transfer.
+Uploads use the resumable [tus](https://tus.io) protocol, several files at a time, in chunks sized to what the connection is achieving (256 KiB to 32 MiB). A dropped network or a server restart picks up where it left off. You can pause or cancel any transfer. On the server's own network, uploads and downloads can skip the internet and go straight to Relay, where the host allows it ([off on relay.walriyami.com for now](docs/hosting.md#direct-transfers-on-your-network)).
 
 </td>
 </tr>
