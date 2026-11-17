@@ -156,6 +156,7 @@ test("a database from before shared sign-in gains its tables without a migration
     raw.close();
     const db = new Database(path);
     assert.deepEqual(db.upgraded.sort(), [
+      "added index external_identities_user",
       "added table external_identities",
       "added table external_sessions",
       "added table sso_flows",

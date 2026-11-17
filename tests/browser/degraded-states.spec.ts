@@ -12,7 +12,7 @@ test("device outages and activity outages remain visible and can be retried", as
     });
   }
   await signedIn(page);
-  await expect(page.getByText("Device availability is unknown. Retry to refresh.")).toBeVisible();
+  await expect(page.getByText("Temporary review outage")).toBeVisible();
   await page.getByRole("button", { name: /^Activity/ }).click();
   const panel = page.getByRole("dialog", { name: "Activity", exact: true });
   await expect(panel.getByText(/Temporary review outage/).first()).toBeVisible();
@@ -21,7 +21,7 @@ test("device outages and activity outages remain visible and can be retried", as
   await panel.getByRole("button", { name: "Retry" }).first().click();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText("Device availability is unknown. Retry to refresh.")).toHaveCount(0);
+  await expect(page.getByText("Temporary review outage")).toHaveCount(0);
 });
 
 test("requests expire without an SSE event and older closed requests remain reachable", async ({ page }) => {
