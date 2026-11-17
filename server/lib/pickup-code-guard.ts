@@ -3,10 +3,11 @@
 // (a /24, or an IPv6 /48) gets only a few wrong tries a day, so even a spread-out attack makes
 // slow progress against codes that only work for a day. A right code from a network that hasn't
 // been guessing always works. Counts live in memory; a restart forgives everyone.
-import { isIPv4 } from "node:net";
 import type { Context } from "../context.ts";
 import { fail } from "./errors.ts";
-import { addressKey } from "../modules/auth/limits.ts";
+import { addressKey, wideNetworkOf } from "../modules/auth/limits.ts";
+
+export { wideNetworkOf };
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -39,14 +40,6 @@ function guardOf(ctx: Context) {
   let guard = guards.get(ctx);
   if (!guard) guards.set(ctx, (guard = { networks: new Map(), wide: new Map(), recent: [], attackUntil: 0 }));
   return guard;
-}
-
-/** The wider network an address belongs to: its IPv4 /24 or IPv6 /48. */
-export function wideNetworkOf(ip: string) {
-  const key = addressKey(ip);
-  if (isIPv4(key)) return key.split(".").slice(0, 3).join(".") + ".0/24";
-  if (key.endsWith("::/64")) return key.split(":").slice(0, 3).join(":") + "::/48";
-  return key;
 }
 
 const since = (times: number[] | undefined, from: number) => (times ?? []).filter((time) => time > from).length;

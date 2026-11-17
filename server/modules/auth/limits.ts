@@ -35,6 +35,17 @@ export function addressKey(ip: string): string {
     .join(":")}::/64`;
 }
 
+/**
+ * The wider network an address belongs to: its IPv4 /24 or IPv6 /48, about what one home, office
+ * or provider customer can use at once. Limits meant to slow someone with many addresses use it.
+ */
+export function wideNetworkOf(ip: string) {
+  const key = addressKey(ip);
+  if (isIPv4(key)) return key.split(".").slice(0, 3).join(".") + ".0/24";
+  if (key.endsWith("::/64")) return key.split(":").slice(0, 3).join(":") + "::/48";
+  return key;
+}
+
 /** A per-route rate limit bucketed by `addressKey`. */
 export const perAddress = (max: number, timeWindow: string) => ({
   max,
@@ -84,6 +95,14 @@ export class FailureLog {
     const count = this.active.get(key) ?? 0;
     if (count <= 1) this.active.delete(key);
     else this.active.set(key, count - 1);
+  }
+
+  /** How long until `key` has fewer than `max` failures in the window again. */
+  waitFor(key: string, max: number, now: number) {
+    this.prune(now);
+    const times = this.entries.filter((entry) => entry.key === key).map((entry) => entry.time);
+    if (times.length < max) return 0;
+    return times[times.length - max] + this.windowMs - now;
   }
 
   total(now: number) {

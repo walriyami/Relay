@@ -51,6 +51,8 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - One person typing wrong codes can no longer pause code entry for everyone. Each network gets a few wrong tries; when many networks guess at once, each wider network gets only a few a day, Admin shows when it happened, and right codes keep working for everyone else.
 - Pickup and sign-in codes are always six digits and work for a day; the owner's screen shows a fresh code when the old one ends, and links and QR codes don't change. An ended code's digits can be used again after 30 days, so Relay never runs out of codes. The four-digit setting is gone.
 - One account can make at most 100 sign-in codes a day.
+- Strangers guessing a member's password can no longer lock them out: a browser the member has signed in on before keeps working, each network gets only a few wrong tries, and a flood of guesses can't crowd out everyone's sign-ins. Joins with a dead invitation are turned away before any password work.
+- New passwords need at least 10 characters. Existing shorter passwords keep working.
 
 ## [1.0.0] - 2026-09-27
 

@@ -27,15 +27,21 @@ export function useTestPasswordCost() {
 
 // One scrypt uses about 32 MiB. Limit active derivations and bound the wait list so a distributed
 // burst at public setup/join/sign-in endpoints cannot turn into unbounded native work and memory.
+// Browsers an account has signed in on before have a wait list of their own and go first, so a
+// flood of strangers' guesses can't keep the account's owner out.
 const MAX_ACTIVE_SCRYPT = 2;
 const MAX_QUEUED_SCRYPT = 32;
+const MAX_QUEUED_PRIORITY = 16;
 let activeScrypt = 0;
 const scryptQueue: Array<() => void> = [];
+const priorityQueue: Array<() => void> = [];
 
-async function withScrypt<T>(work: () => Promise<T>): Promise<T> {
+async function withScrypt<T>(work: () => Promise<T>, priority = false): Promise<T> {
   if (activeScrypt >= MAX_ACTIVE_SCRYPT) {
-    if (scryptQueue.length >= MAX_QUEUED_SCRYPT) fail(429, "Password service is busy. Try again shortly.");
-    await new Promise<void>((resolve) => scryptQueue.push(resolve));
+    const queue = priority ? priorityQueue : scryptQueue;
+    if (queue.length >= (priority ? MAX_QUEUED_PRIORITY : MAX_QUEUED_SCRYPT))
+      fail(429, "Password service is busy. Try again shortly.");
+    await new Promise<void>((resolve) => queue.push(resolve));
   } else {
     activeScrypt++;
   }
@@ -43,7 +49,7 @@ async function withScrypt<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } finally {
-    const next = scryptQueue.shift();
+    const next = priorityQueue.shift() ?? scryptQueue.shift();
     if (next) next();
     else activeScrypt--;
   }
@@ -58,15 +64,18 @@ export async function hashPassword(password: string): Promise<string> {
   const key = await withScrypt(() => scrypt(password.normalize("NFKC"), salt, 32, SCRYPT));
   return `scrypt$${SCRYPT.N}$${salt}$${key.toString("base64url")}`;
 }
-export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
+/** `priority` is for a browser the account has signed in on before. */
+export async function verifyPassword(password: string, encoded: string, { priority = false } = {}): Promise<boolean> {
   const [scheme, n, salt, key] = encoded.split("$");
   if (scheme !== "scrypt" || !salt || !key) return false;
   const expected = Buffer.from(key, "base64url");
-  const actual = await withScrypt(() =>
-    scrypt(password.normalize("NFKC"), salt, expected.length, {
-      ...SCRYPT,
-      N: Number(n),
-    }),
+  const actual = await withScrypt(
+    () =>
+      scrypt(password.normalize("NFKC"), salt, expected.length, {
+        ...SCRYPT,
+        N: Number(n),
+      }),
+    priority,
   );
   return timingSafeEqual(actual, expected);
 }
@@ -106,6 +115,10 @@ export class Secrets {
   }
   nearbyToken(inviteId: string) {
     return this.mac("nearby", inviteId).toString("base64url");
+  }
+  /** Vouches that an account has signed in on a browser (see `rememberBrowser`). */
+  knownBrowserMac(userId: string) {
+    return this.mac("known-browser", userId).toString("base64url").slice(0, 32);
   }
   /** A database-safe, purpose-separated digest for a low-entropy numeric pickup code. */
   pickupCodeHash(digits: string) {

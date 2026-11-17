@@ -136,7 +136,15 @@ export function registerPasskeys(app: FastifyInstance, ctx: Context) {
     api.account.passkeyOptions,
     async ({ member, body, req }) => {
       const current = ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", member.userId)!;
-      if (!(await checkPassword(ctx, member.username, body.password, current)))
+      if (
+        !(await checkPassword(
+          ctx,
+          req,
+          { username: member.username, userId: member.userId, signedIn: true },
+          body.password,
+          current,
+        ))
+      )
         fail(403, "Current password is incorrect.");
       if (ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", member.userId) !== current)
         fail(403, "Current password is incorrect.");

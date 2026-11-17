@@ -105,7 +105,15 @@ export async function registerSharedSignIn(app: FastifyInstance, ctx: Context) {
         const member = currentMember(ctx, req);
         if (!member) fail(401, "Sign into your application account first.");
         const before = ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", member.userId)!;
-        if (!(await checkPassword(ctx, member.username, password, before)))
+        if (
+          !(await checkPassword(
+            ctx,
+            req,
+            { username: member.username, userId: member.userId, signedIn: true },
+            password,
+            before,
+          ))
+        )
           fail(403, "Application password is incorrect.");
         if (
           currentMember(ctx, req)?.sessionHash !== member.sessionHash ||

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { rememberBrowser } from "./passwords.ts";
 import type { Context } from "../../context.ts";
 import {
   DEFAULTS,
@@ -188,6 +189,7 @@ export function insertSession(ctx: Context, userId: string, device: NewDevice, m
 
 export function finishSignIn(ctx: Context, reply: FastifyReply, session: NewSession): Me {
   reply.setCookie(sessionCookie(ctx, reply.request), session.token, cookieOptions(ctx, reply.request, SESSION_MS));
+  rememberBrowser(ctx, reply, session.userId);
   ctx.events.publish(session.userId, "devices");
   return me(ctx, session.userId, session.deviceId, session.csrf);
 }

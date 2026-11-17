@@ -21,7 +21,7 @@ export const LIMITS = {
   linkDaysMax: 365,
   retentionDaysMax: 3650,
   trashDaysMax: 365,
-  passwordMin: 6,
+  passwordMin: 10,
   /** The optional name a guest gives with a submission. */
   senderLength: 80,
   inviteNoteLength: 80,

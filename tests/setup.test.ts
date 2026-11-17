@@ -188,11 +188,11 @@ test("two browsers racing through setup make exactly one administrator", async (
   }
 });
 
-test("setup accepts six-character passwords and rejects shorter ones, unusable usernames and other sites", async () => {
+test("setup accepts ten-character passwords and rejects shorter ones, unusable usernames and other sites", async () => {
   const instance = await start({}, undefined, { setup: false });
   try {
     const visitor = new Client(instance);
-    assert.equal(await status(visitor.call(api.setup.account, { body: { ...account, password: "short" } })), 400);
+    assert.equal(await status(visitor.call(api.setup.account, { body: { ...account, password: "nine-char" } })), 400);
     assert.equal(await status(visitor.call(api.setup.account, { body: { ...account, username: "a b" } })), 400);
     const post = (headers: Record<string, string>) =>
       visitor.raw({
@@ -208,12 +208,12 @@ test("setup accepts six-character passwords and rejects shorter ones, unusable u
       { state: "account", keyRequired: false, sharedSignIn: false },
       "nothing was created",
     );
-    const sixCharacters = "secret";
+    const tenCharacters = "ten-chars!";
     const me = await visitor.call(api.setup.account, {
-      body: { ...account, password: sixCharacters },
+      body: { ...account, password: tenCharacters },
     });
     assert.equal(me.user.username, "ada");
-    assert.equal((await new Client(instance).signIn("ada", sixCharacters)).user.id, me.user.id);
+    assert.equal((await new Client(instance).signIn("ada", tenCharacters)).user.id, me.user.id);
   } finally {
     await instance.close();
   }
