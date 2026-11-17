@@ -35,6 +35,8 @@ export class LocalPeer {
   /** Response body bytes that arrived, and that were credited back, over the connection's life. */
   private arrived = 0;
   private credited = 0;
+  /** Frames that arrived on the first lane. */
+  firstFrames = 0;
   /** Resolves once the connection is over. */
   readonly closed: Promise<void>;
   private onClosed = () => {};
@@ -62,14 +64,17 @@ export class LocalPeer {
       },
       LOCAL.messageChars,
     );
-    this.use(channel);
+    this.use(channel, true);
     pc.onStateChange((state) => {
       if (state === "failed" || state === "closed") this.close();
     });
   }
 
-  /** Sets up a connection the way the page does, signed in as `client`, and waits for its lanes. */
-  static async connect(client: Pick<Session, "call">): Promise<LocalPeer> {
+  /**
+   * Sets up a connection the way the page does, signed in as `client`, and waits for its lanes;
+   * with `widen: false`, the first lane alone, for `widen()` to offer the others later.
+   */
+  static async connect(client: Pick<Session, "call">, { widen = true } = {}): Promise<LocalPeer> {
     const { pc, channel, opened } = offering(() => peer?.close());
     let peer: LocalPeer | undefined;
     try {
@@ -77,7 +82,7 @@ export class LocalPeer {
       pc.setRemoteDescription(answer, "answer");
       await opened();
       peer = new LocalPeer(pc, channel);
-      await peer.widen();
+      if (widen) await peer.widen();
       return peer;
     } catch (error) {
       peer?.close();
@@ -92,7 +97,7 @@ export class LocalPeer {
   }
 
   /** Offers the other lanes on the first, as the page does, and waits for them to open. */
-  private async widen() {
+  async widen() {
     // Any lane but the first may go; what it carried goes on the others.
     const joined = new Map<number, Lane>();
     const gone = (i: number) => {
@@ -108,9 +113,11 @@ export class LocalPeer {
       sdps.map(async (sdp, i) => {
         const { pc, channel, opened } = lanes[i];
         this.pcs.push(pc);
+        // Listening from the start, as the page does: the helper may send on the lane the moment it
+        // opens, and node-datachannel drops what arrives with no one listening.
+        this.use(channel);
         pc.setRemoteDescription(sdp, "answer");
         await opened();
-        this.use(channel);
         joined.set(i, laneOf(channel));
         this.mux.add(joined.get(i)!);
         pc.onStateChange((state) => {
@@ -120,11 +127,14 @@ export class LocalPeer {
     );
   }
 
-  private use(channel: DataChannel) {
+  private use(channel: DataChannel, first = false) {
     feed(this.mux, channel);
     // Counting what arrives on the way.
     const deliver = (message: string | Buffer | ArrayBuffer) => {
-      if (typeof message !== "string") this.arrived += message.byteLength - HEADER;
+      if (typeof message !== "string") {
+        this.arrived += message.byteLength - HEADER;
+        if (first) this.firstFrames++;
+      }
       this.mux.receive(message);
     };
     channel.onMessage(deliver);

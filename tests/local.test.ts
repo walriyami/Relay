@@ -228,6 +228,34 @@ test("local: lanes that close mid-transfer take nothing with them", async () => 
   });
 });
 
+test("local: the helper keeps bytes off the first lane while the others open", async () => {
+  await withLocal(async ({ client }) => {
+    // Asked before the other lanes are offered, the answer waits for them rather than crowding the
+    // lane that carries control messages.
+    const peer = await LocalPeer.connect(client, { widen: false });
+    try {
+      const check = peer.fetch({ path: "/api/local/check" });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await peer.widen();
+      assert.equal((await check).status, 200);
+      assert.equal(peer.firstFrames, 0);
+    } finally {
+      peer.close();
+    }
+
+    // A browser that never offers them still gets its answer, on the first lane.
+    const alone = await LocalPeer.connect(client, { widen: false });
+    try {
+      const started = Date.now();
+      assert.equal((await alone.fetch({ path: "/api/local/check" })).status, 200);
+      assert.ok(Date.now() - started < 10_000);
+      assert.ok(alone.firstFrames > 0);
+    } finally {
+      alone.close();
+    }
+  });
+});
+
 test("local: the helper holds back a response until the browser returns credit", async () => {
   await withLocal(async ({ client }) => {
     const data = randomBytes(LOCAL.windowBytes + 2 * 1024 ** 2);
