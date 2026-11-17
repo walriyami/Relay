@@ -80,7 +80,7 @@ async function finish(owner: Client, transfer: TransferCreated) {
   });
 }
 
-test("suspending an owner preserves uploads only until the normal five-minute tab inactivity deadline", async (t) => {
+test("suspending an owner preserves uploads only until their normal pause deadlines", async (t) => {
   const instance = await start();
   try {
     let now = Date.now();
@@ -102,9 +102,15 @@ test("suspending an owner preserves uploads only until the normal five-minute ta
     assert.equal(existsSync(part(instance, transfer.uploads[1].id)), true);
     assert.equal(existsSync(part(instance, append.uploads[0].id)), true);
 
-    now = lease;
+    // A quiet page pauses its uploads: a guest's for an hour, the member's own for pausedUploadMs.
+    now = lease + 60 * 60_000;
     await instance.ctx.transfers.sweep(now);
     assert.equal(state(instance, transfer.id), "cancelled");
+    assert.equal(state(instance, append.id), "open");
+    assert.equal(existsSync(part(instance, append.uploads[0].id)), true);
+
+    now = lease + instance.ctx.config.pausedUploadMs;
+    await instance.ctx.transfers.sweep(now);
     assert.equal(state(instance, append.id), "cancelled");
     assert.equal((await boss.call(api.admin.overview)).members.find((m) => m.id === user.id)!.usage.reserved, 0);
     assert.equal(existsSync(part(instance, transfer.uploads[1].id)), false);

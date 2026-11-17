@@ -1,8 +1,8 @@
 import type * as Tus from "tus-js-client";
 import type { DetailedError } from "tus-js-client";
-import { headers } from "../../shared/api";
+import { headers, transferErrors } from "../../shared/api";
 import { uuidv7 } from "../../shared/ids";
-import { LIMITS } from "../../shared/model";
+import { LIMITS, type PausedTransfer } from "../../shared/model";
 import {
   ApiError,
   api,
@@ -23,9 +23,12 @@ import { isOnline, isProxyFailure, onConnectivity, reportFailure, whenOnline, wh
 import { notifyChange } from "./live";
 import { eventStream } from "./event-stream";
 import { pathKey } from "./path-key";
+import { keepScreenOn } from "./wake-lock";
 
-// Transfers live only in this tab. Nothing uploads until the user picks a destination, and closing
-// or reloading the tab abandons unfinished work on purpose.
+// Transfers run in this tab. Nothing uploads until the user picks a destination. A member's upload
+// that stops when the page sleeps, reloads or closes is only paused on the server: this page carries
+// on when it wakes, and a new page offers to continue it once the same files are chosen again
+// (see paused.ts). A guest's upload ends with its page.
 
 export type DraftFile = { file: File; path: string };
 export type Destination =
@@ -117,6 +120,13 @@ export type Transfer = {
    * space), so the same request can only fail again.
    */
   rejected?: 413 | 507;
+  /**
+   * The server stopped the whole transfer (it was cancelled, or paused too long), so its unfinished
+   * files can only be sent again as a new upload.
+   */
+  ended?: boolean;
+  /** Continued from an earlier page: what that page had already saved, which this one has no files for. */
+  carried?: { files: number; bytes: number; text: boolean };
 };
 
 // Chunks are sized so one request takes about CHUNK_SECONDS at the rate requests are achieving on
@@ -180,9 +190,13 @@ export const isBusy = (t: Transfer) =>
   (t.status === "failed" && !!t.cancelRequested);
 const stopped = (t: Transfer) => t.status === "cancelling" || t.status === "cancelled";
 
+/** Something of the transfer is already saved: a finished file or its text. */
+export const hasSaved = (t: Transfer) =>
+  t.tasks.some((task) => task.status === "done") || !!t.text.trim() || !!t.carried?.files || !!t.carried?.text;
+
 function summarize(t: Transfer) {
-  let sent = 0;
-  let done = 0;
+  let sent = t.carried?.bytes ?? 0;
+  let done = t.carried?.files ?? 0;
   let failed = 0;
   for (const task of t.tasks) {
     if (task.status === "done") {
@@ -219,6 +233,7 @@ function changed(immediate = false) {
     for (const t of transfers) summarize(t);
     version++;
     syncGuestStreams();
+    keepScreenOn(transfers.some((t) => ["preparing", "uploading", "finishing"].includes(t.status)));
     listeners.forEach((fn) => fn());
   };
   if (immediate) {
@@ -412,6 +427,7 @@ async function prepare(t: Transfer, input: StartInput) {
       if (!task.file.size) task.status = "done";
     });
     if (stopped(t)) return finishCancel(t);
+    rememberDestination(t);
     t.status = "uploading";
     changed(true);
     settle(t);
@@ -718,7 +734,15 @@ async function runTask(t: Transfer, task: FileTask) {
       await sessionChecks.get(t);
     }
     if (stopped(t) || !transfers.includes(t)) return;
-    task.error = uploadMessage(error);
+    // Not this file but the whole transfer: it was stopped (410), or another page now sends it or
+    // this page was closed (409). Retrying the file cannot help, so say so for the transfer.
+    const message = uploadMessage(error);
+    if (
+      status === 410 ||
+      (status === 409 && (message === transferErrors.moved || message === transferErrors.tabClosed))
+    )
+      return endTransfer(t, message, status === 410);
+    task.error = message;
     task.retryable = !status || status >= 500 || status === 429;
     task.status = "failed";
   }
@@ -743,12 +767,15 @@ async function finalize(t: Transfer) {
     if (t.link && prefs.autoCopyLink) t.copied = await copyText(shareUrl(t.link.token)).catch(() => false);
     t.status = "done";
     t.cancelRequested = false;
+    forgetDestination(t.id);
   } catch (error) {
     if (stopped(t)) return;
     t.error = (error as Error).message;
-    // 410: the server no longer holds the transfer (cancelled or its tab lease ended). Otherwise
-    // every file is saved and the transfer stays open for another attempt or destination.
-    t.status = error instanceof ApiError && error.status === 410 ? "failed" : "destination";
+    // 410: the server no longer holds the transfer (cancelled, or paused too long). Otherwise every
+    // file is saved and the transfer stays open for another attempt or destination.
+    const ended = error instanceof ApiError && error.status === 410;
+    t.status = ended ? "failed" : "destination";
+    if (ended) t.ended = true;
     // A device that went offline must leave the destination list.
     if (t.destination.kind === "device") notifyChange("devices");
   }
@@ -822,7 +849,7 @@ export async function skipFailed(t: Transfer) {
     changed(true);
     return;
   }
-  if (!t.tasks.some((task) => task.status === "done") && !t.text.trim()) {
+  if (!hasSaved(t)) {
     t.status = "cancelling";
     changed(true);
     return finishCancel(t);
@@ -834,6 +861,42 @@ export async function skipFailed(t: Transfer) {
 
 function abortUploads(t: Transfer) {
   for (const task of running.get(t.id) || []) task.stop?.();
+}
+
+/** The server refused the transfer as a whole; `again` when its unfinished files can be sent anew. */
+function endTransfer(t: Transfer, message: string, again: boolean) {
+  if (t.status === "failed") return;
+  t.status = "failed";
+  t.error = message;
+  t.stalled = false;
+  if (again) t.ended = true;
+  abortUploads(t);
+  forgetDestination(t.id);
+  changed(true);
+  if (!t.guest) notifyChange("items");
+}
+
+/**
+ * Sends a stopped transfer's unfinished files again as a new upload: added to its item when that
+ * was kept (something of it was saved, or it existed before), otherwise as it was first sent.
+ */
+export function sendAgain(t: Transfer) {
+  if (t.status !== "failed" || !t.ended) return;
+  const unfinished = t.tasks.filter((task) => task.status !== "done" && task.status !== "skipped");
+  const kept = !t.guest && t.itemId && (t.adding || hasSaved(t)) ? t.itemId : undefined;
+  dismiss(t);
+  if (!unfinished.length) return;
+  const files = unfinished.map(({ file, path }) => ({ file, path }));
+  return kept
+    ? startTransfer({ files, folders: [], text: "", name: t.name, item: kept, destination: t.destination })
+    : startTransfer({
+        files,
+        folders: t.folders,
+        text: t.text,
+        name: t.autoNamed ? null : t.name,
+        destination: t.destination,
+        guest: t.guest,
+      });
 }
 
 export function pause(t: Transfer) {
@@ -877,6 +940,7 @@ async function finishCancel(t: Transfer) {
     }
   }
   pendingCreates.delete(t.id);
+  forgetDestination(t.id);
   t.status = "cancelled";
   changed(true);
   if (!t.guest) notifyChange("items");
@@ -941,22 +1005,33 @@ onConnectivity(() => {
   changed(true);
 });
 
-/** Signing out stops everything this tab was doing. */
+/**
+ * Signing out, or another account taking over the page, stops everything this tab was doing. While
+ * the session still works (signing out), its uploads are cancelled so they stop holding space; once
+ * it doesn't, they stay paused for that account to continue after signing in again.
+ */
 export async function abandonAll() {
   const oldTab = tab();
-  const hadOpen = transfers.some(isBusy);
-  abandoned = null;
-  for (const t of transfers) {
-    if (isBusy(t) || pendingCreates.has(t.id)) {
-      t.status = "cancelled";
-      abortUploads(t);
-    }
+  const busy = transfers.filter((t) => isBusy(t) || pendingCreates.has(t.id));
+  for (const t of busy) {
+    t.status = "cancelled";
+    abortUploads(t);
   }
   pendingCreates.clear();
   transfers.splice(0);
   changed(true);
+  if (!busy.length) return;
+  await Promise.all(
+    busy
+      .filter((t) => !t.guest)
+      .map((t) =>
+        call(api.transfers.cancel, { params: { id: t.id } }).then(
+          () => forgetDestination(t.id),
+          () => {},
+        ),
+      ),
+  );
   // Closing the lease also rejects creates that were in flight when the principal changed.
-  if (!hadOpen) return;
   await fetch(closeTabUrl(oldTab), {
     method: "POST",
     credentials: "same-origin",
@@ -982,6 +1057,112 @@ function syncGuestStreams() {
 
 const closeTabUrl = (id: string) => api.transfers.closeTab.path.replace(":id", id);
 
+// Each member transfer's destination, kept in this browser so a page continuing it after a reload
+// or a closed tab finishes it the same way. A link's password is never stored: such a transfer is
+// finished as saved in Files, where a link can be made again.
+const DESTINATIONS = "relay.transfer-destinations";
+function readDestinations(): Record<string, Destination> {
+  try {
+    const value = JSON.parse(localStorage.getItem(DESTINATIONS) || "{}") as unknown;
+    return value && typeof value === "object" ? (value as Record<string, Destination>) : {};
+  } catch {
+    return {};
+  }
+}
+function writeDestinations(all: Record<string, Destination>) {
+  try {
+    if (Object.keys(all).length) localStorage.setItem(DESTINATIONS, JSON.stringify(all));
+    else localStorage.removeItem(DESTINATIONS);
+  } catch {
+    // Without storage a continued transfer is saved to Files.
+  }
+}
+function rememberDestination(t: Transfer) {
+  const d = t.destination;
+  if (t.guest || (d.kind === "link" && d.password)) return;
+  writeDestinations({ ...readDestinations(), [t.id]: d });
+}
+function forgetDestination(id: string) {
+  const all = readDestinations();
+  if (!(id in all)) return;
+  delete all[id];
+  writeDestinations(all);
+}
+/** Keeps only the remembered destinations of these transfers (the ones still paused or running). */
+export function pruneDestinations(keep: string[]) {
+  const all = readDestinations();
+  const wanted = new Set([...keep, ...transfers.map((t) => t.id)]);
+  const next = Object.fromEntries(Object.entries(all).filter(([id]) => wanted.has(id)));
+  if (Object.keys(next).length !== Object.keys(all).length) writeDestinations(next);
+}
+
+/**
+ * Continues a transfer an earlier page left paused: this page takes it over, drops the files in
+ * `skip`, and sends each other unfinished one from the file chosen for it, from where the server's
+ * copy ends. What was already saved is counted, not sent again.
+ */
+export async function continuePaused(p: PausedTransfer, chosen: Map<string, File>, skip: string[] = []) {
+  await call(api.transfers.resume, { params: { id: p.id }, body: { tab: tab() } });
+  for (const id of skip) await call(api.transfers.removeUpload, { params: { id } });
+  const done = p.files.filter((f) => f.done);
+  const sending = p.files.filter((f) => !f.done && chosen.has(f.upload));
+  const destination = readDestinations()[p.id] ?? { kind: "save" };
+  const t: Transfer = {
+    id: p.id,
+    tabId: tab(),
+    name: p.name,
+    autoNamed: false,
+    parts: { files: 0, folders: 0 },
+    destination,
+    itemId: p.itemId,
+    ...(p.adding ? { adding: true } : {}),
+    text: "",
+    folders: [],
+    tasks: sending.map((f, index) => ({
+      index,
+      file: chosen.get(f.upload)!,
+      path: f.path,
+      uploadId: f.upload,
+      sent: f.offset,
+      status: "queued",
+      // A file with bytes on the server asks it where they end; one without may be sent whole.
+      ...(f.offset > 0 ? { started: true } : {}),
+    })),
+    carried: { files: done.length, bytes: done.reduce((n, f) => n + f.size, 0), text: p.text },
+    status: "uploading",
+    started: Date.now(),
+    totalBytes: [...done, ...sending].reduce((n, f) => n + f.size, 0),
+    sentBytes: 0,
+    doneFiles: 0,
+    failedFiles: 0,
+    speed: 0,
+  };
+  const top = topLevel([...done, ...sending], []);
+  t.parts = { files: top.filter((e) => !e.folder).length, folders: top.filter((e) => e.folder).length };
+  transfers.unshift(t);
+  changed(true);
+  settle(t);
+  return t;
+}
+
+// A phone that slept (screen off, browser in the background) froze this page and its uploads, and
+// their connections are likely dead though nothing said so. Coming back after a while restarts them
+// from what the server holds, and retries files that failed meanwhile.
+const SLEPT_MS = 15_000;
+let hiddenSince = 0;
+function wake() {
+  if (!isOnline()) return;
+  for (const t of transfers)
+    if (t.status === "uploading") {
+      if (running.get(t.id)?.size) {
+        t.stalled = true;
+        abortUploads(t);
+      } else settle(t);
+    } else if (t.status === "attention" && t.tasks.every((task) => task.status !== "failed" || task.retryable))
+      retryFailed(t);
+  changed(true);
+}
+
 // A reload keeps sessionStorage, so the next page load closes this tab too when the browser dropped
 // the pagehide request. A closed tab without that falls back to the lease running out.
 const OPEN_TAB = "relay.open-tab";
@@ -998,51 +1179,25 @@ function rememberTab() {
   }
 }
 
-// What leaving the page stopped, so the next load of this tab can say so instead of showing an empty
-// drop box. `itemId` is set when finished files or text were kept in Files.
-export type AbandonedUpload = { name: string; itemId?: string };
-const ABANDONED = "relay.abandoned";
-let abandoned: { uploads: AbandonedUpload[]; reloaded: boolean } | null = null;
-export const abandonedUploads = () => abandoned;
-export function forgetAbandoned() {
-  if (!abandoned) return;
-  abandoned = null;
-  changed(true);
-}
-function rememberAbandoned() {
-  const uploads: AbandonedUpload[] = transfers
-    .filter((t) => !t.guest && isBusy(t) && !stopped(t) && !t.cancelRequested)
-    .map((t) => ({
-      name: t.name,
-      ...(t.itemId && (t.tasks.some((task) => task.status === "done") || t.text.trim()) ? { itemId: t.itemId } : {}),
-    }));
-  try {
-    if (uploads.length) sessionStorage.setItem(ABANDONED, JSON.stringify(uploads));
-  } catch {
-    // The next load just won't mention it.
-  }
-}
+/**
+ * Settles once the page this tab showed before a reload is closed on the server, so its uploads
+ * count as paused when this page asks which are.
+ */
+export let previousPageClosed: Promise<void> = Promise.resolve();
 
 if (typeof window !== "undefined") {
-  try {
-    const uploads = JSON.parse(sessionStorage.getItem(ABANDONED) || "[]") as AbandonedUpload[];
-    sessionStorage.removeItem(ABANDONED);
-    if (Array.isArray(uploads) && uploads.length) {
-      const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-      abandoned = { uploads, reloaded: navigation?.type === "reload" };
-    }
-  } catch {
-    // Nothing remembered.
-  }
   try {
     const saved = JSON.parse(sessionStorage.getItem(OPEN_TAB) || "null") as { tab?: unknown; csrf?: unknown } | null;
     sessionStorage.removeItem(OPEN_TAB);
     if (saved && typeof saved.tab === "string" && saved.tab !== tab())
-      void fetch(closeTabUrl(saved.tab), {
+      previousPageClosed = fetch(closeTabUrl(saved.tab), {
         method: "POST",
         credentials: "same-origin",
         headers: typeof saved.csrf === "string" && saved.csrf ? { [headers.csrf]: saved.csrf } : {},
-      }).catch(() => {});
+      }).then(
+        () => {},
+        () => {},
+      );
   } catch {
     // Nothing remembered.
   }
@@ -1057,10 +1212,17 @@ if (typeof window !== "undefined") {
   window.addEventListener("pageshow", (event) => {
     if (event.persisted) location.reload();
   });
-  // Leaving the page is deliberate: the server abandons this tab's unfinished uploads right away.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) hiddenSince = Date.now();
+    else if (hiddenSince && Date.now() - hiddenSince >= SLEPT_MS) {
+      hiddenSince = 0;
+      wake();
+    } else hiddenSince = 0;
+  });
+  // Leaving the page refuses its late requests at once. A member's unfinished uploads stay paused
+  // for the next page to continue; a guest's are cancelled.
   window.addEventListener("pagehide", () => {
     rememberTab();
-    rememberAbandoned();
     if (!transfers.some(isBusy)) return;
     void fetch(closeTabUrl(tab()), {
       method: "POST",

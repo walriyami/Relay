@@ -663,3 +663,12 @@ export const headers = {
   /** On every API response: where changes stood before the server began reading for it. */
   changes: "X-Relay-Changes",
 } as const;
+/** Errors about a transfer as a whole, which a page must tell apart from a single file's failure. */
+export const transferErrors = {
+  /** The page sending it was closed, so it can no longer send it (409). */
+  tabClosed: "This page was closed. Reload it to continue.",
+  /** Another page took over the paused upload (409). */
+  moved: "This upload is continuing on another page.",
+  /** It was cancelled: on purpose, or after staying paused too long (410). */
+  cancelled: "This upload was stopped, and its unfinished files were removed.",
+} as const;

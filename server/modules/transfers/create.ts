@@ -2,6 +2,7 @@
 // item, its folders, the text node, a pending node and an upload row per file. Zero-byte files are
 // completed on the spot. Retrying the same id with the same manifest returns the same result.
 import { statfsSync } from "node:fs";
+import { transferErrors } from "../../../shared/api.ts";
 import { LIMITS, type TransferCreated } from "../../../shared/model.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { principalKey, type Context, type CreateTransferOptions, type TransferInput } from "../../context.ts";
@@ -18,11 +19,7 @@ import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const DISK_HEADROOM = 256 * 1024 ** 2;
-export const TAB_CLOSED = "This page was closed. Reload it to continue.";
-/** Said to a page whose paused upload another page took over. */
-export const MOVED = "This upload is continuing on another page.";
-/** Said for a transfer that was cancelled: on purpose, or after staying paused too long. */
-export const CANCELLED = "This upload was stopped, and its unfinished files were removed.";
+export const { tabClosed: TAB_CLOSED, moved: MOVED, cancelled: CANCELLED } = transferErrors;
 const NAME_TAKEN = "A file or folder with that name already exists there.";
 
 export function bytesLabel(bytes: number) {

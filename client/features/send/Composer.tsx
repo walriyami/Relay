@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, HardDriveUpload, History, Link2, PenLine, QrCode, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, HardDriveUpload, Link2, PenLine, QrCode } from "lucide-react";
 import { useSession } from "../../app/session";
 import { ThisDeviceName } from "../../app/devices";
 import {
@@ -26,29 +26,27 @@ import {
 import { navigate, scrollMotion } from "../../lib/router";
 import { ContentBox, FilePickers } from "../../components/ContentBox";
 import {
-  abandonedUploads,
   addLink,
   contentTop,
   dismiss,
-  forgetAbandoned,
   awaitsChoice,
   isBusy,
   keepInFiles,
   payloadBytes,
   startTransfer,
-  type AbandonedUpload,
   type Destination,
   type Transfer,
 } from "../../lib/transfers";
 import { useLive } from "../../lib/live";
 import { useConnection } from "../../lib/connection";
 import { LIMITS, api, type Delivery, type Device } from "../../api";
-import { Button, IconButton, LoadFailed, Popover, dismissToastKey } from "../../components/ui";
+import { Button, LoadFailed, Popover, dismissToastKey } from "../../components/ui";
 import { CollectionModal } from "../library/CollectionModal";
 import { AddDevice } from "../settings/AddDevice";
 import { errorToast, sendItem } from "../library/actions";
 import { TransferCard, TransferStrip, useTransfers, type DeviceAnswer } from "./TransferList";
 import { OwnDevices } from "./Destinations";
+import { PausedUploads } from "./PausedUploads";
 
 const DRAFT_UNDO = "draft-undo";
 
@@ -115,12 +113,6 @@ export function Composer({ children }: { children?: React.ReactNode }) {
     return contentTop(files, folders);
   }, [items]);
   const autoName = nameOf(top, draft.text);
-  // What a reload or leaving the page stopped last time; said in place of an empty drop box until
-  // you add something or dismiss it.
-  const stopped = abandonedUploads();
-  useEffect(() => {
-    if (ready) forgetAbandoned();
-  }, [ready]);
   // The server refuses a transfer that doesn't fit, so say so before anything is sent.
   const free = me.usage.available;
   const need = payloadBytes(size, draft.text);
@@ -393,13 +385,7 @@ export function Composer({ children }: { children?: React.ReactNode }) {
                 ))}
               </div>
             )}
-            {stopped && (
-              <StoppedNotice
-                stopped={stopped}
-                onChoose={() => filesInput.current?.click()}
-                onView={(id) => setOpen(id)}
-              />
-            )}
+            <PausedUploads onView={(id) => setOpen(id)} />
             {armed && (
               <div className="send-armed" role="status">
                 <span>
@@ -601,53 +587,6 @@ export function DestinationRow({
         {(!accessory || revealAccessory) && <ChevronRight size={16} className="destination-go" aria-hidden />}
       </button>
       {accessory && <div className="destination-accessory">{accessory}</div>}
-    </div>
-  );
-}
-
-/** Says what leaving or reloading the page stopped, and offers to pick it again. */
-function StoppedNotice({
-  stopped,
-  onChoose,
-  onView,
-}: {
-  stopped: { uploads: AbandonedUpload[]; reloaded: boolean };
-  onChoose: () => void;
-  onView: (itemId: string) => void;
-}) {
-  const { uploads, reloaded } = stopped;
-  const when = reloaded ? "when the page reloaded" : "when you left the page";
-  const kept = uploads.filter((u) => u.itemId);
-  return (
-    <div className="stopped-notice" role="status">
-      <History size={18} aria-hidden />
-      <div>
-        <strong>
-          {uploads.length === 1
-            ? `Your upload of ${uploads[0].name} stopped ${when}.`
-            : `${uploads.length} uploads stopped ${when}.`}
-        </strong>
-        <p className="muted">
-          {uploads.length === 1 ? "Choose it again to send it." : "Choose them again to send them."}
-          {kept.length > 0 && " What finished uploading is in Files."}
-        </p>
-        <div className="stopped-notice-actions">
-          <Button size="sm" variant="primary" onClick={onChoose}>
-            Choose again
-          </Button>
-          {kept.length === 1 && (
-            <Button size="sm" variant="ghost" onClick={() => onView(kept[0].itemId!)}>
-              View in Files
-            </Button>
-          )}
-          {kept.length > 1 && (
-            <Button size="sm" variant="ghost" onClick={() => navigate("/files")}>
-              View in Files
-            </Button>
-          )}
-        </div>
-      </div>
-      <IconButton size="sm" label="Dismiss" icon={<X size={16} />} onClick={forgetAbandoned} />
     </div>
   );
 }

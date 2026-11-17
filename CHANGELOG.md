@@ -21,6 +21,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 
 - `RELAY_TRUST_PROXY` accepts host names, such as a tunnel connector's container name, which Relay follows as Docker readdresses it.
 - The web app's text files are Brotli- and gzip-compressed at build time and served precompressed.
+- Uploads survive a sleeping phone and a reloaded page. A member's unfinished upload is paused for 24 hours instead of being cancelled after five quiet minutes. The page picks it up again when the phone wakes. After a reload, **Send** offers it back, and choosing the same files sends only what's missing. The screen is kept on while sending, where the browser allows it.
 
 ### Changed
 

@@ -27,6 +27,8 @@ import {
   resume,
   retarget,
   retryFailed,
+  sendAgain,
+  hasSaved,
   skipFailed,
   snapshot,
   subscribe,
@@ -322,7 +324,7 @@ export function TransferCard({
         <Button size="sm" variant="primary" icon={<RotateCcw size={16} />} onClick={() => retryFailed(t)}>
           Retry
         </Button>
-        {t.doneFiles > 0 || t.text.trim() ? (
+        {hasSaved(t) ? (
           <Button size="sm" onClick={() => void skipFailed(t)}>
             Continue without them
           </Button>
@@ -420,7 +422,13 @@ export function TransferCard({
         <CircleAlert size={16} aria-hidden /> {t.error}
       </p>
     );
-    if (canRetryCreate(t) || t.cancelRequested)
+    if (t.ended && t.tasks.some((task) => task.status !== "done" && task.status !== "skipped"))
+      actions = (
+        <Button size="sm" variant="primary" icon={<RotateCcw size={16} />} onClick={() => sendAgain(t)}>
+          Send again
+        </Button>
+      );
+    else if (canRetryCreate(t) || t.cancelRequested)
       actions = (
         <>
           <Button size="sm" variant="primary" onClick={() => (t.cancelRequested ? cancel(t) : retryCreate(t))}>
