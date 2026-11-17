@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { isAnnounceable } from "../local/addresses.ts";
 
 export type Config = {
   /** Data directory: relay.sqlite, blobs/, uploads/, thumbnails/, secret.key. */
@@ -37,9 +38,11 @@ export type Config = {
   serveClient: boolean;
   /**
    * Direct transfers on the local network (see shared/local.ts): Relay runs the helper that
-   * browsers connect to, on this UDP port. Unset, there are none.
+   * browsers connect to, on this UDP port. Unset, there are none. `addresses` are the ones browsers
+   * are told to reach it at, when the host's own can't be seen from inside a container; unset, the
+   * helper announces the private addresses it finds.
    */
-  local?: { port: number };
+  local?: { port: number; addresses?: string[] };
 };
 
 export function configFromEnv(env = process.env): Config {
@@ -71,7 +74,9 @@ export function configFromEnv(env = process.env): Config {
     sweepMs: 60_000,
     logger: true,
     serveClient: true,
-    local: flag("RELAY_DIRECT", env.RELAY_DIRECT, true) ? { port: udpPort(env.RELAY_DIRECT_PORT) } : undefined,
+    local: flag("RELAY_DIRECT", env.RELAY_DIRECT, true)
+      ? { port: udpPort(env.RELAY_DIRECT_PORT), ...directAddresses(env.RELAY_DIRECT_ADDRESSES) }
+      : undefined,
   };
 }
 
@@ -89,6 +94,18 @@ function udpPort(value: string | undefined) {
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error("RELAY_DIRECT_PORT must be a UDP port number.");
   return port;
+}
+
+/** The addresses to announce, or nothing to let the helper find them; a startup error names a bad one. */
+function directAddresses(value: string | undefined) {
+  const addresses = (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const address of addresses)
+    if (!isAnnounceable(address))
+      throw new Error(`RELAY_DIRECT_ADDRESSES must list private network addresses; "${address}" isn't one.`);
+  return addresses.length ? { addresses: [...new Set(addresses)] } : {};
 }
 
 /** "https://relay.example.com" exactly as browsers send it in Origin, or a startup error naming the variable. */

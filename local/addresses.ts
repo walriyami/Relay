@@ -23,6 +23,15 @@ export function lanAddresses(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = n
   return [...new Set([...v4, ...v6])];
 }
 
+/**
+ * Whether `address` may be announced to browsers: a private IPv4 or unique local IPv6 address,
+ * which only devices on the server's own networks can reach.
+ */
+export function isAnnounceable(address: string) {
+  if (isIPv4(address)) return isPrivateV4(address);
+  return isIPv6(address) && /^f[cd][0-9a-f]{2}:/i.test(address);
+}
+
 function isPrivateV4(address: string) {
   const [a, b] = address.split(".").map(Number);
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);

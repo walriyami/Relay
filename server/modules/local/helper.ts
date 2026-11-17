@@ -25,14 +25,17 @@ export class LocalHelper {
   /** How the last helper process ended. */
   lastExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   readonly port: number;
+  /** The addresses browsers are told to reach the helper at; empty, the helper finds the host's. */
+  private readonly addresses: string[];
   private readonly log: FastifyBaseLogger;
   private child: ChildProcess | null = null;
   private restart: NodeJS.Timeout | undefined;
   private stops = 0;
   private stopping = false;
 
-  constructor(port: number, log: FastifyBaseLogger) {
+  constructor(port: number, log: FastifyBaseLogger, addresses: string[] = []) {
     this.port = port;
+    this.addresses = addresses;
     this.log = log;
   }
 
@@ -46,7 +49,7 @@ export class LocalHelper {
   run() {
     if (this.stopping || !this.dir) return;
     const started = Date.now();
-    const child = fork(MAIN, [this.dir, String(this.port)], {
+    const child = fork(MAIN, [this.dir, String(this.port), this.addresses.join(",")], {
       // Only what the helper needs: never the flags Relay itself runs with, such as --watch.
       execArgv: [],
       stdio: ["ignore", "inherit", "inherit", "ipc"],

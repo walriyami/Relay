@@ -72,7 +72,7 @@ export async function buildApp(config: Config): Promise<App> {
       operations: new Operations(config.sweepMs),
       secrets: new Secrets(config.root, config.secret),
       events: new EventBus(),
-      local: config.local ? new LocalHelper(config.local.port, app.log) : null,
+      local: config.local ? new LocalHelper(config.local.port, app.log, config.local.addresses) : null,
       log: app.log,
     } as Context;
     ctx.blobs = createBlobStore(ctx);

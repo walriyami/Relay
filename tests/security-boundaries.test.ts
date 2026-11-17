@@ -92,6 +92,21 @@ test("direct transfers are on unless RELAY_DIRECT turns them off, on a valid UDP
     assert.throws(() => configFromEnv({ RELAY_DIRECT_PORT: value }), /RELAY_DIRECT_PORT/);
 });
 
+test("RELAY_DIRECT_ADDRESSES names the private addresses browsers reach the helper at, and nothing else", () => {
+  assert.deepEqual(configFromEnv({ RELAY_DIRECT_ADDRESSES: " 192.168.1.23 , fd00::23,192.168.1.23 " }).local, {
+    port: 3090,
+    addresses: ["192.168.1.23", "fd00::23"],
+  });
+  assert.deepEqual(configFromEnv({ RELAY_DIRECT_ADDRESSES: " , " }).local, { port: 3090 });
+  // A public or loopback address would send browsers' checks beyond the local network, or nowhere.
+  for (const value of ["8.8.8.8", "127.0.0.1", "relay.local", "2001:db8::1", "192.168.1"])
+    assert.throws(
+      () => configFromEnv({ RELAY_DIRECT_ADDRESSES: value }),
+      /RELAY_DIRECT_ADDRESSES must list private network addresses/,
+    );
+  assert.equal(configFromEnv({ RELAY_DIRECT: "false", RELAY_DIRECT_ADDRESSES: "8.8.8.8" }).local, undefined);
+});
+
 test("client addresses come only from trusted proxies, given by address, range or host name", async () => {
   assert.deepEqual(configFromEnv({ RELAY_TRUST_PROXY: " cloudflared, 10.0.0.0/8 ,, ::1 " }).trustProxy, [
     "cloudflared",

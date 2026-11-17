@@ -8,4 +8,5 @@ updateMode: manual
 settings:
   RELAY_ORIGIN: https://relay.walriyami.com
   RELAY_TRUST_PROXY: 127.0.0.1,::1,wal-gateway
-  RELAY_DIRECT: "false"
+  # Direct transfers on the home network: walctl publishes UDP 3090 on this address (wal.service.yaml).
+  RELAY_DIRECT_ADDRESSES: 192.168.1.23

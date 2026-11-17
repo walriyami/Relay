@@ -22,6 +22,10 @@ runtime:
   port: 3090
   healthPath: /api/health
   memoryMB: 768
+  # Direct transfers: the helper's UDP port, on the Pi's home address only (never on the internet).
+  # The port must match inside and out, since the helper announces it (RELAY_DIRECT_ADDRESSES).
+  lanServices:
+    - { bind: 192.168.1.23, port: 3090, containerPort: 3090, protocol: udp }
 storage:
   - name: data
     mount: /data
