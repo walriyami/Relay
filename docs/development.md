@@ -43,6 +43,8 @@ npx playwright install --with-deps
 - **Resources** (`npm run test:resources`, or `test:resources:all` for Firefox and WebKit too). Real PDF rendering and native worker lifecycle, canvas bounds, and hidden Add Device polling.
 - **Browser** (`tests/browser/*.spec.ts`, Playwright). These run full user journeys against a production build on port 3091 (change it with `RELAY_TEST_PORT`). They include keyboard, focus and accessibility checks with axe. The Nearby journeys connect two browsers by their local addresses, which only Chromium can be told to reveal, so they run in Chromium and the mobile viewport only.
 
+The browser specs block service workers, so requests they intercept aren't answered from Relay's cache. `tests/browser/pwa.spec.ts` allows them to test the installed app, Share to Relay and push messages. It runs only in the Chromium project and uses the full Chromium build (`channel: "chromium"`), since Playwright's headless shell reports notifications as blocked; `npx playwright install chromium` provides it.
+
 Tests never touch real data. Every instance uses a new temporary directory and generated files.
 
 Test instances hash passwords at a much lower cost than production (`useTestPasswordCost` in `server/lib/secrets.ts`), because tests sign in hundreds of times.

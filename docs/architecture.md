@@ -102,6 +102,12 @@ Administrators can run resumable integrity scans that hash stored files sequenti
 
 Relay isn't end-to-end encrypted. Whoever operates the server can read what's stored on it.
 
+## Installed app and notifications
+
+- **Service worker.** `public/sw.js` caches the app shell (`index.html`, the hashed files it names, icons and fonts) so an installed Relay opens quickly, and replaces it when a new build is deployed. It never answers `/api/`, `/uploads/` or `/local/`, and never stores responses from them.
+- **Share target.** `public/manifest.webmanifest` declares a share target that posts to `/share`. The worker takes that post, keeps the files and text in the browser's IndexedDB and opens `/share?id=…`, where `client/lib/pwa-share.ts` moves them into the Send draft. Without the worker, the server's `/share` (`server/modules/push/share-target.ts`) discards the upload and opens the same page with an error. `/share#text=…` (the iPhone Shortcut) adds text without a request carrying it.
+- **Web Push.** `server/modules/push` sends notifications itself, with no library: VAPID (ES256) signatures and `aes128gcm` encryption from `node:crypto`. Subscriptions belong to one device's session in `push_subscriptions`; a trigger deletes them with the device's last session. Activity events (`server/modules/activity`) call the push module after their transaction commits, for arrivals on a device, request uploads and a link's first download, honoring the member's Activity choices. Delivery happens in the background; a 404 or 410 from the push service deletes the subscription.
+
 ## Project layout
 
 ```text

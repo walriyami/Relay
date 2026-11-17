@@ -21,7 +21,7 @@ Relay runs at **https://relay.walriyami.com** on the owner's Raspberry Pi 5, man
 | The app             | `relay` in [`wal.service.yaml`](../wal.service.yaml): the build inputs, port 3090, the health check `/api/health`, a 768 MB memory limit |
 | The running copy    | `relay-production` in [`wal.environment.yaml`](../wal.environment.yaml): the Pi, the address and the settings                            |
 | The image           | [`Dockerfile`](../Dockerfile), built for ARM64 on the Mac by walctl and uploaded to the Pi                                               |
-| Everything it keeps | The `data` storage, mounted at `/data`: the database, every stored file, unfinished uploads and the generated secret                     |
+| Everything it keeps | The `data` storage, mounted at `/data`: the database, every stored file, unfinished uploads, the generated secret and the push key pair  |
 
 Visitors reach it through Cloudflare's tunnel and the Pi's Walriyami gateway, which provides HTTPS. Relay does its own sign-in, so the gateway lets everyone through (`publicPaths: ["/*"]`): guests and people opening shared links never see a Walriyami login.
 
@@ -113,6 +113,10 @@ What it needs from the host:
 - **People without an account** join with a Nearby code or link from **Invite someone**, and give a name. They can send to and receive from your devices, and are asked before anything arrives. A code lasts an hour unless you extend it. You can remove anyone who joined, and ending the code removes everyone.
 
 Relay judges which devices share a network by the address it sees them at: the same public IPv4 address or IPv6 /64, or its own private networks. That depends on the gateway passing each visitor's real address on, as described for `RELAY_TRUST_PROXY` above. If every visitor arrives from the gateway's own address, every member appears to be on the same network, and members elsewhere are listed for each other, although their devices never connect. The connection itself only ever uses the devices' local addresses: there are no STUN or TURN servers. Where devices can't reach each other, as on guest Wi-Fi with client isolation, Nearby says so and offers to send to your own device through Relay instead.
+
+## Notifications
+
+Members turn notifications on per device in **Settings → Arrivals**. Relay sends them itself over HTTPS to the browsers' push services (Google, Mozilla, Apple and Microsoft), so the container needs outbound HTTPS, as it already has for Walriyami sign-in. Nothing needs configuring: Relay creates its key pair in `/data/push-keys.json` the first time a device asks. Deleting that file makes every device's subscription stale; each device then turns notifications back on itself. Apple requires the sender to name a contact address, for which Relay uses `RELAY_ORIGIN`; without an HTTPS `RELAY_ORIGIN`, iPhones and iPads may refuse notifications.
 
 ## First start and members
 

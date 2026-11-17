@@ -14,10 +14,16 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Nearby, a tab of its own for sending files and text straight from one device to another on the same network, without going through Relay or into Files. Your own signed-in devices always appear and take what you send without asking. Other members appear on the same network, must accept, and can hide themselves with **Visible to people nearby**. Someone without an account joins with a Nearby code or link. Received photos save to the photo library through the share sheet on phones and tablets, and computers download files or one ZIP. Transfers pick up where they left off if the connection drops. When your own device can't be reached directly, **Send via Relay** sends the same files the usual way. See [Hosting](docs/hosting.md#nearby).
 - Direct transfers and Nearby spread their bytes over several WebRTC connections at once, since a browser lets each connection carry only a few megabits a second over Wi-Fi.
 
+- Relay installs as an app on phones and computers, opening in its own window, and appears in the share sheet: files, text and links shared to it land in the Send draft. On iPhone, a Shortcut can send text and links. See [On your phone](README.md#on-your-phone).
+- Notifications on each device, even with Relay closed, when something arrives for that device, someone sends files to your request, or a link is first downloaded. They're off until turned on in **Settings → Arrivals**; on iPhone and iPad they need Relay added to the Home Screen.
+- A **Share…** button for links on phones, and received photos and videos save to Photos through the share sheet.
+
 - `RELAY_TRUST_PROXY` accepts host names, such as a tunnel connector's container name, which Relay follows as Docker readdresses it.
 - The web app's text files are Brotli- and gzip-compressed at build time and served precompressed.
 
 ### Changed
+
+- The Activity bell counts only news: sign-ins on a kind of device you already use and links that were only opened no longer light it up. A sign-in on a new kind of device says so and links to your devices.
 
 - Relay runs as one container. The Caddy gateway, its Unix socket and `RELAY_SOCKET` are gone: Relay serves HTTP itself on port 3090.
 - Relay is hosted with walctl, which builds, runs, health-checks and rolls back the container. [Hosting](docs/hosting.md) replaces the Self-hosting guide.
