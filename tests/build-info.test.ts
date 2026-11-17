@@ -52,7 +52,7 @@ test("an image build stops when it can't name the commit it holds", async () => 
       ["--input-type=module", "-e", 'console.log(JSON.stringify((await import("./server/build-info.ts")).build))'],
       { cwd: dir, encoding: "utf8" },
     );
-    assert.equal(JSON.parse(shown.stdout).commit, commit);
+    assert.equal((JSON.parse(shown.stdout) as { commit: string }).commit, commit);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
