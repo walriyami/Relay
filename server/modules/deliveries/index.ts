@@ -1,12 +1,12 @@
 // Sending an item to one of the owner's own devices. The recipient opens the item with its own
-// member access (same owner), so no public link is involved.
+// member access (same owner), so no public link is involved. The device needn't have Relay open:
+// the delivery waits, and the device shows it (and says it did) the next time it opens Relay.
 import type { FastifyInstance } from "fastify";
 import type { Context, Deliveries } from "../../context.ts";
 import { api } from "../../../shared/api.ts";
 import type { Delivery, DeliveryState } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
-import { streamsOf } from "../auth/streams.ts";
 
 type DeliveryRow = {
   id: string;
@@ -14,6 +14,7 @@ type DeliveryRow = {
   item: string;
   state: DeliveryState;
   created: number;
+  delivered: number | null;
   answered: number | null;
   from_device: string | null;
   from_name: string | null;
@@ -22,9 +23,10 @@ type DeliveryRow = {
   item_live: number;
 };
 /** `?` is the current time. */
-const SELECT = `SELECT d.id, d.owner, d.item, d.state, d.created, d.answered, d.from_device, f.name AS from_name, d.to_device, t.name AS to_name,
+const SELECT = `SELECT d.id, d.owner, d.item, d.state, d.created, r.at AS delivered, d.answered, d.from_device, f.name AS from_name, d.to_device, t.name AS to_name,
     (i.trashed IS NULL AND (i.expires IS NULL OR i.expires > ?)) AS item_live
-  FROM deliveries d JOIN items i ON i.id = d.item JOIN devices t ON t.id = d.to_device LEFT JOIN devices f ON f.id = d.from_device`;
+  FROM deliveries d JOIN items i ON i.id = d.item JOIN devices t ON t.id = d.to_device LEFT JOIN devices f ON f.id = d.from_device
+  LEFT JOIN delivery_receipts r ON r.delivery = d.id`;
 
 function toDeliveries(ctx: Context, rows: DeliveryRow[]): Delivery[] {
   const summaries = ctx.library.summaries([...new Set(rows.map((r) => r.item))]);
@@ -33,6 +35,7 @@ function toDeliveries(ctx: Context, rows: DeliveryRow[]): Delivery[] {
     itemId: row.item,
     state: row.state,
     created: row.created,
+    delivered: row.delivered,
     answered: row.answered,
     from: row.from_device ? { id: row.from_device, name: row.from_name! } : null,
     to: { id: row.to_device, name: row.to_name },
@@ -59,9 +62,15 @@ export function createDeliveries(ctx: Context): Deliveries {
         }
         if (!ctx.db.get("SELECT 1 FROM devices WHERE id = ? AND user_id = ?", input.device, owner))
           notFound("That device");
-        if (!ctx.db.get("SELECT 1 FROM sessions WHERE device_id = ? AND expires > ?", input.device, Date.now()))
-          fail(409, "That device is not online.");
-        if (!streamsOf(ctx).online(input.device)) fail(409, "That device is not online.");
+        // Only a signed-in device can ever pick it up; one signed out (or of a suspended member) never would.
+        if (
+          !ctx.db.get(
+            "SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.device_id = ? AND s.expires > ? AND NOT u.disabled",
+            input.device,
+            Date.now(),
+          )
+        )
+          fail(409, "That device is signed out. Sign in on it again to send to it.");
         ctx.library.owned(owner, input.item, { live: true });
         if (ctx.db.get("SELECT 1 FROM nodes WHERE item = ? AND state = 'pending' LIMIT 1", input.item))
           fail(409, "Wait for the uploads to finish before sending.");
@@ -124,9 +133,35 @@ export function registerDeliveries(app: FastifyInstance, ctx: Context) {
     const changed = found.state === "available" || (found.state === "declined" && body.state === "accepted");
     if (changed) {
       ctx.library.owned(member.userId, found.item, { live: true });
-      ctx.db.run("UPDATE deliveries SET state = ?, answered = ? WHERE id = ?", body.state, Date.now(), params.id);
+      const now = Date.now();
+      ctx.db.tx(() => {
+        ctx.db.run("UPDATE deliveries SET state = ?, answered = ? WHERE id = ?", body.state, now, params.id);
+        // An answer means it reached the device, even if saying so on arrival never got through.
+        ctx.db.run("INSERT OR IGNORE INTO delivery_receipts(delivery, at) VALUES(?, ?)", params.id, now);
+      });
       ctx.events.publish(member.userId, "deliveries");
     }
     return { state: changed ? body.state : found.state, changed };
+  });
+
+  route(app, ctx, api.deliveries.received, ({ member, body }) => {
+    const ids = [...new Set(body.ids)];
+    const marked = ctx.db.tx(() =>
+      ctx.db
+        .all<{ id: string }>(
+          `INSERT INTO delivery_receipts(delivery, at)
+            SELECT id, ? FROM deliveries
+            WHERE owner = ? AND to_device = ? AND id IN (SELECT value FROM json_each(?))
+              AND id NOT IN (SELECT delivery FROM delivery_receipts)
+            RETURNING delivery AS id`,
+          Date.now(),
+          member.userId,
+          member.deviceId,
+          JSON.stringify(ids),
+        )
+        .map((row) => row.id),
+    );
+    if (marked.length) ctx.events.publish(member.userId, "deliveries");
+    return { ids: marked };
   });
 }

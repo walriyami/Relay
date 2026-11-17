@@ -345,8 +345,9 @@ CREATE TABLE link_visits (
   UNIQUE (link, visitor)
 ) STRICT;
 
--- An item sent to one of the owner's devices. The receiving device answers it: accepted (downloaded
--- there) or declined. The item stays in Files either way.
+-- An item sent to one of the owner's devices. The device needn't have Relay open: the delivery waits
+-- until it does (see delivery_receipts). The receiving device answers it: accepted (downloaded there)
+-- or declined. The item stays in Files either way.
 CREATE TABLE deliveries (
   id TEXT PRIMARY KEY,
   owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -472,3 +473,10 @@ CREATE TRIGGER push_subscription_after_sign_out AFTER DELETE ON sessions
 WHEN NOT EXISTS (SELECT 1 FROM sessions WHERE device_id = OLD.device_id) BEGIN
   DELETE FROM push_subscriptions WHERE device_id = OLD.device_id;
 END;
+
+-- When a delivery first reached its device: the device had Relay open and showed it. A sender sees
+-- "waiting" until then, never "sent". Answering a delivery also records this, if nothing did before.
+CREATE TABLE delivery_receipts (
+ delivery TEXT PRIMARY KEY REFERENCES deliveries(id) ON DELETE CASCADE,
+ at INTEGER NOT NULL
+) STRICT;

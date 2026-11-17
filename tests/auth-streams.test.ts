@@ -5,7 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { api, headers, urls } from "../shared/api.ts";
 import { missed, type ChangeStamp, type StreamReady } from "../shared/model.ts";
 import { streamsOf } from "../server/modules/auth/streams.ts";
-import { admin, ApiError, Client, member, send, start } from "./support/harness.ts";
+import { admin, Client, member, send, start } from "./support/harness.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
 test("a device is online exactly while it holds an event stream, and changes are pushed", async () => {
@@ -669,7 +669,8 @@ test("authenticated polling presence renews without a socket and expires after p
     assert.equal(await online(), true);
     t.mock.timers.tick(1);
     assert.equal(await online(), false);
-    await assert.rejects(deliver(), (error: unknown) => error instanceof ApiError && error.status === 409);
+    // Away is not unreachable: the delivery waits for the phone's next visit.
+    assert.equal((await deliver()).delivered, null);
 
     await probe();
     assert.equal(await online(), true);
@@ -702,7 +703,7 @@ for (const revoke of ["sign-out", "expiry", "suspension"] as const) {
       else if (revoke === "expiry")
         instance.ctx.db.run("UPDATE sessions SET expires = ? WHERE device_id = ?", Date.now(), me.device.id);
       else instance.ctx.db.run("UPDATE users SET disabled = 1 WHERE id = ?", me.user.id);
-      // Direct delivery creation also revalidates presence; it cannot use a cached online answer.
+      // Deliveries wait for devices that are away, but never for one that can no longer sign in.
       assert.throws(
         () =>
           instance.ctx.deliveries.create(me.user.id, null, {
@@ -710,7 +711,7 @@ for (const revoke of ["sign-out", "expiry", "suspension"] as const) {
             item: result.itemId,
             device: me.device.id,
           }),
-        /That device is not online/,
+        /That device is signed out/,
       );
       const refused = await Stream.open(base, urls.events(phone.tab), phone, null);
       await refused.until((events) => events.includes("<closed>"));

@@ -257,7 +257,9 @@ export type Delivery = {
   itemId: Id;
   state: DeliveryState;
   created: Time;
-  /** When the receiving device accepted or declined it; null while available, and for deliveries opened before this was recorded. */
+  /** When the receiving device first showed it; null while it waits for that device to open Relay. */
+  delivered: Time | null;
+  /** When the receiving device accepted or declined it; null while available. */
   answered: Time | null;
   from: { id: Id; name: string } | null;
   to: { id: Id; name: string } | null;

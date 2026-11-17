@@ -236,29 +236,61 @@ test("a transfer can finish as a delivery to a device", async () => {
   }
 });
 
-test("offline devices reject new deliveries but preserve idempotent retries", async () => {
-  const { instance, laptop, phoneDevice } = await setup();
+test("a device without Relay open gets the delivery when it next opens Relay, and the sender hears so", async () => {
+  const { instance, laptop, phone, phoneDevice } = await setup();
   try {
     const { result } = await send(laptop, [{ path: "saved.txt", data: "saved" }]);
-    const body = { id: crypto.randomUUID(), item: result.itemId, device: phoneDevice };
-    const delivered = await laptop.call(api.deliveries.create, { body });
     streamsOf(instance.ctx).closeAll();
     assert.equal(streamsOf(instance.ctx).online(phoneDevice), false);
-    assert.deepEqual(await laptop.call(api.deliveries.create, { body }), delivered);
-    await assert.rejects(
-      laptop.call(api.deliveries.create, { body: { ...body, id: crypto.randomUUID() } }),
-      (error: unknown) =>
-        error instanceof ApiError && error.status === 409 && error.message === "409 That device is not online.",
-    );
+    const body = { id: crypto.randomUUID(), item: result.itemId, device: phoneDevice };
+    const queued = await laptop.call(api.deliveries.create, { body });
+    assert.equal(queued.state, "available");
+    assert.equal(queued.delivered, null, "nothing has reached the phone yet");
+    assert.deepEqual(await laptop.call(api.deliveries.create, { body }), queued, "a retry returns the same delivery");
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM deliveries"), 1);
-    assert.equal((await laptop.call(api.items.get, { params: { id: result.itemId } })).id, result.itemId);
+
+    // The phone opens Relay: it lists the delivery, shows it, and says so. Only the first call marks it.
+    const [waiting] = await phone.call(api.deliveries.list);
+    assert.equal(waiting.id, body.id);
+    assert.equal(waiting.delivered, null);
+    const before = Date.now();
+    assert.deepEqual(await phone.call(api.deliveries.received, { body: { ids: [body.id, body.id] } }), {
+      ids: [body.id],
+    });
+    assert.deepEqual(await phone.call(api.deliveries.received, { body: { ids: [body.id] } }), { ids: [] });
+    const [sent] = await laptop.call(api.deliveries.list, { query: { direction: "sent" } });
+    assert.ok(sent.delivered !== null && sent.delivered >= before);
+    assert.equal(sent.state, "available", "delivered is not accepted");
   } finally {
     await instance.close();
   }
 });
 
-test("a device going offline during upload never loses the saved file or claims delivery", async () => {
-  const { instance, laptop, phoneDevice } = await setup();
+test("only the receiving device can say a delivery reached it", async () => {
+  const { instance, laptop, phone, phoneDevice } = await setup();
+  try {
+    const { result } = await send(laptop, [{ path: "mine.txt", data: "mine" }]);
+    const id = crypto.randomUUID();
+    await laptop.call(api.deliveries.create, { body: { id, item: result.itemId, device: phoneDevice } });
+    const stranger = await member(instance, "wanda");
+    assert.deepEqual(await stranger.call(api.deliveries.received, { body: { ids: [id] } }), { ids: [] });
+    assert.deepEqual(
+      await laptop.call(api.deliveries.received, { body: { ids: [id] } }),
+      { ids: [] },
+      "the sending device is not the one it was for",
+    );
+    assert.equal(await status(new Client(instance).call(api.deliveries.received, { body: { ids: [id] } })), 401);
+    assert.equal(instance.ctx.db.value("SELECT at FROM delivery_receipts WHERE delivery = ?", id), undefined);
+    // Answering it counts as having received it, even without saying so first.
+    await phone.call(api.deliveries.update, { params: { id }, body: { state: "declined" } });
+    assert.ok(instance.ctx.db.value("SELECT at FROM delivery_receipts WHERE delivery = ?", id));
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a device going offline during upload still gets what was sent to it", async () => {
+  const { instance, laptop, phone, phoneDevice } = await setup();
   try {
     const transfer = await laptop.call(api.transfers.create, {
       body: {
@@ -271,20 +303,17 @@ test("a device going offline during upload never loses the saved file or claims 
     });
     assert.equal((await patchUpload(laptop, transfer.uploads[0].id, 0, Buffer.from("saved"))).statusCode, 204);
     streamsOf(instance.ctx).closeAll();
-    assert.equal(
-      await status(
-        laptop.call(api.transfers.complete, {
-          params: { id: transfer.id },
-          body: { destination: { kind: "device", device: phoneDevice } },
-        }),
-      ),
-      409,
-    );
-    assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM deliveries"), 0);
+    const done = await laptop.call(api.transfers.complete, {
+      params: { id: transfer.id },
+      body: { destination: { kind: "device", device: phoneDevice } },
+    });
+    assert.equal(done.delivery?.to?.id, phoneDevice);
+    assert.equal(done.delivery?.delivered, null);
+    const [arrived] = await phone.call(api.deliveries.list);
+    assert.equal(arrived.itemId, transfer.itemId);
     const saved = await laptop.call(api.items.get, { params: { id: transfer.itemId } });
     const res = await laptop.raw({ method: "GET", url: urls.nodeContent(saved.nodes[0].id) });
     assert.equal(res.body, "saved");
-    await laptop.call(api.transfers.complete, { params: { id: transfer.id }, body: { destination: { kind: "save" } } });
   } finally {
     await instance.close();
   }

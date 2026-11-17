@@ -431,6 +431,15 @@ export const api = {
       auth: "member",
       body: z.object({ state: z.enum(["accepted", "declined"]) }),
     }),
+    /**
+     * The receiving device says these deliveries reached it (it showed them), so the sending device
+     * stops saying "waiting". Returns the ones this call marked: when several tabs of one browser
+     * open at once, only one of them announces each arrival.
+     */
+    received: endpoint<{ ids: M.Id[] }>()("POST", "/api/deliveries/received", {
+      auth: "member",
+      body: z.object({ ids: z.array(id).check(z.minLength(1), z.maxLength(100)) }),
+    }),
   },
 
   /** The member's own storage and activity over a range. */
