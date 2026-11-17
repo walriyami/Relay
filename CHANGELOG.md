@@ -56,6 +56,7 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - Walriyami Control being unreachable no longer signs out everyone who signed in with Walriyami. Sessions it confirmed within the last hour keep working, and after that requests wait for Control instead of ending. Only Control's own answer ends a session.
 - People who join by signing in with Walriyami now show in Admin with a **Walriyami** label, and administrators are told when they join. Their usernames follow the same rules as everyone else's.
 - Image previews only ever decode PNG, JPEG, GIF, WebP and HEIF/AVIF, judged by the file's bytes. A file named like a photo but holding another format, such as SVG or TIFF, never reaches a decoder.
+- An upload that stops receiving bytes gives its reserved room back: after 30 minutes for someone using a request link, after a day for a member. One visitor can no longer fill a request for everyone by declaring a large upload and sending nothing.
 - `RELAY_CLIENT_IP_HEADER` reads the visitor's address from a header such as Cloudflare's `CF-Connecting-IP`, sent by a trusted proxy. Behind a tunnel with a gateway in front of Relay, every visitor shared one set of limits; now each gets their own.
 
 ## [1.0.0] - 2026-09-27

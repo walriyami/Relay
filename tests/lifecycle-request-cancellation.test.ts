@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { api } from "../shared/api.ts";
 import type { TransferCreated } from "../shared/model.ts";
-import { Client, admin, member, patchUpload, start, type Instance } from "./support/harness.ts";
+import { Client, admin, member, patchUpload, start, type ApiError, type Instance } from "./support/harness.ts";
+import { STALLED_GUEST_MS, STALLED_MEMBER_MS } from "../server/modules/transfers/lifecycle.ts";
+import { DAY_MS } from "../server/lib/time.ts";
 
 const state = (instance: Instance, id: string) =>
   instance.ctx.db.value<string>("SELECT state FROM transfers WHERE id = ?", id);
@@ -237,3 +239,47 @@ for (const boundary of ["Trash", "item expiry"] as const) {
     }
   });
 }
+
+test("an upload that never sends its bytes gives its reserved room back", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "stall-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Photos", description: "", days: 5, maxBytes: 100 },
+    });
+    const declare = async (size: number) => {
+      const guest = new Client(instance);
+      await guest.call(api.requests.start, { params: { token: request.token } });
+      return guest.call(api.requests.transfer, {
+        params: { token: request.token },
+        body: { id: crypto.randomUUID(), tab: guest.tab, folders: [], files: [{ path: "big.bin", size, mime: "" }] },
+      });
+    };
+    // One visitor claims the whole request and sends nothing, keeping their page open.
+    const hog = await declare(100);
+    await assert.rejects(declare(10), (error: ApiError) => error.status === 413, "the request looks full");
+    const mine = await owner.call(api.transfers.create, {
+      body: {
+        id: crypto.randomUUID(),
+        tab: owner.tab,
+        name: null,
+        folders: [],
+        files: [{ path: "paused.bin", size: 4, mime: "" }],
+      },
+    });
+    instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", Date.now() + 2 * DAY_MS);
+
+    await instance.ctx.transfers.sweep(Date.now() + STALLED_GUEST_MS - 60_000);
+    assert.equal(state(instance, hog.id), "open", "half an hour to start sending");
+    await instance.ctx.transfers.sweep(Date.now() + STALLED_GUEST_MS + 60_000);
+    assert.notEqual(state(instance, hog.id), "open", "given up, and its empty submission removed");
+    assert.equal(state(instance, mine.id), "open", "a member's paused upload waits longer");
+    assert.ok(await declare(10), "everyone else can use the request again");
+
+    await instance.ctx.transfers.sweep(Date.now() + STALLED_MEMBER_MS + 60_000);
+    assert.notEqual(state(instance, mine.id), "open");
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM nodes WHERE state = 'pending'"), 0);
+  } finally {
+    await instance.close();
+  }
+});

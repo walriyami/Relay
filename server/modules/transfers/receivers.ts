@@ -79,6 +79,11 @@ export class Receivers {
     this.ctx = ctx;
   }
 
+  /** Whether bytes for this upload are arriving right now. */
+  receiving(id: string) {
+    return !!this.receivers.get(id)?.inflight;
+  }
+
   partPath(id: string) {
     return join(this.ctx.config.root, "uploads", `${id}.part`);
   }
