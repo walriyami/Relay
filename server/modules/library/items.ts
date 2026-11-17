@@ -245,7 +245,10 @@ export function updateItem(
   return summaries(ctx, [itemId]).get(itemId)!;
 }
 
-/** Moves an item to Trash: its links stop working and its unfinished transfers are cancelled. */
+/**
+ * Moves an item to Trash: its links pause (they check that their item is live) and its unfinished
+ * transfers are cancelled.
+ */
 export function trashItem(ctx: Context, owner: string, itemId: string) {
   const item = owned(ctx, owner, itemId);
   if (item.trashed !== null) return;
@@ -258,7 +261,6 @@ function trashItemInTransaction(ctx: Context, item: ItemRow, at: number) {
   const days = ctx.db.value<number>("SELECT trash_days FROM users WHERE id = ?", item.owner)!;
   const purgeAt = earlier(at + days * DAY_MS, hardDeadline(item));
   ctx.db.run("UPDATE items SET trashed = ?, purge_at = ? WHERE id = ?", at, purgeAt, item.id);
-  ctx.db.run("UPDATE links SET revoked = ? WHERE item = ? AND revoked IS NULL", at, item.id);
   ctx.transfers.cancelForItem(item.id);
 }
 
@@ -283,6 +285,9 @@ function restoreInTransaction(ctx: Context, item: ItemRow, now: number) {
   if (!recoverable(item, now)) fail(410, "This item's recovery period has ended.");
   setRetention(ctx, item, null, now);
   ctx.db.run("UPDATE items SET trashed = NULL, purge_at = NULL WHERE id = ?", item.id);
+  // Earlier versions turned links off when their item was trashed, stamped with the same time. Those
+  // come back too; a link the owner turned off themselves has a different time and stays off.
+  ctx.db.run("UPDATE links SET revoked = NULL WHERE item = ? AND revoked = ?", item.id, item.trashed);
 }
 
 /** Applies a bounded visible-page operation after validating every selected row inside one transaction. */
@@ -317,8 +322,8 @@ export function bulkItems(ctx: Context, owner: string, body: Body<typeof api.ite
 }
 
 /**
- * Restoring keeps the item until deleted, or as long as the member may keep uploads; links revoked
- * by trashing stay revoked.
+ * Restoring keeps the item until deleted, or as long as the member may keep uploads. Its links work
+ * again unless they expired or were turned off meanwhile.
  */
 export function restoreItem(ctx: Context, owner: string, itemId: string) {
   ctx.db.tx(() => {

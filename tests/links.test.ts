@@ -233,7 +233,7 @@ test("shares save the earlier item deadline; item renewal alone never extends th
   }
 });
 
-test("trashing the item stops the link with 410; restoring keeps it revoked", async () => {
+test("trashing the item pauses its link and code with 410; restoring or Undo brings them back", async () => {
   const { instance, owner, itemId, link } = await setup();
   try {
     const visitor = new Client(instance);
@@ -249,16 +249,26 @@ test("trashing the item stops the link with 410; restoring keeps it revoked", as
       410,
     );
 
-    await owner.call(api.items.restore, { params: { id: itemId } });
-    assert.equal(await status(visitor.call(api.links.open, { params: { token: link.token } })), 404);
-    const [after] = await owner.call(api.links.list);
-    assert.equal(after.revoked, true);
-    assert.equal(after.available, false);
-    assert.deepEqual(await owner.call(api.links.list).then((l) => l.filter((x) => x.available)), []);
+    const [paused] = await owner.call(api.links.list);
+    assert.equal(paused.revoked, false, "a paused link is not turned off");
+    assert.equal(paused.available, false);
+    // The pickup code is paused with it, not retired.
+    assert.notEqual(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), 200);
 
-    // A new link works again.
-    const fresh = await owner.call(api.links.create, { body: { id: crypto.randomUUID(), item: itemId, days: 1 } });
-    assert.equal(await status(visitor.call(api.links.open, { params: { token: fresh.token } })), 200);
+    await owner.call(api.items.restore, { params: { id: itemId } });
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: link.token } })), 200);
+    const [after] = await owner.call(api.links.list);
+    assert.equal(after.available, true);
+    assert.equal(after.code, link.code);
+    assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), 200);
+    const again = await visitor.raw({ method: "GET", url: urls.shareContent(link.token, file.id) });
+    assert.equal(again.statusCode, 200);
+
+    // Bulk trash and restore (Undo in Files) do the same.
+    await owner.call(api.items.bulk, { body: { operation: "trash", ids: [itemId] } });
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: link.token } })), 410);
+    await owner.call(api.items.bulk, { body: { operation: "restore", ids: [itemId] } });
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: link.token } })), 200);
   } finally {
     await instance.close();
   }
@@ -320,6 +330,28 @@ test("expired pickup codes count as failed attempts", async () => {
     const visitor = new Client(instance);
     for (let i = 0; i < 5; i++)
       assert.equal(await status(visitor.call(api.pickup.resolve, { body: { code: link.code } })), i < 4 ? 404 : 429);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("restoring brings back links an earlier version turned off on Trash, not ones the owner turned off", async () => {
+  const { instance, owner, itemId, link } = await setup();
+  try {
+    const own = await owner.call(api.links.create, { body: { id: crypto.randomUUID(), item: itemId, days: 7 } });
+    await owner.call(api.links.revoke, { params: { id: own.id } });
+    // Turned off a moment before; a link turned off in the same millisecond as Trash would come back.
+    instance.ctx.db.run("UPDATE links SET revoked = revoked - 1000 WHERE id = ?", own.id);
+    await owner.call(api.items.trash, { params: { id: itemId } });
+    // What the previous version did on Trash: stamp the item's live links with the trash time.
+    const { db } = instance.ctx;
+    const trashed = db.value<number>("SELECT trashed FROM items WHERE id = ?", itemId)!;
+    db.run("UPDATE links SET revoked = ? WHERE item = ? AND revoked IS NULL", trashed, itemId);
+
+    await owner.call(api.items.restore, { params: { id: itemId } });
+    const visitor = new Client(instance);
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: link.token } })), 200);
+    assert.equal(await status(visitor.call(api.links.open, { params: { token: own.token } })), 404);
   } finally {
     await instance.close();
   }

@@ -233,7 +233,7 @@ test("bulk item actions authorize every id, reject stale state without partial c
 
     const trashed = await client.call(api.items.bulk, { body: { operation: "trash", ids: [firstId] } });
     assert.deepEqual(trashed, { updated: 1 });
-    assert.equal((await summary(client, firstId)).linked, false, "bulk trash revokes the existing link");
+    assert.equal((await summary(client, firstId)).linked, false, "a link to an item in Trash is paused");
     const restored = await client.call(api.items.bulk, { body: { operation: "restore", ids: [firstId, secondId] } });
     assert.deepEqual(restored, { updated: 2 });
     assert.equal((await summary(client, firstId)).trashed, null);
@@ -242,13 +242,13 @@ test("bulk item actions authorize every id, reject stale state without partial c
       null,
       "restoring keeps the existing indefinite-retention rule",
     );
-    assert.equal((await summary(client, firstId)).linked, false, "restoring does not reactivate revoked links");
+    assert.equal((await summary(client, firstId)).linked, true, "restoring brings the paused link back");
   } finally {
     await instance.close();
   }
 });
 
-test("trash, restore and delete forever; trashing revokes links and cancels open transfers", async () => {
+test("trash, restore and delete forever; trashing pauses links and cancels open transfers", async () => {
   const instance = await start();
   try {
     const client = await member(instance, "tia");
@@ -273,8 +273,8 @@ test("trash, restore and delete forever; trashing revokes links and cancels open
     await client.call(api.items.restore, { params: { id } });
     s = await summary(client, id);
     assert.equal(s.trashed, null);
-    assert.equal(s.linked, false, "restoring does not un-revoke");
-    assert.equal(s.links.length, 0);
+    assert.equal(s.linked, true, "restoring brings the paused link back");
+    assert.equal(s.links.length, 1);
     assert.equal(await status(client.call(api.items.restore, { params: { id } })), 409, "already restored");
 
     // Trashing an item that is still uploading cancels its transfer.

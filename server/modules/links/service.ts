@@ -56,7 +56,7 @@ export const isAvailable = (row: LinkRow, now: number) => !row.revoked && !expir
 /** Unknown, revoked, expired or disabled-owner links are 404; a valid link to removed content is 410. */
 export function checkAvailable(row: LinkRow | undefined, now: number): LinkRow {
   if (!row || row.owner_disabled) return notFound("This link");
-  if (!row.item_live) fail(410, "The content of this link is no longer available.");
+  if (!row.item_live) fail(410, "This content isn't available right now. Ask the person who shared it.");
   if (row.revoked || expired(row, now)) notFound("This link");
   return row;
 }

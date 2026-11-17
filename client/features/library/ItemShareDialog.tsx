@@ -11,6 +11,7 @@ import { LinkSettingsDialog } from "./dialogs";
 function stopped(s: Link) {
   if (s.revoked) return "This link was turned off.";
   if (Math.min(s.expires ?? Infinity, s.item?.expires ?? Infinity) <= Date.now()) return "This link has expired.";
+  if (s.item?.trashed) return "This link is paused while its item is in Trash.";
   return "This link stopped working because its item left Files.";
 }
 

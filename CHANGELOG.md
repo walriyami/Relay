@@ -48,6 +48,10 @@ All notable changes to Relay are recorded here. The format follows [Keep a Chang
 - The Compose files, `.env.example`, `scripts/redeploy.sh` and `npm run verify:compose`. They described a way of running Relay that production doesn't use and nobody tested.
 - Old bundled copies of the Walriyami sign-in package in `vendor/` that nothing installed; only the version in use remains.
 
+### Fixed
+
+- Moving an item to Trash pauses its links and codes instead of turning them off for good. Restoring it, or **Undo**, makes them work again, including links an earlier version turned off this way.
+
 ## [1.0.0] - 2026-09-27
 
 The first public release.

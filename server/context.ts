@@ -191,7 +191,7 @@ export type ShareAccess = {
 export interface Links {
   /**
    * Opens a link in this browser: sets its visitor cookie and lets it in unless a password is needed.
-   * Unknown, revoked and expired links are 404; content that left Files is 410.
+   * Unknown, revoked and expired links are 404; content in Trash (paused) or gone is 410.
    */
   open(token: string, req: FastifyRequest, reply: FastifyReply): ShareAccess;
   /** Checks a content or archive request: 401 while locked, 410 when a limited link is used up. */

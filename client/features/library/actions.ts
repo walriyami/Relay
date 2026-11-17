@@ -230,7 +230,7 @@ export async function restoreItem(c: Pick<ItemSummary, "id" | "name">) {
   await call(api.items.restore, { params: { id: c.id } });
   dismissToastKey(undoKey(c.id));
   notifyChange("items");
-  toast(`Restored “${c.name}”. Its hard deadline is unchanged.`, { tone: "success" });
+  toast(`Restored “${c.name}”. Any links to it work again.`, { tone: "success" });
 }
 
 export async function deleteItemForever(c: Pick<ItemSummary, "id" | "name">) {

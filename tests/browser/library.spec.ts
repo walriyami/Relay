@@ -229,7 +229,7 @@ test("library selection is page-local, bulk actions are confirmed, and Trash sup
   await bar.getByRole("button", { name: "Select all" }).click();
   await bar.getByRole("button", { name: "Move to Trash" }).click();
   const confirm = page.getByRole("dialog", { name: "Move 2 items to Trash?" });
-  await expect(confirm).toContainText("their links will stop working");
+  await expect(confirm).toContainText("their links pause until you restore them");
   await confirm.getByRole("button", { name: "Move to Trash" }).click();
   await expect(page.getByText("2 items moved to Trash")).toBeVisible();
 

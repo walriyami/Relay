@@ -311,7 +311,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
       operation === "trash" &&
       !(await confirmDialog({
         title: `Move ${plural(ids.length, "item")} to Trash?`,
-        body: `${plural(ids.length, "item")} will move to Trash. You can restore them until their saved deletion deadline, at most ${dayLabel(me.user.trashDays)}; their links will stop working.`,
+        body: `${plural(ids.length, "item")} will move to Trash. You can restore them until their saved deletion deadline, at most ${dayLabel(me.user.trashDays)}; their links pause until you restore them.`,
         confirm: "Move to Trash",
         danger: true,
       }))
@@ -374,7 +374,7 @@ export function FilesPage({ trash = false }: { trash?: boolean }) {
           <h1>{trash ? "Trash" : "Files"}</h1>
           <p className="muted">
             {trash
-              ? `Items in Trash keep their saved deletion dates and may be deleted sooner by their hard deadline. Their links no longer work.`
+              ? `Items in Trash keep their saved deletion dates and may be deleted sooner by their hard deadline. Their links are paused until you restore them.`
               : total
                 ? debounced
                   ? plural(total, "match", "matches")

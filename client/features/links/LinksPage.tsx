@@ -36,7 +36,7 @@ function reach(s: Link, now: number) {
 function inactiveReason(s: Link) {
   if (s.revoked) return "Turned off";
   if (s.expires !== null && s.expires <= Date.now()) return `Expired ${date(s.expires)}`;
-  return s.item?.trashed ? "Item in Trash" : "Item no longer in Files";
+  return s.item?.trashed ? "Paused: item in Trash" : "Item no longer in Files";
 }
 
 export function LinksPage() {
