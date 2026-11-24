@@ -356,6 +356,35 @@ test("the guard forgets a network's wrong codes once its window has passed", asy
   }
 });
 
+test("guessing from more networks than the guard holds doesn't wipe earlier guesses", async () => {
+  const instance = await start();
+  try {
+    const t0 = Date.now();
+    const refused = (ip: string, now = t0) => {
+      try {
+        checkCodeAttempt(instance.ctx, ip, now);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    for (let attempt = 0; attempt < 5; attempt++) recordCodeFailure(instance.ctx, "198.18.4.1", t0);
+    // One wrong code from each of 20,000 more networks fills the guard.
+    for (let i = 0; i < 20_000; i++) recordCodeFailure(instance.ctx, `10.${i >> 16}.${(i >> 8) & 255}.${i & 255}`, t0);
+    assert.ok(refused("198.18.4.1"), "the first network's wrong codes still count");
+    // Networks that don't fit share one allowance of 5 (each in its own /24, so only that limit
+    // applies). The last flood network already used one of them.
+    for (let n = 1; n <= 4; n++) {
+      assert.ok(!refused(`203.0.${n}.7`));
+      recordCodeFailure(instance.ctx, `203.0.${n}.7`, t0);
+    }
+    assert.ok(refused("203.0.9.7"), "the next new network shares the used-up allowance");
+    assert.ok(!refused("203.0.9.7", t0 + 24 * 3_600_000 + 1), "a day later there's room again");
+  } finally {
+    await instance.close();
+  }
+});
+
 test("one account can't make sign-in codes without end", async () => {
   const instance = await start();
   try {
