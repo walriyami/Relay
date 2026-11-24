@@ -155,6 +155,13 @@ export async function buildApp(config: Config): Promise<App> {
         .header("Referrer-Policy", "no-referrer")
         .header("Cross-Origin-Resource-Policy", "same-origin")
         .header("X-Frame-Options", "DENY")
+        // Another site's window can't keep a handle on Relay's, and nothing here may use the camera,
+        // microphone, location or payment devices.
+        .header("Cross-Origin-Opener-Policy", "same-origin")
+        .header(
+          "Permissions-Policy",
+          "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=()",
+        )
         .header(
           "Content-Security-Policy",
           "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",

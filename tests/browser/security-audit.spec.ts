@@ -90,4 +90,6 @@ test("the built web server does not publish repository files, data or private by
   expect(page.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");
   expect(page.headers()["referrer-policy"]).toBe("no-referrer");
   expect(page.headers()["x-frame-options"]).toBe("DENY");
+  expect(page.headers()["cross-origin-opener-policy"]).toBe("same-origin");
+  expect(page.headers()["permissions-policy"]).toContain("camera=()");
 });

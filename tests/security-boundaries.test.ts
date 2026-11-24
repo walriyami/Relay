@@ -203,6 +203,9 @@ test("behind Cloudflare each visitor is counted on their own, never as the tunne
       });
     for (let i = 1; i <= 5; i++) assert.equal((await chosen(`198.51.100.${30 + i}`)).statusCode, 404);
     assert.equal((await chosen("198.51.100.99")).statusCode, 429, "without the header, a made-up chain counts as one");
+    const page = await behind.app.inject({ url: api.session.get.path, headers: { host: "relay.test" } });
+    assert.equal(page.headers["cross-origin-opener-policy"], "same-origin");
+    assert.match(String(page.headers["permissions-policy"]), /camera=\(\), microphone=\(\)/);
     // The host is the one the proxy routed by, whatever X-Forwarded-Host says.
     const hosted = (host: string, forwarded: string) =>
       behind.app.inject({
