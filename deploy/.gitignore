@@ -1,0 +1,4 @@
+# This server's own settings, tunnel token and backups never go into git.
+.env
+secrets/
+backups/

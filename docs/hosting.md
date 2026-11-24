@@ -1,6 +1,8 @@
 # Hosting
 
-Relay runs at **https://relay.walriyami.com** on the owner's Raspberry Pi 5, managed by Walriyami Control (`walctl`), the system that builds, starts, updates and backs up every app on the owner's devices. This guide describes that setup. Follow `walctl guide` for anything about hosting: never start Relay by hand, with Docker Compose, launchd or systemd, and never set up tunnels or DNS for it.
+Relay runs at **https://relay.walriyami.com** on the owner's Raspberry Pi 5, managed by Walriyami Control (`walctl`), the system that builds, starts, updates and backs up every app on the owner's devices. This guide describes that setup. Follow `walctl guide` for anything about hosting on the owner's devices: never start Relay there by hand, with Docker Compose, launchd or systemd, and never set up tunnels or DNS for it.
+
+A separate machine without Walriyami, running only Docker and a Cloudflare Tunnel, uses [`deploy/`](../deploy/README.md) instead: see [Plain Docker and a Cloudflare Tunnel](#plain-docker-and-a-cloudflare-tunnel).
 
 - [How it runs](#how-it-runs)
 - [Updating](#updating)
@@ -13,6 +15,7 @@ Relay runs at **https://relay.walriyami.com** on the owner's Raspberry Pi 5, man
 - [First start and members](#first-start-and-members)
 - [Limits and storage](#limits-and-storage)
 - [Time](#time)
+- [Plain Docker and a Cloudflare Tunnel](#plain-docker-and-a-cloudflare-tunnel)
 
 ## How it runs
 
@@ -121,6 +124,8 @@ What it needs from the host:
 - **The UDP port open to the local network.** If the host has a firewall, allow UDP `RELAY_DIRECT_PORT` from the local network only; with ufw, for example, `sudo ufw allow from 192.168.1.0/24 to any port 3090 proto udp`. Don't forward it on the router.
 - **Devices that can reach the server.** Guest Wi-Fi and access points with client isolation keep devices apart, and so do most VPNs; their transfers go the usual way.
 
+**Turn it off where there is no local network.** On a server reached only through a tunnel, such as [`deploy/`](#plain-docker-and-a-cloudflare-tunnel), no member's browser shares a network with the server, so a direct connection can never come up. The helper would still start, announce Docker-internal addresses nobody can reach, and accept UDP packets from browsers, which is code running for no benefit. Set `RELAY_DIRECT=false` there; `deploy/compose.yaml` does. Elsewhere, leave it on.
+
 **Admin → Overview** shows whether direct transfers are on and how many browsers are connected, and warns when they're unavailable, with the reason, such as the UDP port being taken by another program. Relay starts the helper again by itself if it stops.
 
 ## Nearby
@@ -135,7 +140,7 @@ Relay judges which devices share a network by the address it sees them at: the s
 
 ## Notifications
 
-Members turn notifications on per device in **Settings → Arrivals**. Relay sends them itself over HTTPS to the browsers' push services (Google, Mozilla, Apple and Microsoft), so the container needs outbound HTTPS, as it already has for Walriyami sign-in. Nothing needs configuring: Relay creates its key pair in `/data/push-keys.json` the first time a device asks. Deleting that file makes every device's subscription stale; each device then turns notifications back on itself. Apple requires the sender to name a contact address, for which Relay uses `RELAY_ORIGIN`; without an HTTPS `RELAY_ORIGIN`, iPhones and iPads may refuse notifications.
+Members turn notifications on per device in **Settings → Arrivals**. Relay sends them itself over HTTPS to the browsers' push services (Google, Mozilla, Apple and Microsoft), so the container needs outbound HTTPS, as it already has for Walriyami sign-in. In [`deploy/`](#plain-docker-and-a-cloudflare-tunnel) Relay has no direct route out; it reaches these services, and nothing else, through an allow-list proxy (Node's `NODE_USE_ENV_PROXY` with `HTTPS_PROXY`). Nothing needs configuring: Relay creates its key pair in `/data/push-keys.json` the first time a device asks. Deleting that file makes every device's subscription stale; each device then turns notifications back on itself. Apple requires the sender to name a contact address, for which Relay uses `RELAY_ORIGIN`; without an HTTPS `RELAY_ORIGIN`, iPhones and iPads may refuse notifications.
 
 ## First start and members
 
@@ -191,3 +196,32 @@ Sharing links are bounded by the current content deadline. Renewing content does
 Relay evaluates deadlines against the server's UTC wall clock, and the Pi keeps time over the network (it has no clock battery). Browser time does not authorize access. A forward clock correction can expire or permanently purge content earlier than intended, and a backward correction can delay expiry. Once revocation, Trash or deletion is committed, setting the clock back cannot undo that state.
 
 Restoring an older snapshot restores its older policy and revocation state as well; Relay cannot infer changes made after that snapshot. Maintenance after an outage does not add extra retention or recovery time.
+
+## Plain Docker and a Cloudflare Tunnel
+
+[`deploy/`](../deploy) runs Relay on a machine with only Docker and a Cloudflare Tunnel, such as a test server. Its [README](../deploy/README.md) has the steps, updates and backups in plain language. Three containers run there: `relay`, `cloudflared` (the tunnel, dialling out to Cloudflare) and `egress` (a Squid proxy). No port is published on the machine. Relay sits on two internal Docker networks, one shared with `cloudflared` and one with `egress`, so it has no route to the internet, the host or the local network; the proxy lets it open HTTPS connections to the browsers' push services and nowhere else. Every container has a read-only root filesystem, no Linux capabilities, `no-new-privileges`, an init process, memory and process-count limits, and rotated logs. Relay's own files in the image belong to root, so even with a writable root filesystem it can write only to `/data`.
+
+The settings `deploy/compose.yaml` gives Relay, and why:
+
+| Variable                                        | Value                                     | Why                                                                                                                                                                                                              |
+| ----------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_ORIGIN`                                  | from `.env`, the tunnel's public hostname | Required: without it every request for that name is refused.                                                                                                                                                     |
+| `RELAY_TRUST_PROXY`                             | `cloudflared`                             | The tunnel container's name. Only it may report a visitor's address; other containers can't.                                                                                                                     |
+| `RELAY_CLIENT_IP_HEADER`                        | `cf-connecting-ip`                        | Cloudflare writes this header itself, replacing anything the visitor sent, while `cloudflared` only appends to `X-Forwarded-For`. Each visitor gets their own rate limits, and Nearby sees who shares a network. |
+| `RELAY_DIRECT`                                  | `false`                                   | No local network behind a tunnel; see [Direct transfers](#direct-transfers-on-your-network).                                                                                                                     |
+| `NODE_USE_ENV_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | `1`, `http://egress:3128`, loopback       | Notifications go out through the proxy. The health check talks to `127.0.0.1` directly.                                                                                                                          |
+| `RELAY_RECOVER_ADMIN`                           | from `.env`, normally empty               | [Recovering administrator access](#recovering-administrator-access).                                                                                                                                             |
+
+Not set on purpose: `RELAY_SECRET` (Relay keeps its key in `/data/secret.key`), `RELAY_SETUP_KEY` (with a public `RELAY_ORIGIN` setup always asks for the one-time key, printed by `docker compose logs relay`) and the `WAL_*` settings, so Walriyami sign-in is off.
+
+What walctl does that this setup doesn't: snapshots before each update and putting the previous version back when a new one fails its health check (run `deploy/backup.sh` before updating), restarting a container that is running but unhealthy (Docker restarts Relay only when it exits), and Walriyami sign-in.
+
+There is no Cloudflare Access in front. Relay does its own sign-in, and people opening share, request and Nearby links or typing a pickup code have no account, so Access over the whole name would lock them out.
+
+### Members who joined with Walriyami sign-in
+
+Someone whose account was created by signing in with Walriyami never chose a Relay password: Relay gave the account a random one. Where Walriyami sign-in is off, as in `deploy/` or after moving data to a host without the `WAL_*` settings, they can't sign in, and they can't set a password themselves, because **Settings** asks for the current one. **Admin → Members** marks these members with a **Walriyami** label.
+
+An administrator gives them a password: **Admin → Members → Manage** on that member, fill in **Set a new password**, save, and tell them the password privately. They sign in with their username and that password and can then change it in **Settings**. Setting it signs them out everywhere and removes their passkeys; passkeys belong to the web address anyway, so after a move to a new address they add new ones.
+
+An administrator can't set their own password this way. If the administrator's own account came from Walriyami sign-in, use [`RELAY_RECOVER_ADMIN`](#recovering-administrator-access) once on the new host (in `deploy/`, through `.env`; see its README), or have another administrator set it.

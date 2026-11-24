@@ -1,0 +1,123 @@
+# Relay on a machine that runs only Docker and a Cloudflare Tunnel. Steps are in README.md next to this file.
+#
+# Nothing here opens a port on the machine. The only way in is the tunnel that `cloudflared` dials out to
+# Cloudflare. Relay itself has no route to the internet, the machine or the home network: its only way out
+# is the `egress` proxy, which lets it reach the browsers' push services (for notifications) and nothing else.
+
+name: relay
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-locked-down: &locked-down
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  relay:
+    <<: *locked-down
+    build:
+      context: ..
+      args:
+        # The commit being built: Relay shows it in Admin and /api/health, and the build stops without it.
+        # up.sh fills it in from git.
+        RELAY_COMMIT: ${RELAY_COMMIT:-}
+    image: relay:local
+    tmpfs:
+      # Thumbnail work needs a scratch folder; nothing in it may be run as a program.
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    environment:
+      RELAY_ORIGIN: ${RELAY_ORIGIN:?Set RELAY_ORIGIN in .env, for example https://relay.example.com}
+      # Only the cloudflared container may tell Relay who a visitor is, and it does so in the header
+      # Cloudflare writes itself. Anyone else's forwarding headers are ignored.
+      RELAY_TRUST_PROXY: cloudflared
+      RELAY_CLIENT_IP_HEADER: cf-connecting-ip
+      # Direct transfers need the browsers and the server on one home network. Behind a tunnel there is
+      # none, so the helper would only announce Docker-internal addresses nobody can reach.
+      RELAY_DIRECT: "false"
+      # Notifications leave through the allow-list proxy (Node 24 honours these for fetch).
+      NODE_USE_ENV_PROXY: "1"
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: 127.0.0.1,localhost,::1
+      # Empty unless you are recovering a locked-out administrator (README.md).
+      RELAY_RECOVER_ADMIN: ${RELAY_RECOVER_ADMIN:-}
+      # Deliberately not set: RELAY_SECRET (Relay keeps its own key in /data/secret.key), RELAY_SETUP_KEY
+      # (setup always asks for the one-time key on a public address) and WAL_* (no Walriyami here).
+    volumes:
+      - relay-data:/data
+    networks: [edge, egress]
+    # One bad upload or preview must not take the whole machine down. The same limit as production.
+    mem_limit: 768m
+    pids_limit: 256
+    stop_grace_period: 30s
+    # The health check is the image's own (server/health.mjs).
+
+  cloudflared:
+    <<: *locked-down
+    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    # The image's entrypoint is `cloudflared --no-autoupdate`. Its metrics stay on its own loopback.
+    command: ["tunnel", "--metrics", "127.0.0.1:20241", "run"]
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+    secrets: [tunnel_token]
+    networks: [edge, outbound]
+    depends_on:
+      relay:
+        condition: service_healthy
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  egress:
+    <<: *locked-down
+    # Squid 6.13.
+    image: ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    user: proxy
+    entrypoint: ["squid"]
+    command: ["-N", "-f", "/etc/squid/squid.conf"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=1m
+      - /var/log/squid:rw,noexec,nosuid,nodev,size=1m
+      - /var/spool/squid:rw,noexec,nosuid,nodev,size=1m
+    volumes:
+      - ./egress/squid.conf:/etc/squid/squid.conf:ro
+    networks: [egress, outbound]
+    mem_limit: 128m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  # Relay and cloudflared only. `internal`: no route to the internet, the machine or the home network.
+  edge:
+    internal: true
+  # Relay and the egress proxy only.
+  egress:
+    internal: true
+  # The only network with a way out. Relay is never on it.
+  outbound: {}
+
+volumes:
+  # Everything Relay keeps: the database, every file, its secret key. See README.md for backups.
+  relay-data:
+    name: relay-data
+
+secrets:
+  tunnel_token:
+    file: ./secrets/tunnel_token
