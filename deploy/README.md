@@ -46,8 +46,6 @@ git clone https://github.com/walriyami/Relay.git ~/relay
 cd ~/relay/deploy
 ```
 
-If GitHub asks for a password, the repository is private: sign in with a GitHub access token as the password.
-
 **3. Fill in the settings.**
 
 ```sh
