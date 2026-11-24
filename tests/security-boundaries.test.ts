@@ -83,6 +83,10 @@ test("the setup key is on unless RELAY_SETUP_KEY turns it off, and a typo stops 
   for (const value of ["true", "1", "True"]) assert.equal(configFromEnv({ RELAY_SETUP_KEY: value }).setupKey, true);
   for (const value of ["yes", "on", "ture"])
     assert.throws(() => configFromEnv({ RELAY_SETUP_KEY: value }), /RELAY_SETUP_KEY must be true or false/);
+  // Off only where the address says the machine is private; a public name keeps the key.
+  for (const origin of ["http://localhost:3000", "http://relay.localhost", "http://192.168.1.5", "http://[::1]:8080"])
+    assert.equal(configFromEnv({ RELAY_SETUP_KEY: "false", RELAY_ORIGIN: origin }).setupKey, false, origin);
+  assert.equal(configFromEnv({ RELAY_SETUP_KEY: "false", RELAY_ORIGIN: "https://relay.example" }).setupKey, true);
 });
 
 test("direct transfers are on unless RELAY_DIRECT turns them off, on a valid UDP port", () => {

@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { resolve } from "node:path";
 import { isAnnounceable } from "../local/addresses.ts";
 
@@ -34,6 +35,8 @@ export type Config = {
    * Setup asks for a one-time key before anyone can create the administrator, so a fresh or reset
    * server can't be claimed by whoever opens it first. The key is printed in the server log and
    * kept in <root>/setup.key until setup. On unless RELAY_SETUP_KEY=false (a machine only you can reach).
+   * That is ignored when RELAY_ORIGIN names a public web address: one wrong line there would hand
+   * the server to its first visitor.
    */
   setupKey: boolean;
   /**
@@ -68,6 +71,7 @@ export type Config = {
 };
 
 export function configFromEnv(env = process.env): Config {
+  const origin = env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined;
   return {
     root: resolve(env.RELAY_DATA || ".data"),
     sso:
@@ -85,14 +89,14 @@ export function configFromEnv(env = process.env): Config {
             projectId: env.WAL_CONTROL_PROJECT_ID || "relay",
           }
         : undefined,
-    origin: env.RELAY_ORIGIN ? pinnedOrigin(env.RELAY_ORIGIN) : undefined,
+    origin,
     secret: env.RELAY_SECRET,
     trustProxy: (env.RELAY_TRUST_PROXY?.trim() || "127.0.0.1,::1")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
     clientIpHeader: clientIpHeader(env.RELAY_CLIENT_IP_HEADER),
-    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true),
+    setupKey: flag("RELAY_SETUP_KEY", env.RELAY_SETUP_KEY, true) || (!!origin && !privateOrigin(origin)),
     recoverAdmin: env.RELAY_RECOVER_ADMIN?.trim() || undefined,
     tabLeaseMs: 5 * 60_000,
     pausedUploadMs: 24 * 60 * 60_000,
@@ -139,6 +143,12 @@ function directAddresses(value: string | undefined) {
     if (!isAnnounceable(address))
       throw new Error(`RELAY_DIRECT_ADDRESSES must list private network addresses; "${address}" isn't one.`);
   return addresses.length ? { addresses: [...new Set(addresses)] } : {};
+}
+
+/** Whether an origin names this machine or a bare address rather than a public web name. */
+function privateOrigin(origin: string) {
+  const host = new URL(origin).hostname.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host.endsWith(".localhost") || isIP(host) !== 0;
 }
 
 /** "https://relay.example.com" exactly as browsers send it in Origin, or a startup error naming the variable. */
