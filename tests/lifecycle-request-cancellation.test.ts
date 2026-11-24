@@ -315,10 +315,10 @@ test("room a visitor declared but hasn't sent never blocks members, and a trickl
           files: [{ path: "a.bin", size, mime: "" }],
         },
       });
-    assert.ok(await upload(200), "the visitor's 900 declared bytes don't fill the server for members");
+    assert.ok(await upload(100), "the visitor's 900 declared bytes don't fill the server for members");
     // Nor the disk: free space is judged without them for members, and with them for visitors.
-    assert.equal(instance.ctx.transfers.outstandingBytes(false), 200);
-    assert.equal(instance.ctx.transfers.outstandingBytes(true), 1100);
+    assert.equal(instance.ctx.transfers.outstandingBytes(false), 100);
+    assert.equal(instance.ctx.transfers.outstandingBytes(true), 1000);
     // So a visitor's bytes are checked as they arrive: none are taken once the disk can't hold
     // everything still to come.
     const outstanding = instance.ctx.transfers.outstandingBytes;
@@ -336,6 +336,42 @@ test("room a visitor declared but hasn't sent never blocks members, and a trickl
     assert.notEqual(state(instance, hog.id), "open");
   } finally {
     mock.timers.reset();
+    await instance.close();
+  }
+});
+
+test("when a member's upload takes a visitor's declared room, the visitor is the one refused", async () => {
+  const instance = await start();
+  try {
+    const boss = await admin(instance);
+    const owner = await member(instance, "overtaken-owner", boss);
+    await boss.call(api.admin.settings, { body: { capacity: 1000, expectedCapacity: DEFAULTS.capacityBytes } });
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Big", description: "", days: 5, maxBytes: 900 },
+    });
+    const guest = new Client(instance);
+    await guest.call(api.requests.start, { params: { token: request.token } });
+    const visitor = await guest.call(api.requests.transfer, {
+      params: { token: request.token },
+      body: { id: crypto.randomUUID(), tab: guest.tab, folders: [], files: [{ path: "big.bin", size: 900, mime: "" }] },
+    });
+    assert.equal((await patchUpload(guest, visitor.uploads[0].id, 0, Buffer.alloc(100))).statusCode, 204);
+    const mine = await boss.call(api.transfers.create, {
+      body: {
+        id: crypto.randomUUID(),
+        tab: boss.tab,
+        name: null,
+        folders: [],
+        files: [{ path: "a.bin", size: 800, mime: "" }],
+      },
+    });
+    assert.equal((await patchUpload(guest, visitor.uploads[0].id, 100, Buffer.alloc(100))).statusCode, 507);
+    assert.equal((await patchUpload(boss, mine.uploads[0].id, 0, Buffer.alloc(800))).statusCode, 204);
+    assert.ok(
+      instance.ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")! <= 1000,
+      "the capacity holds",
+    );
+  } finally {
     await instance.close();
   }
 });

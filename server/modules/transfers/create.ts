@@ -21,14 +21,34 @@ import { assertTransferAvailability, ensureTransferAvailability } from "./availa
 const DISK_HEADROOM = 256 * 1024 ** 2;
 const DISK_FULL = "The server's disk does not have enough free space for this transfer.";
 
+const CAPACITY_FULL = "The server has reached its storage capacity.";
+
+/**
+ * Bytes unfinished uploads will add. A request-link visitor's count only as far as they've sent
+ * unless `visitors` is set, when they count in full, as members' always do.
+ */
+function heldBytes(ctx: Context, visitors: boolean) {
+  const promised = visitors ? "n.size" : "u.offset";
+  return ctx.db.value<number>(
+    `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0)
+     FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
+     WHERE n.state = 'pending'`,
+  )!;
+}
+const storedBytes = (ctx: Context) => ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
+
 /**
  * Members' uploads are admitted without counting what request-link visitors have declared but not
- * sent (see `admit`), so a visitor's bytes are checked as they arrive instead: they're taken only
- * while the disk still holds everything every unfinished upload has left, and Relay's headroom.
+ * sent (see `admit`), so a visitor's bytes are checked as they arrive instead. They're taken while
+ * the rest of this visitor's file still fits beside everything stored and members' unfinished
+ * uploads, within the capacity and on the disk with Relay's headroom. When a member's upload took
+ * the room, the visitor whose room it was is the one refused.
  */
-export function ensureVisitorDiskRoom(ctx: Context) {
+export function ensureVisitorRoom(ctx: Context, remaining: number) {
+  if (storedBytes(ctx) + heldBytes(ctx, false) + remaining > capacityOf(ctx)) fail(507, CAPACITY_FULL);
   const disk = statfsSync(ctx.config.root);
-  if (disk.bavail * disk.bsize - DISK_HEADROOM < ctx.transfers.outstandingBytes(true)) fail(507, DISK_FULL);
+  if (disk.bavail * disk.bsize - DISK_HEADROOM < ctx.transfers.outstandingBytes(false) + remaining)
+    fail(507, DISK_FULL);
 }
 export const { tabClosed: TAB_CLOSED, moved: MOVED, cancelled: CANCELLED } = transferErrors;
 const NAME_TAKEN = "A file or folder with that name already exists there.";
@@ -70,19 +90,11 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
         ? "The recipient's storage is full."
         : "This would go over your storage limit. Free up space, or ask your administrator for more.",
     );
-  const capacity = capacityOf(ctx);
-  const stored = ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
   // Room a visitor with a request link has declared but not yet sent doesn't count against a
   // member's upload, here or on the disk below: otherwise one stranger could declare a large file,
   // send nothing, and stop everyone on the server from uploading. Visitors still count each other's.
   const forMember = options.principal.kind === "member";
-  const promised = forMember ? "u.offset" : "n.size";
-  const held = ctx.db.value<number>(
-    `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0)
-     FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
-     WHERE n.state = 'pending'`,
-  )!;
-  if (bytes > 0 && stored + held + bytes > capacity) fail(507, "The server has reached its storage capacity.");
+  if (bytes > 0 && storedBytes(ctx) + heldBytes(ctx, !forMember) + bytes > capacityOf(ctx)) fail(507, CAPACITY_FULL);
   const disk = statfsSync(ctx.config.root);
   if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes(!forMember) - DISK_HEADROOM < bytes)
     fail(507, DISK_FULL);
