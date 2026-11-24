@@ -33,12 +33,12 @@
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
     "@fastify/rate-limit": "^10.3.0",
-    "@fastify/static": "^10.1.11",
+    "@fastify/static": "^10.1.12",
     "@simplewebauthn/server": "^14.0.2",
     "@walriyami/auth": "file:vendor/walriyami-auth-0.1.4.tgz",
     "fastify": "^5.12.8",
     "heic-decode": "^2.1.0",
-    "node-datachannel": "^0.33.4",
+    "node-datachannel": "^0.33.6",
     "sharp": "^0.35.5",
     "zod": "^4.6.6"
   },
