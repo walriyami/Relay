@@ -319,6 +319,12 @@ test("room a visitor declared but hasn't sent never blocks members, and a trickl
     // Nor the disk: free space is judged without them for members, and with them for visitors.
     assert.equal(instance.ctx.transfers.outstandingBytes(false), 200);
     assert.equal(instance.ctx.transfers.outstandingBytes(true), 1100);
+    // So a visitor's bytes are checked as they arrive: none are taken once the disk can't hold
+    // everything still to come.
+    const outstanding = instance.ctx.transfers.outstandingBytes;
+    instance.ctx.transfers.outstandingBytes = () => Number.MAX_SAFE_INTEGER;
+    assert.equal((await patchUpload(guest, hog.uploads[0].id, 0, Buffer.from("x"))).statusCode, 507);
+    instance.ctx.transfers.outstandingBytes = outstanding;
 
     // One byte every 25 minutes isn't progress: the visitor's room is given back after half an hour.
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", Date.now() + 2 * DAY_MS);

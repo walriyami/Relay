@@ -19,6 +19,17 @@ import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const DISK_HEADROOM = 256 * 1024 ** 2;
+const DISK_FULL = "The server's disk does not have enough free space for this transfer.";
+
+/**
+ * Members' uploads are admitted without counting what request-link visitors have declared but not
+ * sent (see `admit`), so a visitor's bytes are checked as they arrive instead: they're taken only
+ * while the disk still holds everything every unfinished upload has left, and Relay's headroom.
+ */
+export function ensureVisitorDiskRoom(ctx: Context) {
+  const disk = statfsSync(ctx.config.root);
+  if (disk.bavail * disk.bsize - DISK_HEADROOM < ctx.transfers.outstandingBytes(true)) fail(507, DISK_FULL);
+}
 export const { tabClosed: TAB_CLOSED, moved: MOVED, cancelled: CANCELLED } = transferErrors;
 const NAME_TAKEN = "A file or folder with that name already exists there.";
 
@@ -74,7 +85,7 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
   if (bytes > 0 && stored + held + bytes > capacity) fail(507, "The server has reached its storage capacity.");
   const disk = statfsSync(ctx.config.root);
   if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes(!forMember) - DISK_HEADROOM < bytes)
-    fail(507, "The server's disk does not have enough free space for this transfer.");
+    fail(507, DISK_FULL);
 }
 
 /**

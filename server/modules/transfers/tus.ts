@@ -8,7 +8,7 @@ import type { Context } from "../../context.ts";
 import type { Auth } from "../../context.ts";
 import { currentAuth, currentPrincipalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
-import { CANCELLED, MOVED, TAB_CLOSED } from "./create.ts";
+import { CANCELLED, MOVED, TAB_CLOSED, ensureVisitorDiskRoom } from "./create.ts";
 import { uploadRow, type Receivers } from "./receivers.ts";
 
 const TUS_VERSION = "1.0.0";
@@ -112,6 +112,7 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
           : conflict(upload.size);
       if (length !== null && offset + length > upload.size)
         fail(413, "This request carries more bytes than the file's size.");
+      if (upload.principal.startsWith("grant:")) ensureVisitorDiskRoom(ctx);
       const received = await receivers.receive(
         upload.id,
         offset,
