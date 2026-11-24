@@ -162,8 +162,11 @@ export interface Transfers {
   cancelForItem(itemId: string, principal?: string): void;
   /** Cancels an upload request's open guest transfers (it was closed). */
   cancelForRequest(requestId: string): void;
-  /** Bytes still to be received by unfinished uploads (for disk admission). */
-  outstandingBytes(): number;
+  /**
+   * Bytes still to be received by unfinished uploads (for disk admission). Without `visitors`, what
+   * request-link visitors have declared but not sent is left out, as for capacity (see `admit`).
+   */
+  outstandingBytes(visitors: boolean): number;
   activeUploads(): number;
   receivedBytesSince(time: number): number;
   sweep(now: number): Promise<void>;

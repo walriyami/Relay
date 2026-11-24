@@ -316,6 +316,9 @@ test("room a visitor declared but hasn't sent never blocks members, and a trickl
         },
       });
     assert.ok(await upload(200), "the visitor's 900 declared bytes don't fill the server for members");
+    // Nor the disk: free space is judged without them for members, and with them for visitors.
+    assert.equal(instance.ctx.transfers.outstandingBytes(false), 200);
+    assert.equal(instance.ctx.transfers.outstandingBytes(true), 1100);
 
     // One byte every 25 minutes isn't progress: the visitor's room is given back after half an hour.
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", Date.now() + 2 * DAY_MS);

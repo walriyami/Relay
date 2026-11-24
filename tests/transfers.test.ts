@@ -396,7 +396,7 @@ test("an expired tab lease pauses its transfers until pausedUploadMs; PATCHes re
     assert.equal(await status(client.call(api.items.get, { params: { id: kept.itemId } })), 404);
     assert.equal((await patchUpload(client, kept.uploads[0].id, 10, Buffer.alloc(10))).statusCode, 404);
     assert.equal(instance.ctx.transfers.activeUploads(), 0);
-    assert.equal(instance.ctx.transfers.outstandingBytes(), 0);
+    assert.equal(instance.ctx.transfers.outstandingBytes(true), 0);
   } finally {
     await instance.close();
   }
@@ -410,7 +410,7 @@ test("upload statistics report outstanding and received bytes", async () => {
     const before = Date.now() - 1;
     await patchUpload(client, created.uploads[0].id, 0, Buffer.alloc(30));
     assert.equal(instance.ctx.transfers.activeUploads(), 1);
-    assert.equal(instance.ctx.transfers.outstandingBytes(), 70);
+    assert.equal(instance.ctx.transfers.outstandingBytes(true), 70);
     assert.equal(instance.ctx.transfers.receivedBytesSince(before), 30);
   } finally {
     await instance.close();

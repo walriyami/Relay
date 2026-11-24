@@ -137,7 +137,7 @@ test("exact expiry rejects append and PATCH, durably trashes the item and releas
       "saved",
     );
     assert.equal((await patchUpload(client, first.uploads[0].id, 0, Buffer.from("data"))).statusCode, 410);
-    assert.equal(instance.ctx.transfers.outstandingBytes(), 0);
+    assert.equal(instance.ctx.transfers.outstandingBytes(true), 0);
   } finally {
     await instance.close();
   }

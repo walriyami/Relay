@@ -38,7 +38,12 @@ export function createTransfers(ctx: Context): Transfers {
     renewTab: (tab, principal) => renewTab(ctx, tab, principal),
     cancelForItem: (itemId, principal) => cancelForItem(ctx, receivers, itemId, principal),
     cancelForRequest: (requestId) => cancelForRequest(ctx, receivers, requestId),
-    outstandingBytes: () => count("coalesce(sum(u.size - u.offset), 0)"),
+    outstandingBytes: (visitors) =>
+      count(
+        visitors
+          ? "coalesce(sum(u.size - u.offset), 0)"
+          : "coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN 0 ELSE u.size - u.offset END), 0)",
+      ),
     activeUploads: () => count("count(*)"),
     receivedBytesSince: (time) => receivers.receivedSince(time),
     sweep: (now) => sweep(ctx, receivers, now),

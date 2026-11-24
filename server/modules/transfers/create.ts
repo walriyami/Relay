@@ -62,9 +62,10 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
   const capacity = capacityOf(ctx);
   const stored = ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
   // Room a visitor with a request link has declared but not yet sent doesn't count against a
-  // member's upload: otherwise one stranger could declare a large file, send nothing, and stop
-  // everyone on the server from uploading. Visitors still count each other's declared room.
-  const promised = options.principal.kind === "member" ? "u.offset" : "n.size";
+  // member's upload, here or on the disk below: otherwise one stranger could declare a large file,
+  // send nothing, and stop everyone on the server from uploading. Visitors still count each other's.
+  const forMember = options.principal.kind === "member";
+  const promised = forMember ? "u.offset" : "n.size";
   const held = ctx.db.value<number>(
     `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0)
      FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
@@ -72,7 +73,7 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
   )!;
   if (bytes > 0 && stored + held + bytes > capacity) fail(507, "The server has reached its storage capacity.");
   const disk = statfsSync(ctx.config.root);
-  if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes() - DISK_HEADROOM < bytes)
+  if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes(!forMember) - DISK_HEADROOM < bytes)
     fail(507, "The server's disk does not have enough free space for this transfer.");
 }
 
