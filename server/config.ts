@@ -1,4 +1,4 @@
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { resolve } from "node:path";
 import { isAnnounceable } from "../local/addresses.ts";
 
@@ -145,10 +145,27 @@ function directAddresses(value: string | undefined) {
   return addresses.length ? { addresses: [...new Set(addresses)] } : {};
 }
 
-/** Whether an origin names this machine or a bare address rather than a public web name. */
+/** Addresses only this machine or its local network can reach. */
+const PRIVATE_ADDRESSES = new BlockList();
+for (const [address, bits] of [
+  ["127.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+  ["169.254.0.0", 16],
+  ["100.64.0.0", 10],
+] as const)
+  PRIVATE_ADDRESSES.addSubnet(address, bits, "ipv4");
+PRIVATE_ADDRESSES.addAddress("::1", "ipv6");
+PRIVATE_ADDRESSES.addSubnet("fc00::", 7, "ipv6");
+PRIVATE_ADDRESSES.addSubnet("fe80::", 10, "ipv6");
+
+/** Whether an origin names this machine or a private address rather than one the internet reaches. */
 function privateOrigin(origin: string) {
   const host = new URL(origin).hostname.replace(/^\[|\]$/g, "");
-  return host === "localhost" || host.endsWith(".localhost") || isIP(host) !== 0;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  const family = isIP(host);
+  return family !== 0 && PRIVATE_ADDRESSES.check(host, family === 4 ? "ipv4" : "ipv6");
 }
 
 /** "https://relay.example.com" exactly as browsers send it in Origin, or a startup error naming the variable. */

@@ -86,7 +86,8 @@ test("the setup key is on unless RELAY_SETUP_KEY turns it off, and a typo stops 
   // Off only where the address says the machine is private; a public name keeps the key.
   for (const origin of ["http://localhost:3000", "http://relay.localhost", "http://192.168.1.5", "http://[::1]:8080"])
     assert.equal(configFromEnv({ RELAY_SETUP_KEY: "false", RELAY_ORIGIN: origin }).setupKey, false, origin);
-  assert.equal(configFromEnv({ RELAY_SETUP_KEY: "false", RELAY_ORIGIN: "https://relay.example" }).setupKey, true);
+  for (const origin of ["https://relay.example", "https://203.0.113.5", "http://[2001:db8::5]"])
+    assert.equal(configFromEnv({ RELAY_SETUP_KEY: "false", RELAY_ORIGIN: origin }).setupKey, true, origin);
 });
 
 test("direct transfers are on unless RELAY_DIRECT turns them off, on a valid UDP port", () => {
@@ -120,8 +121,23 @@ test("client addresses come only from trusted proxies, given by address, range o
     "::1",
   ]);
   assert.deepEqual(configFromEnv({ RELAY_TRUST_PROXY: " " }).trustProxy, ["127.0.0.1", "::1"]);
-  for (const entry of ["10.0.0.0/33", "10.0.0.1/8/8", "-proxy", "https://proxy", "0.0.0.0/0", "::/0"])
+  for (const entry of [
+    "10.0.0.0/33",
+    "10.0.0.1/8/8",
+    "-proxy",
+    "https://proxy",
+    "0.0.0.0/0",
+    "0.0.0.0/00",
+    "0.0.0.0/1",
+    "::/0",
+    "::/80",
+    "::ffff:0.0.0.0/96",
+    "2000::/3",
+  ])
     assert.throws(() => new ProxyTrust([entry]), /RELAY_TRUST_PROXY/, entry);
+  // Private networks, however wide, are fine.
+  for (const entry of ["10.0.0.0/8", "172.16.0.0/12", "fd00::/8", "::ffff:10.0.0.0/104"])
+    assert.doesNotThrow(() => new ProxyTrust([entry]), entry);
   const pickup = (instance: Instance, address: string) =>
     instance.app.inject({
       method: "POST",
@@ -150,7 +166,7 @@ test("client addresses come only from trusted proxies, given by address, range o
       await open.close();
     }
   }
-  const trust = new ProxyTrust(["::ffff:0:0/96", "192.0.2.0/24"]);
+  const trust = new ProxyTrust(["192.0.2.0/24"]);
   assert.equal(new ProxyTrust(["streaming_lab_cloudflared"]).trusts("192.0.2.1"), false, "a container name");
   assert.equal(trust.trusts("::ffff:192.0.2.7"), true, "a dual-stack socket's IPv4 peer");
   assert.equal(trust.trusts(undefined), false, "the helper's socket has no peer");

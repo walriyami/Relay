@@ -26,13 +26,13 @@ export class ProxyTrust {
       if (family && extra === undefined) {
         const type = family === 4 ? "ipv4" : "ipv6";
         if (bits === undefined) this.fixed.addAddress(address, type);
-        else if (bits === "0")
-          throw new Error(
-            `RELAY_TRUST_PROXY: "${entry}" would let anyone on the internet choose the address Relay sees. List your proxy's own address or name.`,
-          );
-        else if (/^\d+$/.test(bits) && Number(bits) <= (family === 4 ? 32 : 128))
+        else if (/^\d+$/.test(bits) && Number(bits) <= (family === 4 ? 32 : 128)) {
+          if (tooWide(address, Number(bits), type))
+            throw new Error(
+              `RELAY_TRUST_PROXY: "${entry}" would let much of the internet choose the address Relay sees. List your proxy's own address or name.`,
+            );
           this.fixed.addSubnet(address, Number(bits), type);
-        else throw invalid(entry);
+        } else throw invalid(entry);
       } else if (bits === undefined && isHostName(entry)) this.names.push(entry.toLowerCase());
       else throw invalid(entry);
     }
@@ -115,4 +115,22 @@ function unmapped(address: string) {
 
 function same(a: Set<string>, b: Set<string>) {
   return a.size === b.size && [...a].every((x) => b.has(x));
+}
+
+/** Where private networks wider than a /8 (or an IPv6 /16) live: only these may be trusted that wide. */
+const WIDE_PRIVATE = new BlockList();
+WIDE_PRIVATE.addSubnet("fc00::", 7, "ipv6");
+WIDE_PRIVATE.addSubnet("fe80::", 10, "ipv6");
+
+/**
+ * Whether a range is too wide to hold only proxies: an IPv4 range wider than a /8, an IPv6 one
+ * wider than a /16 outside private space, or any IPv6 range that takes in all IPv4-mapped addresses
+ * (which Relay matches as IPv4).
+ */
+function tooWide(address: string, bits: number, type: "ipv4" | "ipv6") {
+  if (type === "ipv4") return bits < 8;
+  const range = new BlockList();
+  range.addSubnet(address, bits, "ipv6");
+  if (range.check("::ffff:8.8.8.8", "ipv6")) return bits < 104;
+  return bits < 7 || (bits < 16 && !WIDE_PRIVATE.check(address, "ipv6"));
 }
