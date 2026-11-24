@@ -8,8 +8,8 @@ if [ ! -f .env ]; then
   echo "Missing deploy/.env. Copy example.env to .env and set RELAY_ORIGIN first." >&2
   exit 1
 fi
-if [ ! -s secrets/tunnel_token ]; then
-  echo "Missing deploy/secrets/tunnel_token. Paste the tunnel token into it first (README.md, step 3)." >&2
+if [ ! -s secrets/tunnel_credentials.json ] || ! grep -q '^TUNNEL_ID=..*' .env; then
+  echo "The Cloudflare Tunnel isn't set up yet. Run ./tunnel-setup.sh first (README.md, step 4)." >&2
   exit 1
 fi
 if [ -n "$(git status --porcelain --untracked-files=no -- ..)" ]; then
@@ -24,7 +24,6 @@ echo "Building Relay $(git log -1 --format='%h (%cs) %s')"
 if ! docker compose up -d --build --wait --wait-timeout 180; then
   docker compose ps >&2
   echo "Something above isn't healthy. Its last messages:  docker compose logs --tail 50 <name>" >&2
-  echo "(A wrong tunnel token shows as cloudflared restarting with \"token is not valid\".)" >&2
   exit 1
 fi
 # The image just replaced is no longer needed (this machine runs nothing else).

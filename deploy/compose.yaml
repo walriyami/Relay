@@ -34,7 +34,7 @@ services:
       # Thumbnail work needs a scratch folder; nothing in it may be run as a program.
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     environment:
-      RELAY_ORIGIN: ${RELAY_ORIGIN:?Set RELAY_ORIGIN in .env, for example https://relay.example.com}
+      RELAY_ORIGIN: ${RELAY_ORIGIN:?Set RELAY_ORIGIN in .env, for example https://buildhatch.dev}
       # Only the cloudflared container may tell Relay who a visitor is, and it does so in the header
       # Cloudflare writes itself. Anyone else's forwarding headers are ignored.
       RELAY_TRUST_PROXY: cloudflared
@@ -62,11 +62,13 @@ services:
   cloudflared:
     <<: *locked-down
     image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    # A tunnel created on this machine by tunnel-setup.sh. Every request it carries goes to Relay
+    # (`--url`), which refuses any name but RELAY_ORIGIN's; Cloudflare's DNS sends it only that name.
     # The image's entrypoint is `cloudflared --no-autoupdate`. Its metrics stay on its own loopback.
-    command: ["tunnel", "--metrics", "127.0.0.1:20241", "run"]
+    command: ["tunnel", "--metrics", "127.0.0.1:20241", "--url", "http://relay:3090", "run", "${TUNNEL_ID:-}"]
     environment:
-      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
-    secrets: [tunnel_token]
+      TUNNEL_CRED_FILE: /run/secrets/tunnel_credentials
+    secrets: [tunnel_credentials]
     networks: [edge, outbound]
     depends_on:
       relay:
@@ -119,5 +121,6 @@ volumes:
     name: relay-data
 
 secrets:
-  tunnel_token:
-    file: ./secrets/tunnel_token
+  # Written by tunnel-setup.sh. It lets whoever holds it serve your address: keep it private.
+  tunnel_credentials:
+    file: ./secrets/tunnel_credentials.json

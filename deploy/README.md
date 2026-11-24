@@ -23,7 +23,8 @@ All commands below are typed on the server, in a terminal.
 
 - A 64-bit Linux machine (Debian or Ubuntu are easiest), on the internet. 2 GB of memory is plenty, plus disk space
   for the files people will send.
-- A domain on Cloudflare, and a name for Relay under it, for example `relay-test.example.com`.
+- A domain whose DNS is on Cloudflare (here `buildhatch.dev`). Relay takes the whole name: the steps below point
+  `buildhatch.dev` itself at this machine, replacing whatever it pointed to before.
 
 ## First start
 
@@ -47,43 +48,35 @@ cd ~/relay/deploy
 
 If GitHub asks for a password, the repository is private: sign in with a GitHub access token as the password.
 
-**3. Create the tunnel in Cloudflare.**
-
-1. In the Cloudflare dashboard, open **Zero Trust → Networks → Tunnels → Create a tunnel**, choose
-   **Cloudflared**, and give it a name such as `relay-test`.
-2. Cloudflare shows install commands containing a long token (it starts with `eyJ`). Copy just the token. Don't
-   run Cloudflare's install command; Docker runs cloudflared here.
-3. Save the token on the server:
-
-   ```sh
-   mkdir -p secrets && chmod 700 secrets
-   nano secrets/tunnel_token
-   ```
-
-   Paste the token, save with Ctrl+O and Enter, close with Ctrl+X, then:
-
-   ```sh
-   chmod 444 secrets/tunnel_token
-   ```
-
-   (The folder is private to you; the file itself has to be readable for cloudflared's own user inside Docker.)
-   The token works like a password for your address: don't share it or put it anywhere else.
-
-4. Back in Cloudflare, add a **public hostname** for the tunnel (newer dashboards call it a **published
-   application route**): your Relay name (for example `relay-test` on `example.com`), service type **HTTP**, URL
-   **`relay:3090`**. Leave everything else as it is.
-5. In the domain's **SSL/TLS → Edge Certificates**, turn on **Always Use HTTPS**.
-
-**4. Fill in the settings.**
+**3. Fill in the settings.**
 
 ```sh
 cp example.env .env
 nano .env
 ```
 
-Set `RELAY_ORIGIN` to `https://` followed by the exact name from step 3, for example
-`RELAY_ORIGIN=https://relay-test.example.com`. Pick it for good: changing it later breaks every link and passkey
-already handed out.
+`RELAY_ORIGIN` is already `https://buildhatch.dev`. For another address, change it to `https://` followed by
+the exact name, with nothing after it. Pick it for good: changing it later breaks every link and passkey already
+handed out. Save with Ctrl+O and Enter, close with Ctrl+X.
+
+**4. Create the tunnel.**
+
+```sh
+./tunnel-setup.sh
+```
+
+1. It prints a Cloudflare link. Open it in a browser (on this machine or any other), sign in to Cloudflare, and
+   choose `buildhatch.dev`. The script carries on by itself once you have.
+2. It creates a tunnel named `relay-buildhatch.dev` and keeps its key in `secrets/tunnel_credentials.json`.
+3. It points `buildhatch.dev` at the tunnel, replacing any other DNS record for that name.
+4. It writes the tunnel's ID into `.env`.
+
+The key in `secrets/` lets whoever holds it serve your address: don't share it or copy it anywhere else. The
+sign-in from step 1 isn't kept, because it could change any tunnel or DNS record of the domain; running the
+script again just asks you to sign in again.
+
+If it stops with an error about an existing DNS record, delete the records named `buildhatch.dev` in the
+Cloudflare dashboard (**DNS → Records**) and run it again.
 
 **5. Start it.**
 
@@ -100,7 +93,7 @@ all three show `healthy`. If something stays unhealthy, the script says how to s
 docker compose logs relay | grep "Setup key"
 ```
 
-Open your Relay address in a browser, paste the key, and choose the administrator's username and password. Do it
+Open https://buildhatch.dev in a browser, paste the key, and choose the administrator's username and password. Do it
 straight away: until the administrator exists, anyone who learns the key could claim the server. The key stops
 working once setup is done. Then invite people from **Admin → Members**.
 
@@ -176,12 +169,13 @@ The link is as powerful as the password: don't paste the log anywhere.
 
 ## The files in this folder
 
-| File                | What it is                                                                |
-| ------------------- | ------------------------------------------------------------------------- |
-| `compose.yaml`      | The three programs and their limits. No need to edit it.                  |
-| `example.env`       | The settings to copy to `.env`: the web address, and the recovery switch. |
-| `egress/squid.conf` | The list of places Relay may reach: the notification services only.       |
-| `up.sh`             | Builds the version you have and starts or restarts everything.            |
-| `backup.sh`         | Saves all of Relay's data to `backups/`.                                  |
-| `restore.sh`        | Puts a backup back.                                                       |
-| `.env`, `secrets/`  | Yours, created above. Never committed to git.                             |
+| File                | What it is                                                                    |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `compose.yaml`      | The three programs and their limits. No need to edit it.                      |
+| `example.env`       | The settings to copy to `.env`: the address, the tunnel, the recovery switch. |
+| `egress/squid.conf` | The list of places Relay may reach: the notification services only.           |
+| `tunnel-setup.sh`   | Creates the Cloudflare Tunnel and points your address at it. Run once.        |
+| `up.sh`             | Builds the version you have and starts or restarts everything.                |
+| `backup.sh`         | Saves all of Relay's data to `backups/`.                                      |
+| `restore.sh`        | Puts a backup back.                                                           |
+| `.env`, `secrets/`  | Yours, created above. Never committed to git.                                 |
