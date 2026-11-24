@@ -15,6 +15,13 @@ const RESTART_MS = [1000, 2000, 5000, 15_000, 60_000];
 const STEADY_MS = 60_000;
 /** How long a helper may take to close its connections when asked to stop. */
 const STOP_MS = 5000;
+/** All the helper gets of Relay's environment: none of Relay's own settings or secrets. */
+const HELPER_ENV = ["PATH", "HOME", "TMPDIR", "TZ", "LANG", "NODE_ENV"];
+
+/** The environment the helper runs with, taken from Relay's. */
+export function helperEnv(env: NodeJS.ProcessEnv = process.env) {
+  return Object.fromEntries(HELPER_ENV.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
+}
 
 export class LocalHelper {
   /** The private directory Relay and the helper share, once started. */
@@ -52,6 +59,8 @@ export class LocalHelper {
     const child = fork(MAIN, [this.dir, String(this.port), this.addresses.join(",")], {
       // Only what the helper needs: never the flags Relay itself runs with, such as --watch.
       execArgv: [],
+      // It handles packets from browsers in native code, so it holds nothing worth taking if that fails.
+      env: helperEnv(),
       stdio: ["ignore", "inherit", "inherit", "ipc"],
     });
     this.child = child;

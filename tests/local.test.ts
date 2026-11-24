@@ -12,6 +12,7 @@ import { isLocalAddress, lanAddresses } from "../local/addresses.ts";
 import { heldChannels } from "../local/channels.ts";
 import { announce, localOffer } from "../local/helper.ts";
 import { localStatus } from "../server/modules/local/index.ts";
+import { helperEnv } from "../server/modules/local/helper.ts";
 import { Client, member, send, start, type ApiError, type Instance } from "./support/harness.ts";
 import nodeDataChannel from "node-datachannel";
 import { LocalPeer } from "../scripts/lib/local-peer.ts";
@@ -541,4 +542,15 @@ test("local: the helper announces private addresses of real interfaces, IPv4 fir
     }),
     ["192.168.1.20", "10.0.0.5", "172.20.1.9", "fd12:3456::1"],
   );
+});
+
+test("local: the helper gets none of Relay's settings or secrets from its environment", () => {
+  const env = helperEnv({
+    PATH: "/bin",
+    HOME: "/home/relay",
+    RELAY_SECRET: "s",
+    RELAY_SSO_SECRET: "t",
+    NODE_OPTIONS: "-r x",
+  });
+  assert.deepEqual(env, { PATH: "/bin", HOME: "/home/relay" });
 });
