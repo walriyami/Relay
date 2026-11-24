@@ -553,6 +553,21 @@ test("a long request name and guest name still fit the item name limit", async (
     const [slashed] = await owner.call(api.requests.submissions, { params: { id: named.id } });
     assert.ok(slashed.name.startsWith("Photos 2024-25 😀"), slashed.name);
     assert.ok(Buffer.byteLength(slashed.name) <= 255);
+
+    // Nor do direction marks, tabs, or a long name beside a guest name of emoji.
+    for (const [name, guestName] of [
+      ["طلب\u200f ملفات", "Ali"],
+      ["Tab\there", "Ali"],
+      ["R".repeat(150), "😀".repeat(30)],
+    ]) {
+      const odd = await owner.call(api.requests.create, {
+        body: { id: crypto.randomUUID(), name, description: "", days: 5, maxBytes: 100 },
+      });
+      const visitor = await guest(instance, odd.token);
+      await upload(visitor, await startTransfer(visitor, odd.token, files(1), { sender: guestName }), [1]);
+      const [made] = await owner.call(api.requests.submissions, { params: { id: odd.id } });
+      assert.ok(made.name.length <= 180 && !/[\t\u200f]/.test(made.name), made.name);
+    }
   } finally {
     await instance.close();
   }
