@@ -414,6 +414,7 @@ export class Inbound {
   private to: number | null;
   /** Bytes that arrived ahead of `next`, by offset. */
   private readonly early = new Map<number, Uint8Array>();
+  private held = 0;
   /** Bytes written so far, as an offset, and those not yet credited. */
   written: number;
   private owed = 0;
@@ -447,12 +448,18 @@ export class Inbound {
     if (offset < this.next || end > this.limit || (this.to !== null && end > this.to))
       return this.fail(new Error("Bytes arrived out of place."));
     if (offset > this.next) {
+      // Honest frames held here never overlap, so they fit in the window; more means the sender
+      // is making this end hold bytes that will never line up.
+      if (this.held + bytes.byteLength > this.limit - this.next)
+        return this.fail(new Error("Bytes arrived out of place."));
       this.early.set(offset, bytes);
+      this.held += bytes.byteLength;
       return;
     }
     this.take(bytes);
     for (let ahead = this.early.get(this.next); ahead; ahead = this.early.get(this.next)) {
       this.early.delete(this.next);
+      this.held -= ahead.byteLength;
       this.take(ahead);
     }
   }
@@ -499,6 +506,7 @@ export class Inbound {
     if (this.closed) return;
     this.closed = true;
     this.early.clear();
+    this.held = 0;
     this.mux.forget(this);
   }
 }

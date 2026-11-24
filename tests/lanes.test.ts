@@ -163,3 +163,20 @@ test("lanes: when every other lane is gone, the first carries frames again", asy
   assert.ok((await arrived).equals(data));
   assert.ok(ab[0].frames > 0);
 });
+
+test("lanes: overlapping frames that never line up can't make the receiver hold more than the window", () => {
+  const events = { control: () => {}, broken: () => assert.fail("The connection broke.") };
+  const mux = new Mux({ send: () => {}, buffered: () => 0 }, events, 1 << 20);
+  let failed: unknown;
+  const window = 1 << 20;
+  mux.incoming(1, { window, write: () => assert.fail("nothing lines up"), failed: (error) => (failed = error) });
+  const piece = new Uint8Array(12 + 64 * 1024);
+  const view = new DataView(piece.buffer);
+  view.setUint32(0, 1);
+  // Each starts one byte after the last, so each is kept whole: without a bound, 16 of them hold a window.
+  for (let offset = 1; offset <= 64 && !failed; offset++) {
+    view.setFloat64(4, offset);
+    mux.receive(piece);
+  }
+  assert.match(String(failed), /out of place/);
+});
