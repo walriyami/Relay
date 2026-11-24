@@ -26,6 +26,10 @@ export class ProxyTrust {
       if (family && extra === undefined) {
         const type = family === 4 ? "ipv4" : "ipv6";
         if (bits === undefined) this.fixed.addAddress(address, type);
+        else if (bits === "0")
+          throw new Error(
+            `RELAY_TRUST_PROXY: "${entry}" would let anyone on the internet choose the address Relay sees. List your proxy's own address or name.`,
+          );
         else if (/^\d+$/.test(bits) && Number(bits) <= (family === 4 ? 32 : 128))
           this.fixed.addSubnet(address, Number(bits), type);
         else throw invalid(entry);

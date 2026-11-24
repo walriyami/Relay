@@ -120,7 +120,7 @@ test("client addresses come only from trusted proxies, given by address, range o
     "::1",
   ]);
   assert.deepEqual(configFromEnv({ RELAY_TRUST_PROXY: " " }).trustProxy, ["127.0.0.1", "::1"]);
-  for (const entry of ["10.0.0.0/33", "10.0.0.1/8/8", "-proxy", "https://proxy"])
+  for (const entry of ["10.0.0.0/33", "10.0.0.1/8/8", "-proxy", "https://proxy", "0.0.0.0/0", "::/0"])
     assert.throws(() => new ProxyTrust([entry]), /RELAY_TRUST_PROXY/, entry);
   const pickup = (instance: Instance, address: string) =>
     instance.app.inject({
@@ -189,9 +189,29 @@ test("behind Cloudflare each visitor is counted on their own, never as the tunne
     for (let i = 1; i <= 6; i++)
       assert.equal((await pickup(behind, "127.0.0.1", "198.51.100.1")).statusCode, i <= 5 ? 404 : 429);
     assert.equal((await pickup(behind, "127.0.0.1", "2001:db8::1")).statusCode, 404, "another visitor still gets in");
-    // A value that isn't an address is ignored, leaving the forwarded chain.
+    // A value that isn't an address is ignored; the request counts as the proxy, never as an
+    // X-Forwarded-For the visitor may have chosen.
     for (let i = 1; i <= 5; i++) await pickup(behind, "127.0.0.1", "not-an-address");
-    assert.equal((await pickup(behind, "127.0.0.1", "also-not")).statusCode, 429, "both count as the tunnel");
+    assert.equal((await pickup(behind, "127.0.0.1", "also-not")).statusCode, 429, "both count as the proxy");
+    const chosen = (forwarded: string) =>
+      behind.app.inject({
+        method: "POST",
+        url: api.pickup.resolve.path,
+        remoteAddress: "172.18.0.9",
+        headers: { host: "relay.test", "x-forwarded-for": forwarded },
+        payload: { code: "short" },
+      });
+    for (let i = 1; i <= 5; i++) assert.equal((await chosen(`198.51.100.${30 + i}`)).statusCode, 404);
+    assert.equal((await chosen("198.51.100.99")).statusCode, 429, "without the header, a made-up chain counts as one");
+    // The host is the one the proxy routed by, whatever X-Forwarded-Host says.
+    const hosted = (host: string, forwarded: string) =>
+      behind.app.inject({
+        url: api.session.get.path,
+        remoteAddress: "127.0.0.1",
+        headers: { host, "x-forwarded-host": forwarded },
+      });
+    assert.equal((await hosted("evil.test", "relay.test")).statusCode, 403);
+    assert.equal((await hosted("relay.test", "evil.test")).statusCode, 401);
     // Anyone reaching Relay without the proxy can't choose their own address with the header.
     for (let i = 1; i <= 5; i++) await pickup(behind, "203.0.113.9", `198.51.100.${10 + i}`);
     assert.equal((await pickup(behind, "203.0.113.9", "198.51.100.99")).statusCode, 429);

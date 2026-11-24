@@ -113,17 +113,22 @@ export async function buildApp(config: Config): Promise<App> {
     );
 
     await proxies.start(app.log);
-    if (config.clientIpHeader) {
+    const header = config.clientIpHeader;
+    app.addHook("onRequest", (req, _reply, done) => {
+      // The Host header is what the proxy routed by. X-Forwarded-Host may be the visitor's own,
+      // passed along by a proxy that forwards headers as they came.
+      delete req.headers["x-forwarded-host"];
       // A trusted proxy names the visitor in its own header (Cloudflare's CF-Connecting-IP). Before
       // the rate limiter runs, it becomes the forwarded address, so req.ip is the visitor everywhere.
-      const header = config.clientIpHeader;
-      app.addHook("onRequest", (req, _reply, done) => {
+      // Without a valid one, the request counts as the proxy's: X-Forwarded-For may be the visitor's
+      // own choice, passed along.
+      if (header && proxies.trusts(req.socket.remoteAddress)) {
         const reported = req.headers[header];
-        if (typeof reported === "string" && proxies.trusts(req.socket.remoteAddress) && isIP(reported.trim()))
-          req.headers["x-forwarded-for"] = reported.trim();
-        done();
-      });
-    }
+        if (typeof reported === "string" && isIP(reported.trim())) req.headers["x-forwarded-for"] = reported.trim();
+        else delete req.headers["x-forwarded-for"];
+      }
+      done();
+    });
     await app.register(cookie);
     await app.register(rateLimit, {
       max: 6000,
