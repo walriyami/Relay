@@ -77,7 +77,16 @@ function submissionName(
   const top = planNodes(input).filter((node) => node.parentKey === null);
   const text = input.text?.trim() ? [...input.text].length : null;
   const label = sender ?? autoName(top[0]?.name ?? null, top.length, text) ?? "submission";
-  return [...`${request} · ${label}`].slice(0, LIMITS.nameLength).join("");
+  // The guest and the owner chose these words freely, so make them a valid item name rather than
+  // refuse the files: a slash can't be part of one, and it must fit a file name's 255 bytes.
+  const chars = [
+    ...`${request} · ${label}`
+      .replace(/[/\\]/g, "-")
+      // A lone half of a surrogate pair isn't a character a name can hold.
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"),
+  ].slice(0, LIMITS.nameLength);
+  while (Buffer.byteLength(chars.join("")) > 255) chars.pop();
+  return chars.join("").trim();
 }
 
 export function registerGuests(app: FastifyInstance, ctx: Context) {

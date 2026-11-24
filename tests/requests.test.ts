@@ -537,6 +537,22 @@ test("a long request name and guest name still fit the item name limit", async (
     const [submission] = await owner.call(api.requests.submissions, { params: { id: request.id } });
     assert.equal(submission.name.length, 180);
     assert.ok(submission.name.startsWith("R".repeat(180)));
+
+    // Slashes and wide characters in either name still make a submission, not an error.
+    const named = await owner.call(api.requests.create, {
+      body: {
+        id: crypto.randomUUID(),
+        name: "Photos 2024/25 " + "😀".repeat(70),
+        description: "",
+        days: 5,
+        maxBytes: 100,
+      },
+    });
+    const sender = await guest(instance, named.token);
+    await upload(sender, await startTransfer(sender, named.token, files(1), { sender: "Ali / Sara" }), [1]);
+    const [slashed] = await owner.call(api.requests.submissions, { params: { id: named.id } });
+    assert.ok(slashed.name.startsWith("Photos 2024-25 😀"), slashed.name);
+    assert.ok(Buffer.byteLength(slashed.name) <= 255);
   } finally {
     await instance.close();
   }
