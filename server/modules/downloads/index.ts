@@ -104,7 +104,9 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
 
   /** The whole item, or one folder's subtree rooted at the folder's name. Only ready nodes. */
   async function zip(req: FastifyRequest, reply: FastifyReply, itemId: string, onSent: Meter) {
-    const folderId = (req.query as Query).folder;
+    // A repeated parameter arrives as a list, which isn't one folder.
+    const asked = (req.query as Record<string, unknown>).folder;
+    const folderId = asked === undefined || typeof asked === "string" ? asked : notFound("That folder");
     const folder = folderId
       ? (ctx.db.get<{ name: string }>(
           "SELECT name FROM nodes WHERE id = ? AND item = ? AND kind = 'folder'",

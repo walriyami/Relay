@@ -171,6 +171,8 @@ test("share routes serve only the link's item, and stop when the link is revoked
     assert.equal(res.statusCode, 200);
     assert.equal(res.headers["content-type"], "application/zip");
     assert.equal(res.headers["content-disposition"], "attachment; filename*=UTF-8''Folder.zip");
+    const twice = `${urls.shareZip(token, nodes.get("Folder")!.id)}&folder=${privateNode.id}`;
+    assert.equal((await get(guest, twice)).statusCode, 404, "a repeated folder is no folder, not an error");
     res = await get(guest, urls.shareZip(token, privateNode.id));
     assert.equal(res.statusCode, 404);
     assert.equal((await get(guest, urls.shareContent("not-a-token", privateNode.id))).statusCode, 404);
