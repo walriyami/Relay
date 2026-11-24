@@ -18,5 +18,10 @@ playwright-report
 test-results
 *.md
 .DS_Store
-# The deploy folder holds the server's own .env and tunnel token; they never belong in an image.
+# The deploy folder holds the server's own .env and tunnel key; they never belong in an image.
 deploy
+# Security-review reports, benchmark output and editor settings: not part of the app.
+CLAUDE-SECURITY-*
+bench-*
+.vscode
+.ignore

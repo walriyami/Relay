@@ -21,12 +21,16 @@ fi
 RELAY_COMMIT="$(git rev-parse HEAD)"
 export RELAY_COMMIT
 echo "Building Relay $(git log -1 --format='%h (%cs) %s')"
+old=$(docker image inspect -f '{{.Id}}' relay:local 2>/dev/null || true)
 if ! docker compose up -d --build --wait --wait-timeout 180; then
   docker compose ps >&2
   echo "Something above isn't healthy. Its last messages:  docker compose logs --tail 50 <name>" >&2
   exit 1
 fi
-# The image just replaced is no longer needed (this machine runs nothing else).
-docker image prune -f >/dev/null
+# Remove the copy of Relay this build replaced, and only that: other images on the machine are left alone.
+new=$(docker image inspect -f '{{.Id}}' relay:local)
+if [ -n "$old" ] && [ "$old" != "$new" ]; then
+  docker image rm "$old" >/dev/null 2>&1 || true
+fi
 docker compose ps
 echo "Relay is up."

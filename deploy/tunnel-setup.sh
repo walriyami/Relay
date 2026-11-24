@@ -28,17 +28,22 @@ if [ ! -f secrets/cert.pem ]; then
   echo "A Cloudflare link appears below. Open it in a browser, sign in, and choose $host."
   cf tunnel login
 fi
-if [ ! -f secrets/tunnel_credentials.json ]; then
+creds=secrets/tunnel_credentials.json
+if [ ! -f "$creds" ]; then
   cf tunnel create --credentials-file /home/cf/.cloudflared/tunnel_credentials.json "relay-$host"
 fi
-id=$(sed -n 's/.*"TunnelID" *: *"\([0-9a-f-]*\)".*/\1/p' secrets/tunnel_credentials.json)
-[ -n "$id" ] || { echo "secrets/tunnel_credentials.json doesn't name a tunnel." >&2; exit 1; }
+if [ -r "$creds" ]; then
+  id=$(sed -n 's/.*"TunnelID" *: *"\([0-9a-f-]*\)".*/\1/p' "$creds")
+else
+  # Already handed to cloudflared on an earlier run (below), so only it can read the key: the ID is in .env.
+  id=$(sed -n 's/^TUNNEL_ID=//p' .env | tr -d "\"' \r")
+fi
+case "$id" in *[!0-9a-f-]*) id= ;; esac
+[ -n "$id" ] || { echo "$creds doesn't name a tunnel, and TUNNEL_ID in .env is empty." >&2; exit 1; }
 
 echo "Pointing $host at the tunnel (this replaces any other DNS record for $host)."
 cf tunnel route dns --overwrite-dns "$id" "$host"
 
-# cloudflared's own user inside Docker must be able to read it; the secrets folder stays yours alone.
-chmod 444 secrets/tunnel_credentials.json
 # cert.pem can create and delete tunnels and DNS records for your domain. Running needs only the
 # tunnel's credentials, so it isn't kept. Running this script again asks you to sign in again.
 rm -f secrets/cert.pem
@@ -49,4 +54,12 @@ else
   printf 'TUNNEL_ID=%s\n' "$id" >> .env
 fi
 chmod 600 .env
+
+# The tunnel key becomes readable by cloudflared's own user inside Docker (65532) and nobody else: not
+# Relay, not other accounts on this machine, not your own. Only root can hand a file to another user.
+if [ -O "$creds" ]; then
+  chmod 400 "$creds"
+  echo "Handing the tunnel key to cloudflared (sudo may ask for your password)."
+  sudo chown 65532:65532 "$creds"
+fi
 echo "Tunnel ready: $host -> tunnel $id. Next: ./up.sh"

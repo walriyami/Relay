@@ -70,10 +70,17 @@ handed out. Save with Ctrl+O and Enter, close with Ctrl+X.
 2. It creates a tunnel named `relay-buildhatch.dev` and keeps its key in `secrets/tunnel_credentials.json`.
 3. It points `buildhatch.dev` at the tunnel, replacing any other DNS record for that name.
 4. It writes the tunnel's ID into `.env`.
+5. It makes the key readable only by cloudflared, using `sudo` (it may ask for your password). After that even
+   your own account can't open it.
 
-The key in `secrets/` lets whoever holds it serve your address: don't share it or copy it anywhere else. The
-sign-in from step 1 isn't kept, because it could change any tunnel or DNS record of the domain; running the
-script again just asks you to sign in again.
+The key lets whoever holds it serve your address: don't share it or copy it anywhere else. The sign-in from
+step 1 isn't kept, because it could change any tunnel or DNS record of the domain; running the script again
+just asks you to sign in again.
+
+**Leave the tunnel as the script made it.** Its one job is to bring visitors to Relay (`http://relay:3090`). In
+the Cloudflare dashboard, don't add other public hostnames, WARP, or private-network routes to it: anything
+added there can be reached from the internet through this machine, and none of the protections here would
+cover it.
 
 If it stops with an error about an existing DNS record, delete the records named `buildhatch.dev` in the
 Cloudflare dashboard (**DNS → Records**) and run it again.
