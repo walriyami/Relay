@@ -9,13 +9,16 @@ import { eachFile, fsyncDirectory, unlinkIfPresent } from "./files.ts";
 const SHA = /^[0-9a-f]{64}$/;
 export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 /** Renditions share source bytes; a decoder's rejection only applies to that decoder. */
-const THUMBNAIL_FILE = /^([0-9a-f]{64})(-[sl]\.webp|-(image|heif)\.failed)$/;
+const THUMBNAIL_FILE = /^([0-9a-f]{64})(-[sl]\.webp|-(image|heif)\.(failed|rendering))$/;
 export type ThumbnailSize = "s" | "l";
 export type ThumbnailDecoder = "image" | "heif";
 export const thumbnailPath = (root: string, sha256: string, size: ThumbnailSize) =>
   join(root, "thumbnails", `${sha256}-${size}.webp`);
 export const thumbnailFailure = (root: string, sha256: string, decoder: ThumbnailDecoder) =>
   join(root, "thumbnails", `${sha256}-${decoder}.failed`);
+/** Written before a decoder runs and removed after, so a render Relay died during is noticed. */
+export const thumbnailAttempt = (root: string, sha256: string, decoder: ThumbnailDecoder) =>
+  join(root, "thumbnails", `${sha256}-${decoder}.rendering`);
 
 /** A repair replaces the inode. Detect modifications as well as replacements during an async read. */
 export const sameFile = (a: Stats, b: Stats) =>
@@ -73,6 +76,8 @@ export function createBlobStore(ctx: Context): BlobStore {
     thumbnailPath(ctx.config.root, sha256, "l"),
     thumbnailFailure(ctx.config.root, sha256, "image"),
     thumbnailFailure(ctx.config.root, sha256, "heif"),
+    thumbnailAttempt(ctx.config.root, sha256, "image"),
+    thumbnailAttempt(ctx.config.root, sha256, "heif"),
   ];
   const invalidateThumbnails = (sha256: string) => {
     let removed = 0;

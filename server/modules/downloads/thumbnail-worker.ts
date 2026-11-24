@@ -5,7 +5,7 @@ import { ALLOWED_LOADERS, imageSignature } from "./image-signature.ts";
 
 /** One rendition to make. A worker renders many, one at a time. */
 type Job = { id: number; source: string; target: string; format: "heif" | "image"; width: number };
-type Limits = { maxSourceBytes: number; maxPixels: number; maxHeifPixels: number };
+type Limits = { maxSourceBytes: number; maxPixels: number; maxHeifPixels: number; maxAvifPixels: number };
 
 const limits = workerData as Limits;
 sharp.cache(false);
@@ -38,6 +38,10 @@ async function render(job: Job) {
     const metadata = await image.metadata();
     if (!["png", "jpeg", "webp", "gif", "heif"].includes(metadata.format ?? ""))
       throw Object.assign(new Error("This image format cannot be previewed."), { code: "INVALID_IMAGE" });
+    // sharp calls AVIF "heif" and decodes it whole, so it gets a lower cap than formats read in
+    // strips. Judged from the file's own header, whatever its name says.
+    if (metadata.format === "heif" && (metadata.width ?? 0) * (metadata.height ?? 0) > data.maxAvifPixels)
+      throw Object.assign(new Error("This image is too large to preview."), { code: "HEIF_DIMENSIONS_TOO_LARGE" });
     const output = await image
       .rotate()
       .resize({ width: data.width, height: data.width, fit: "inside", withoutEnlargement: true })

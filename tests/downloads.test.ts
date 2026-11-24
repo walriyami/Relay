@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
@@ -485,6 +486,40 @@ for (const concurrent of [false, true]) {
     }
   });
 }
+
+test("thumbnails: a tiny AVIF of huge dimensions isn't decoded, and an image Relay stopped during twice isn't retried", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "avif-owner");
+    const flat = (width: number) => sharp({ create: { width, height: 4000, channels: 3, background: "#888" } });
+    // A few hundred bytes that would take over 200 MB to decode, named like a PNG.
+    const huge = await flat(4100).avif({ quality: 1, effort: 0 }).toBuffer();
+    const photo = await flat(10).png().toBuffer();
+    const { result } = await send(client, [
+      { path: "huge.png", data: huge, mime: "image/png" },
+      { path: "photo.png", data: photo, mime: "image/png" },
+    ]);
+    const nodes = new Map(
+      (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => [n.name, n]),
+    );
+    assert.equal((await get(client, urls.nodeThumbnail(nodes.get("huge.png")!.id))).statusCode, 415);
+    assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(huge)}-image.failed`)));
+
+    // As if Relay had been stopped during this image's render once, then again.
+    const note = join(instance.root, "thumbnails", `${sha(photo)}-image.rendering`);
+    writeFileSync(note, "0");
+    const url = urls.nodeThumbnail(nodes.get("photo.png")!.id);
+    assert.equal((await get(client, url, {}, "HEAD")).statusCode, 200, "one stop may have been anything");
+    assert.equal(existsSync(note), false, "a finished render clears its note");
+    await unlink(join(instance.root, "thumbnails", `${sha(photo)}-s.webp`));
+    writeFileSync(note, "1");
+    assert.equal((await get(client, url)).statusCode, 415);
+    assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(photo)}-image.failed`)));
+    assert.equal(existsSync(note), false);
+  } finally {
+    await instance.close();
+  }
+});
 
 test("thumbnail worker outages return 503 with bounded backoff and recover without persistent failure markers", async (t) => {
   const instance = await start();

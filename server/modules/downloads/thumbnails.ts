@@ -1,7 +1,7 @@
 // Bounded image renditions keyed by blob hash, so previews never ship originals. A few long-lived
 // workers render one image each at a time; requests wait their turn, taken in rotation between the
 // people asking, and a request for a rendition already in progress waits for that one.
-import { createReadStream, type Stats } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync, type Stats } from "node:fs";
 import { availableParallelism } from "node:os";
 import { rename, stat, unlink, writeFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
@@ -9,13 +9,27 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../../context.ts";
 import { authOf } from "../../lib/auth.ts";
 import { fail } from "../../lib/errors.ts";
-import { sameFile, thumbnailFailure, thumbnailPath, type ThumbnailDecoder } from "../../storage/blobs.ts";
+import {
+  sameFile,
+  thumbnailAttempt,
+  thumbnailFailure,
+  thumbnailPath,
+  type ThumbnailDecoder,
+} from "../../storage/blobs.ts";
+import { unlinkIfPresent } from "../../storage/files.ts";
 
 const DIMENSIONS = { s: 640, l: 2048 } as const;
 type Size = keyof typeof DIMENSIONS;
 export const MAX_SOURCE_BYTES = 50 * 1024 ** 2;
 export const MAX_PIXELS = 50_000_000;
 export const MAX_HEIF_PIXELS = 40_000_000;
+/**
+ * AVIF, which sharp decodes whole: about 14 bytes of memory per pixel, from files of a few hundred
+ * bytes. 16 MP (about 250 MB) covers photos and 4K screenshots.
+ */
+export const MAX_AVIF_PIXELS = 16_000_000;
+/** Times Relay may stop mid-render of one image before that image is no longer tried. */
+const INTERRUPTED_RENDERS = 2;
 /** Images rendered at once. Two on a Raspberry Pi's four cores leaves the rest for transfers. */
 const RENDERERS = Math.max(1, Math.min(2, availableParallelism() - 2));
 /**
@@ -83,7 +97,12 @@ function createRenderers() {
 
   const spawn = () => {
     const worker = new Worker(new URL("./thumbnail-worker.ts", import.meta.url), {
-      workerData: { maxSourceBytes: MAX_SOURCE_BYTES, maxPixels: MAX_PIXELS, maxHeifPixels: MAX_HEIF_PIXELS },
+      workerData: {
+        maxSourceBytes: MAX_SOURCE_BYTES,
+        maxPixels: MAX_PIXELS,
+        maxHeifPixels: MAX_HEIF_PIXELS,
+        maxAvifPixels: MAX_AVIF_PIXELS,
+      },
       resourceLimits: {
         maxOldGenerationSizeMb: 256,
         maxYoungGenerationSizeMb: 32,
@@ -173,6 +192,40 @@ export function createThumbnails(ctx: Context) {
   // Temporary outages are never persisted and have a short shared backoff for both sizes.
   const retryAfter = new Map<string, number>();
   const busy = () => fail(503, "Preview rendering is temporarily unavailable. Retry shortly.");
+  /** Renders in progress per attempt note, so both sizes of one image share it. */
+  const attempts = new Map<string, number>();
+
+  /**
+   * Notes on disk that an image is being decoded, until it's done. If a decoder takes so much
+   * memory that Relay is stopped, the note survives the restart; an image that was being decoded
+   * at two such stops isn't tried again, so one file can't keep Relay restarting. Returns null for
+   * such an image, otherwise a function to call when the render ends.
+   */
+  function beginAttempt(sha256: string, format: ThumbnailDecoder) {
+    const note = thumbnailAttempt(ctx.config.root, sha256, format);
+    const running = attempts.get(note) ?? 0;
+    if (!running) {
+      let stops = 0;
+      try {
+        stops = (Number(readFileSync(note, "utf8")) || 0) + 1;
+      } catch {
+        // No note: the last render of this image finished.
+      }
+      if (stops >= INTERRUPTED_RENDERS) {
+        unlinkIfPresent(note);
+        return null;
+      }
+      writeFileSync(note, String(stops));
+    }
+    attempts.set(note, running + 1);
+    return () => {
+      const left = attempts.get(note)! - 1;
+      if (left) return attempts.set(note, left);
+      attempts.delete(note);
+      unlinkIfPresent(note);
+    };
+  }
+
   const unchanged = async (sha256: string, before: Stats) => {
     const after = await stat(ctx.blobs.path(sha256)).catch(() => null);
     return after !== null && sameFile(before, after);
@@ -331,6 +384,12 @@ export function createThumbnails(ctx: Context) {
         await cacheRejection();
         fail(415, "This image is too large to preview.");
       }
+      const ended = beginAttempt(sha256, format);
+      if (!ended) {
+        ctx.log.warn({ blob: sha256 }, "Relay stopped while previewing this image before; it won't be tried again");
+        await cacheRejection();
+        fail(415, "This image cannot be previewed.");
+      }
       try {
         await renderers.render({ source, target: publication.file, format, width: DIMENSIONS[size] });
         if (!(await unchanged(sha256, info))) return busy();
@@ -349,6 +408,8 @@ export function createThumbnails(ctx: Context) {
         if (retryAfter.size >= 256) retryAfter.delete(retryAfter.keys().next().value!);
         retryAfter.set(sha256, Date.now() + RENDITION_RETRY_MS);
         return busy();
+      } finally {
+        ended();
       }
     } finally {
       try {
