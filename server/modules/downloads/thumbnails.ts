@@ -2,7 +2,6 @@
 // workers render one image each at a time; requests wait their turn, taken in rotation between the
 // people asking, and a request for a rendition already in progress waits for that one.
 import { createReadStream, readFileSync, writeFileSync, type Stats } from "node:fs";
-import { availableParallelism } from "node:os";
 import { rename, stat, unlink, writeFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -30,8 +29,14 @@ export const MAX_HEIF_PIXELS = 40_000_000;
 export const MAX_AVIF_PIXELS = 16_000_000;
 /** Times Relay may stop mid-render of one image before that image is no longer tried. */
 const INTERRUPTED_RENDERS = 2;
-/** Images rendered at once. Two on a Raspberry Pi's four cores leaves the rest for transfers. */
-const RENDERERS = Math.max(1, Math.min(2, availableParallelism() - 2));
+/**
+ * Images rendered at once: one. Decoders' memory is native and outside the workers' limits, and a
+ * crafted image within every limit can still take about 400 MB, so two at once could exceed the
+ * whole server's memory. With one, a render that brings Relay down is the only one in progress, so
+ * its interrupted-render note blames that image and never one that happened to run beside it.
+ * Renditions are kept once made, so this slows only the first look at new photos.
+ */
+const RENDERERS = 1;
 /**
  * Renditions waiting, in all and for one person. A phone opening an album asks for every visible
  * photo at once; they wait their turn instead of failing. Past these, the page retries.
