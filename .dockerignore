@@ -18,3 +18,5 @@ playwright-report
 test-results
 *.md
 .DS_Store
+# The deploy folder holds the server's own .env and tunnel token; they never belong in an image.
+deploy

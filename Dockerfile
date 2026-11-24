@@ -25,13 +25,16 @@ RUN rm -rf /usr/local/lib/node_modules/npm /opt/yarn* \
        /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3090 RELAY_DATA=/data
 WORKDIR /app
-COPY --from=build --chown=node:node /app/package*.json ./
-COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
-COPY --from=production-dependencies --chown=node:node /wal-auth ./node_modules/@walriyami/auth
-COPY --from=build --chown=node:node /app/server ./server
-COPY --from=build --chown=node:node /app/shared ./shared
-COPY --from=build --chown=node:node /app/local ./local
-COPY --from=build --chown=node:node /app/dist ./dist
+# The app's own files stay owned by root, so Relay (running as `node`) can read them but never
+# rewrite them: a bug that let someone run code inside Relay couldn't change Relay itself, even
+# without a read-only root filesystem. /data is the only place it writes.
+COPY --from=build /app/package*.json ./
+COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=production-dependencies /wal-auth ./node_modules/@walriyami/auth
+COPY --from=build /app/server ./server
+COPY --from=build /app/shared ./shared
+COPY --from=build /app/local ./local
+COPY --from=build /app/dist ./dist
 RUN mkdir -m 0700 /data && chown node:node /data
 USER node
 EXPOSE 3090
