@@ -66,6 +66,22 @@ test("a known-browser cookie must be signed by this server and only vouches for 
   }
 });
 
+test("a known-browser cookie is each browser's own, and a new password forgets it", async () => {
+  const instance = await start();
+  try {
+    const victim = await member(instance, "victim");
+    const first = knownCookieOf(await signIn(instance, "192.0.2.10", "victim", MEMBER_PASSWORD));
+    const second = knownCookieOf(await signIn(instance, "192.0.2.10", "victim", MEMBER_PASSWORD));
+    assert.notEqual(first, second, "nothing one browser shows works as another's");
+    await victim.call(api.account.password, { body: { current: MEMBER_PASSWORD, password: "Another-password-1" } });
+    for (let attempt = 0; attempt < 20; attempt++)
+      await signIn(instance, `203.0.${attempt}.1`, "victim", "wrong-password");
+    assert.equal((await signIn(instance, "198.51.100.3", "victim", "Another-password-1", first)).statusCode, 429);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("one network's wrong passwords for an account stop that network only", async () => {
   const instance = await start();
   try {

@@ -116,9 +116,12 @@ export class Secrets {
   nearbyToken(inviteId: string) {
     return this.mac("nearby", inviteId).toString("base64url");
   }
-  /** Vouches that an account has signed in on a browser (see `rememberBrowser`). */
-  knownBrowserMac(userId: string) {
-    return this.mac("known-browser", userId).toString("base64url").slice(0, 32);
+  /**
+   * Vouches that an account signed in on one browser (`browser` is random, made at that sign-in)
+   * while its password hash was `passwordHash`, so a new password forgets it (see `rememberBrowser`).
+   */
+  knownBrowserMac(userId: string, browser: string, passwordHash: string) {
+    return this.mac("known-browser", `${userId}\n${browser}\n${passwordHash}`).toString("base64url").slice(0, 32);
   }
   /** A database-safe, purpose-separated digest for a low-entropy numeric pickup code. */
   pickupCodeHash(digits: string) {

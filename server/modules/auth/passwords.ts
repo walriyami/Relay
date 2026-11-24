@@ -3,9 +3,11 @@
 // - Each network (an IPv4 /24 or IPv6 /48) gets a few wrong passwords per account an hour.
 // - Each account gets a few more an hour from browsers it has never signed in on. A browser the
 //   account has signed in on before carries a signed "known browser" cookie and skips that limit,
-//   so someone guessing from elsewhere can't lock the owner out of their own devices.
+//   so someone guessing from elsewhere can't lock the owner out of their own devices. Each browser's
+//   cookie is its own, and a new password forgets them all.
 // - Each network may have only a couple of password checks running at once, and known browsers
 //   have room of their own in the password queue, so a flood can't starve everyone's sign-ins.
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../../context.ts";
 import { cookieOptions, knownBrowserCookie } from "../../lib/auth.ts";
@@ -42,23 +44,29 @@ function limitsOf(ctx: Context) {
   return limits;
 }
 
-/** The accounts that have signed in on this browser before, as verified user ids. */
-function knownAccounts(ctx: Context, req: FastifyRequest): string[] {
-  const value = req.cookies?.[knownBrowserCookie(ctx, req)] ?? "";
-  return value
-    .split("~")
-    .slice(0, KNOWN_ACCOUNTS)
-    .map((entry) => entry.split("."))
-    .filter(([id, mac]) => id && mac && ctx.secrets.knownBrowserMac(id) === mac)
-    .map(([id]) => id);
+/** This browser's entries, `userId.browser.mac`, newest first; each is checked only when used. */
+const knownEntries = (ctx: Context, req: FastifyRequest) =>
+  (req.cookies?.[knownBrowserCookie(ctx, req)] ?? "").split("~").filter(Boolean).slice(0, KNOWN_ACCOUNTS);
+
+/** Whether the account signed in on this browser with the password it has now. */
+function knowsBrowser(ctx: Context, req: FastifyRequest, userId: string, passwordHash: string) {
+  return knownEntries(ctx, req).some((entry) => {
+    const [id, browser, mac, extra] = entry.split(".");
+    if (id !== userId || !browser || !mac || extra !== undefined) return false;
+    const expected = Buffer.from(ctx.secrets.knownBrowserMac(id, browser, passwordHash));
+    const given = Buffer.from(mac);
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  });
 }
 
 /** Marks this browser as one the account signs in on, so guessing elsewhere never locks it out. */
 export function rememberBrowser(ctx: Context, reply: FastifyReply, userId: string) {
-  const others = knownAccounts(ctx, reply.request).filter((id) => id !== userId);
-  const value = [userId, ...others]
+  const passwordHash = ctx.db.value<string>("SELECT password_hash FROM users WHERE id = ?", userId);
+  if (!passwordHash) return;
+  const browser = randomBytes(12).toString("base64url");
+  const others = knownEntries(ctx, reply.request).filter((entry) => entry.split(".")[0] !== userId);
+  const value = [`${userId}.${browser}.${ctx.secrets.knownBrowserMac(userId, browser, passwordHash)}`, ...others]
     .slice(0, KNOWN_ACCOUNTS)
-    .map((id) => `${id}.${ctx.secrets.knownBrowserMac(id)}`)
     .join("~");
   reply.setCookie(knownBrowserCookie(ctx, reply.request), value, cookieOptions(ctx, reply.request, KNOWN_MS));
 }
@@ -93,7 +101,7 @@ export async function checkPassword(
   const now = Date.now();
   const network = wideNetworkOf(req.ip);
   const pair = `${account.username}\n${network}`;
-  const known = !!account.signedIn || (!!account.userId && knownAccounts(ctx, req).includes(account.userId));
+  const known = !!account.signedIn || (!!account.userId && knowsBrowser(ctx, req, account.userId, hash));
 
   if (!limits.network.reserve(pair, now, PER_NETWORK.max)) {
     lockedOut(ctx, account);
