@@ -32,6 +32,15 @@ function redeemLoginCode(ctx: Context, device: NewDevice, lookup: (now: number) 
       row.id,
     );
     if (!used.changes) invalid();
+    // A browser added from a Walriyami session answers to Walriyami too: when Control says that
+    // person may no longer use Relay, this session ends with the one that admitted it.
+    ctx.db.run(
+      `INSERT INTO external_sessions(session_hash, issuer, subject)
+       SELECT ?, e.issuer, e.subject FROM login_codes c JOIN external_sessions e ON e.session_hash = c.session_hash
+       WHERE c.id = ?`,
+      sha256(session.token),
+      row.id,
+    );
     return session;
   });
 }

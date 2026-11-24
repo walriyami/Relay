@@ -27,10 +27,19 @@ test("shared sign-in requires explicit linking, creates a real session, and revo
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM external_sessions"), 1);
 
     assert.equal((await browser.signIn()).headers.location, "/");
+    // A browser added with a code from the Walriyami session answers to Walriyami as well.
+    browser.csrf = (await browser.request(api.session.get.path)).json<{ csrf: string }>().csrf;
+    const code = (await browser.request(api.loginCodes.create.path, "POST")).json<{ code: string }>().code;
+    const added = new Client(instance);
+    await added.call(api.session.code, { body: { code, deviceName: "Added tablet" } });
     provider.grants.allowed = false;
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    mock.timers.tick(11_000); // past the last answer Relay keeps
     assert.equal((await browser.request("/api/session")).statusCode, 401);
+    await assert.rejects(added.call(api.session.get), { status: 401 });
     assert.equal((await local.call(api.session.get)).user.username, "admin");
   } finally {
+    mock.timers.reset();
     await instance.close();
     await provider.close();
   }
