@@ -61,27 +61,47 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
     );
   const capacity = capacityOf(ctx);
   const stored = ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
-  if (bytes > 0 && stored + reserved("") + bytes > capacity) fail(507, "The server has reached its storage capacity.");
+  // Room a visitor with a request link has declared but not yet sent doesn't count against a
+  // member's upload: otherwise one stranger could declare a large file, send nothing, and stop
+  // everyone on the server from uploading. Visitors still count each other's declared room.
+  const promised = options.principal.kind === "member" ? "u.offset" : "n.size";
+  const held = ctx.db.value<number>(
+    `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0)
+     FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
+     WHERE n.state = 'pending'`,
+  )!;
+  if (bytes > 0 && stored + held + bytes > capacity) fail(507, "The server has reached its storage capacity.");
   const disk = statfsSync(ctx.config.root);
   if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes() - DISK_HEADROOM < bytes)
     fail(507, "The server's disk does not have enough free space for this transfer.");
 }
 
+/**
+ * Top-level names already used in an item, and for each name that collided, the number after the
+ * last one handed out. Counting on from there keeps thousands of copies of one name quick; counting
+ * from 2 every time took minutes and froze the server for everyone.
+ */
+type TakenNames = { names: Set<string>; next: Map<string, number> };
+
 /** "Text.txt", or "Text (2).txt" and so on when that name is taken at the top level. */
-function textName(taken: Set<string>) {
-  for (let n = 1; ; n++) {
+function textName(taken: TakenNames) {
+  for (let n = taken.next.get("\0text") ?? 1; ; n++) {
     const name = n === 1 ? "Text.txt" : `Text (${n}).txt`;
-    if (!taken.has(foldCase(name))) return name;
+    if (!taken.names.has(foldCase(name))) {
+      taken.next.set("\0text", n + 1);
+      return name;
+    }
   }
 }
 
 /** Add a suffix before the extension until a sibling name is available. */
-function uniqueName(name: string, taken: Set<string>, preserveExtension = false) {
-  if (!taken.has(foldCase(name))) return name;
+function uniqueName(name: string, taken: TakenNames, preserveExtension = false) {
+  if (!taken.names.has(foldCase(name))) return name;
   const dot = preserveExtension ? name.lastIndexOf(".") : -1;
   const stem = dot > 0 ? name.slice(0, dot) : name;
   const extension = dot > 0 ? name.slice(dot) : "";
-  for (let n = 2; ; n++) {
+  const key = foldCase(`${stem}\0${extension}`);
+  for (let n = taken.next.get(key) ?? 2; ; n++) {
     const suffix = ` (${n})`;
     let boundedStem = stem;
     while (
@@ -91,7 +111,10 @@ function uniqueName(name: string, taken: Set<string>, preserveExtension = false)
     )
       boundedStem = [...boundedStem].slice(0, -1).join("");
     const candidate = `${boundedStem}${suffix}${extension}`;
-    if (!taken.has(foldCase(candidate))) return candidate;
+    if (!taken.names.has(foldCase(candidate))) {
+      taken.next.set(key, n + 1);
+      return candidate;
+    }
   }
 }
 
@@ -207,13 +230,13 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       );
       const ids = new Map<string, string>();
       const uploads: string[] = [];
-      const topTaken = new Set<string>();
+      const topTaken: TakenNames = { names: new Set(), next: new Map() };
       if (appending)
         for (const row of ctx.db.all<{ name: string }>(
           "SELECT name FROM nodes WHERE item = ? AND parent IS NULL",
           itemId,
         ))
-          topTaken.add(foldCase(row.name));
+          topTaken.names.add(foldCase(row.name));
       try {
         for (const node of plan) {
           const parent = node.parentKey === null ? null : ids.get(node.parentKey)!;
@@ -221,7 +244,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           // while the upload response below continues to expose the client's original path.
           const name =
             appending && node.parentKey === null ? uniqueName(node.name, topTaken, node.kind === "file") : node.name;
-          if (node.parentKey === null) topTaken.add(foldCase(name));
+          if (node.parentKey === null) topTaken.names.add(foldCase(name));
           if (node.kind === "folder") {
             const sibling =
               appending && node.parentKey !== null

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { api } from "../shared/api.ts";
-import type { TransferCreated } from "../shared/model.ts";
+import { DEFAULTS, type TransferCreated } from "../shared/model.ts";
 import { Client, admin, member, patchUpload, start, type ApiError, type Instance } from "./support/harness.ts";
 import { STALLED_GUEST_MS, STALLED_MEMBER_MS } from "../server/modules/transfers/lifecycle.ts";
 import { DAY_MS } from "../server/lib/time.ts";
@@ -286,6 +286,47 @@ test("an upload that never sends its bytes gives its reserved room back", async 
     assert.notEqual(state(instance, mine.id), "open");
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM nodes WHERE state = 'pending'"), 0);
   } finally {
+    await instance.close();
+  }
+});
+
+test("room a visitor declared but hasn't sent never blocks members, and a trickle doesn't keep it", async () => {
+  const instance = await start();
+  try {
+    const boss = await admin(instance);
+    const owner = await member(instance, "trickle-owner", boss);
+    await boss.call(api.admin.settings, { body: { capacity: 1000, expectedCapacity: DEFAULTS.capacityBytes } });
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Big", description: "", days: 5, maxBytes: 900 },
+    });
+    const guest = new Client(instance);
+    await guest.call(api.requests.start, { params: { token: request.token } });
+    const hog = await guest.call(api.requests.transfer, {
+      params: { token: request.token },
+      body: { id: crypto.randomUUID(), tab: guest.tab, folders: [], files: [{ path: "big.bin", size: 900, mime: "" }] },
+    });
+    const upload = (size: number) =>
+      boss.call(api.transfers.create, {
+        body: {
+          id: crypto.randomUUID(),
+          tab: boss.tab,
+          name: null,
+          folders: [],
+          files: [{ path: "a.bin", size, mime: "" }],
+        },
+      });
+    assert.ok(await upload(200), "the visitor's 900 declared bytes don't fill the server for members");
+
+    // One byte every 25 minutes isn't progress: the visitor's room is given back after half an hour.
+    instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", Date.now() + 2 * DAY_MS);
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    mock.timers.tick(25 * 60_000);
+    assert.equal((await patchUpload(guest, hog.uploads[0].id, 0, Buffer.from("x"))).statusCode, 204);
+    mock.timers.tick(10 * 60_000);
+    await instance.ctx.transfers.sweep(Date.now());
+    assert.notEqual(state(instance, hog.id), "open");
+  } finally {
+    mock.timers.reset();
     await instance.close();
   }
 });

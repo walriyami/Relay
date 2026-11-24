@@ -17,6 +17,8 @@ import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
 const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+/** How much of a file must arrive to count as progress that keeps its transfer from going stale. */
+export const PROGRESS_STEP = 4 * 1024 ** 2;
 
 export type UploadRow = {
   id: string;
@@ -415,10 +417,15 @@ export class Receivers {
       receiver.rebuildRequired = true;
       throw error;
     }
+    // `touched` is what keeps an unfinished transfer from being given up as stalled, so it moves
+    // only when another PROGRESS_STEP of the file has arrived. A visitor who sent a byte every few
+    // minutes used to hold a request's declared room for as long as the request stayed open.
     this.ctx.db.run(
-      "UPDATE uploads SET offset = ?, touched = CASE WHEN offset < ? THEN ? ELSE touched END WHERE id = ?",
+      "UPDATE uploads SET offset = ?, touched = CASE WHEN CAST(? / ? AS INTEGER) > CAST(offset / ? AS INTEGER) THEN ? ELSE touched END WHERE id = ?",
       position,
       position,
+      PROGRESS_STEP,
+      PROGRESS_STEP,
       Date.now(),
       upload.id,
     );

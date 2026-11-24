@@ -99,9 +99,18 @@ export function exportEntries(ctx: Context, owner: string) {
   }
   const names = ctx.library.summaries([...byItem.keys()]);
   const taken = new Set<string>();
+  // The number after the last one each name was given, so many items with one name stay quick to
+  // number rather than counting from 2 for each.
+  const next = new Map<string, number>();
   const claim = (name: string, folder: boolean) => {
-    let candidate = segment(name);
-    for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = numbered(segment(name), n, folder);
+    const base = segment(name);
+    let candidate = base;
+    if (taken.has(candidate.toLowerCase())) {
+      const key = `${folder ? "/" : ""}${base.toLowerCase()}`;
+      let n = next.get(key) ?? 2;
+      while (taken.has((candidate = numbered(base, n, folder)).toLowerCase())) n++;
+      next.set(key, n + 1);
+    }
     taken.add(candidate.toLowerCase());
     return candidate;
   };
