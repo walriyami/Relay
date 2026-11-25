@@ -1,4 +1,5 @@
 // Domain shapes exchanged between the server and the client. Every API response is built from these.
+import { shownText } from "./text.ts";
 
 export type Id = string;
 /** Milliseconds since the Unix epoch. */
@@ -106,8 +107,8 @@ export type ActivityPrefs = Record<ActivityGroup, boolean>;
  * members on the same network see this member's devices in Nearby (see shared/nearby.ts).
  */
 export type Prefs = { linkDays: number | null; autoCopyLink: boolean; nearbyVisible: boolean; activity: ActivityPrefs };
-/** The name a member shows other people. */
-export const displayName = (user: Pick<User, "name" | "username">) => user.name || user.username;
+/** The name a member shows other people, as shown (see shownText). */
+export const displayName = (user: Pick<User, "name" | "username">) => shownText(user.name ?? "") || user.username;
 /**
  * Logical bytes: saved content (Trash included), bytes reserved by unfinished uploads, and what can
  * still be uploaded: the lesser of what the member's storage limit and the total storage leave.

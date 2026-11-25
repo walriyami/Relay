@@ -43,6 +43,7 @@ import {
   storageSegments,
   timeZoneOffset,
 } from "../usage/charts";
+import { UserText } from "../../components/UserText";
 
 export function AdminOverview({ data, invites }: { data: Overview; invites: number }) {
   // Trends can point History at what they summarise, so its filter lives here.
@@ -419,7 +420,7 @@ function MemberUsage({
                     onClick={() => onShowMember(m.id)}
                     aria-label={`${displayName(m)}: show history`}
                   >
-                    {displayName(m)}
+                    <UserText>{displayName(m)}</UserText>
                   </button>
                   <span className="muted member-table-seen">
                     {member?.disabled
@@ -589,7 +590,7 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
 const files = (n: number, size: number) => `${plural(n, "file")} (${bytes(size)})`;
 
 /** One sentence per event, in the words someone running Relay would use. */
-function describe(e: HistoryEntry): string {
+function describe(e: HistoryEntry): React.ReactNode {
   switch (e.kind) {
     case "joined":
       return e.via === "setup"
@@ -612,11 +613,16 @@ function describe(e: HistoryEntry): string {
         ? `${e.by} reset ${e.username}’s password`
         : `${e.username}’s password was reset with the recovery link from the server`;
     case "sent":
-      return e.to === "device"
-        ? `${e.username} sent ${files(e.files, e.bytes)} to ${e.device ?? "one of their devices"}`
-        : e.to === "link"
-          ? `${e.username} shared ${files(e.files, e.bytes)} as a link`
-          : `${e.username} uploaded ${files(e.files, e.bytes)} to Files`;
+      return e.to === "device" ? (
+        <>
+          {e.username} sent {files(e.files, e.bytes)} to{" "}
+          {e.device ? <UserText>{e.device}</UserText> : "one of their devices"}
+        </>
+      ) : e.to === "link" ? (
+        `${e.username} shared ${files(e.files, e.bytes)} as a link`
+      ) : (
+        `${e.username} uploaded ${files(e.files, e.bytes)} to Files`
+      );
     case "shared":
       return e.what === "link" ? `${e.username} made a shared link` : `${e.username} asked for files with a request`;
     case "received":

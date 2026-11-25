@@ -19,6 +19,7 @@ import {
 import { canShare, downloadFile, downloadZip, share, touch } from "../../lib/nearby/save";
 import { navigate } from "../../lib/router";
 import { startTransfer } from "../../lib/transfers";
+import { UserText } from "../../components/UserText";
 
 type Payload = { files: { file: File; path: string }[]; folders: string[]; text: string };
 
@@ -116,9 +117,17 @@ function statusOf(t: NearbyTransfer) {
   const left = t.speed > 0 ? duration((t.bytes - t.moved) / t.speed) : "";
   switch (t.state) {
     case "connecting":
-      return <span className="waiting">Connecting to {t.peerName}…</span>;
+      return (
+        <span className="waiting">
+          Connecting to <UserText>{t.peerName}</UserText>…
+        </span>
+      );
     case "asking":
-      return <span className="waiting">Waiting for {t.peerName} to accept…</span>;
+      return (
+        <span className="waiting">
+          Waiting for <UserText>{t.peerName}</UserText> to accept…
+        </span>
+      );
     case "incoming":
       return "Wants to send you this";
     case "running":
@@ -133,13 +142,17 @@ function statusOf(t: NearbyTransfer) {
       return <span className="waiting">Connection dropped. Reconnecting…</span>;
     case "done":
       // Only once the receiving device has every byte: it says so after putting the files back together.
-      return t.direction === "out"
-        ? `Delivered to ${t.peerName} · no copy kept on Relay`
-        : saved.has(t.id)
-          ? "Received · saved"
-          : touch
-            ? "Received · save it before you close this page"
-            : "Received · download it before you close this page";
+      return t.direction === "out" ? (
+        <>
+          Delivered to <UserText>{t.peerName}</UserText> · no copy kept on Relay
+        </>
+      ) : saved.has(t.id) ? (
+        "Received · saved"
+      ) : touch ? (
+        "Received · save it before you close this page"
+      ) : (
+        "Received · download it before you close this page"
+      );
     default:
       return t.reason;
   }
@@ -182,7 +195,7 @@ function Received({ t }: { t: NearbyTransfer }) {
             <li key={i}>
               <Thumbnail compact file={file} entry={{ path: t.files[i].path, mime: file.type, size: file.size }} />
               <span className="nearby-file-name" title={t.files[i].path}>
-                {t.files[i].path}
+                <UserText>{t.files[i].path}</UserText>
               </span>
               <span className="muted">{bytes(file.size)}</span>
               {!touch && (
@@ -258,7 +271,7 @@ export function TransferCard({ t, again, relay }: { t: NearbyTransfer; again?: N
         </span>
         <div className="nearby-transfer-title">
           <strong>
-            {t.direction === "out" ? "To" : "From"} {t.peerName}
+            {t.direction === "out" ? "To" : "From"} <UserText>{t.peerName}</UserText>
           </strong>
           <span className="muted">{contents(t)}</span>
         </div>

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Brand } from "../app/Brand";
 import { Icon } from "./icons";
+import { shown } from "./UserText";
 
 export type PublicWidth = "narrow" | "medium" | "wide";
 
@@ -54,8 +55,8 @@ export function PublicCard({
             {icon}
           </span>
         )}
-        <h1 id={titleId}>{title}</h1>
-        {subtitle && <p className="muted">{subtitle}</p>}
+        <h1 id={titleId}>{shown(title)}</h1>
+        {subtitle && <p className="muted">{shown(subtitle)}</p>}
       </div>
       {children}
     </section>

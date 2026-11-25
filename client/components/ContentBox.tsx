@@ -6,6 +6,7 @@ import { allFiles, composition } from "../features/library/actions";
 import { DocumentArt } from "./DocumentArt";
 import { Thumbnail } from "./Thumbnail";
 import { Button, IconButton, toast } from "./ui";
+import { UserText } from "./UserText";
 
 // Collapsed selections show a few rows; more on request.
 const PREVIEW = 6;
@@ -328,7 +329,7 @@ export function SelectionRow({ item, onRemove }: { item: DraftItem; onRemove: ()
       )}
       <div className="selection-text">
         <span className="selection-name" title={item.name}>
-          {item.name}
+          <UserText>{item.name}</UserText>
         </span>
         <span className="muted">
           {item.kind === "folder" ? `Folder · ${plural(item.files.length, "file")} · ` : ""}

@@ -9,6 +9,8 @@
 // offer on it: the receiver, knowing the transfer, accepts it again with how much of each entry it
 // already has, and the sender carries on from there.
 
+import { cleanFileName } from "../../../shared/text.ts";
+
 /** One file in an offer. `path` may name folders ("Trip/IMG_1.jpg"). */
 export type WireFile = { path: string; size: number; type: string; modified: number };
 
@@ -117,6 +119,21 @@ export const NEARBY_WIRE = {
   /** Entries sent at once: small files don't wait on each other's round trips. */
   parallel: 3,
 } as const;
+
+/**
+ * A path a peer offered, made safe to save: no way out of its folder, nothing a file system refuses,
+ * and no name hiding what it is (cleanFileName): a peer's "photo‮gpj.exe" would otherwise be
+ * saved by Safari, and shown by Finder, as "photoexe.jpg". "" when nothing is left.
+ */
+export function cleanPath(path: string) {
+  return path
+    .replaceAll("\\", "/")
+    .split("/")
+    .map(cleanFileName)
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/")
+    .slice(0, 4096);
+}
 
 /** A random id for a connection attempt or a transfer: 128 bits, URL-safe. */
 export function randomId() {

@@ -3,7 +3,7 @@ import type { DeviceKind } from "../../../shared/model";
 import type { NearbyPeer, NearbySignal } from "../../../shared/nearby";
 import type { Inbound, Outbound } from "../../../shared/lanes";
 import { Link, type LinkEnd, type LinkEvents } from "./link";
-import { NEARBY_WIRE, TEXT, randomId, type Control, type WireFile } from "./protocol";
+import { NEARBY_WIRE, TEXT, cleanPath, randomId, type Control, type WireFile } from "./protocol";
 import { openSink, roomFor, type Sink } from "./sink";
 import { ReceiveBudget, type ReceiveReservation } from "./budget";
 import { bytes as size } from "../format";
@@ -830,22 +830,6 @@ function checkFiles(files: unknown): WireFile[] | null {
     });
   }
   return result;
-}
-
-/** A relative path with no way out of its folder, and nothing a file system refuses. */
-function cleanPath(path: string) {
-  return path
-    .replaceAll("\\", "/")
-    .split("/")
-    .map((part) =>
-      [...part]
-        .filter((c) => c.charCodeAt(0) >= 32 && c !== "\u007f")
-        .join("")
-        .trim(),
-    )
-    .filter((part) => part && part !== "." && part !== "..")
-    .join("/")
-    .slice(0, 4096);
 }
 
 const entriesOf = (r: In) => [

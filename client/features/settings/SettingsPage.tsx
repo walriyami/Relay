@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../components/icons";
-import { ApiError, api, call, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
+import { ApiError, api, call, shownText, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
 import { LIMITS, USERNAME, displayName } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { DeviceIcon, useEditDevice } from "../../app/devices";
@@ -29,6 +29,7 @@ import {
   confirmDialog,
   toast,
 } from "../../components/ui";
+import { UserText } from "../../components/UserText";
 
 type AccountChange = {
   prefs?: Partial<Omit<Prefs, "activity">> & { activity?: Partial<ActivityPrefs> };
@@ -354,7 +355,9 @@ export function SettingsPage({ onSignedOut }: { onSignedOut: () => void }) {
         <SharedIdentitySettings />
         <div className="setting-row">
           <span className="setting-label">
-            <strong>{displayName(me.user)}</strong>
+            <strong>
+              <UserText>{displayName(me.user)}</UserText>
+            </strong>
             <span className="field-hint">
               {me.user.name ? `Signs in as ${me.user.username}. ` : ""}People you share with see this name.
             </span>
@@ -608,7 +611,11 @@ function DevicesSection() {
   const seenText = (d: Device) => (d.online ? "is online now" : `was last seen ${ago(d.seen)}`);
   async function remove(d: Device) {
     const ok = await confirmDialog({
-      title: `Sign out ${d.name}?`,
+      title: (
+        <>
+          Sign out <UserText>{d.name}</UserText>?
+        </>
+      ),
       body: `This device ${seenText(d)}. It will need a password or sign-in code to use Relay again.`,
       confirm: "Sign out",
       danger: true,
@@ -617,7 +624,11 @@ function DevicesSection() {
     try {
       await call(api.devices.signOut, { params: { id: d.id } });
       reloadDevices();
-      toast(`${d.name} was signed out`);
+      toast(
+        <>
+          <UserText>{d.name}</UserText> was signed out
+        </>,
+      );
     } catch (e) {
       toast((e as Error).message, { tone: "error" });
     }
@@ -639,7 +650,9 @@ function DevicesSection() {
               <DeviceIcon device={d} />
             </span>
             <span className="device-text">
-              <strong className="device-name">{d.name}</strong>
+              <strong className="device-name">
+                <UserText>{d.name}</UserText>
+              </strong>
               <span className="chips">
                 {d.current && <Chip>This browser</Chip>}
                 {d.current || d.online ? <Chip tone="good">Online</Chip> : <Chip>Last seen {ago(d.seen)}</Chip>}
@@ -695,7 +708,11 @@ function DevicesSection() {
             onClick={async () => {
               const ok = await confirmDialog({
                 title: "Sign out all other devices?",
-                body: `${others.map((d) => d.name).join(", ")} will need to sign in again.`,
+                body: (
+                  <>
+                    <UserText>{others.map((d) => shownText(d.name)).join(", ")}</UserText> will need to sign in again.
+                  </>
+                ),
                 confirm: "Sign out others",
                 danger: true,
               });

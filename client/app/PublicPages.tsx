@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, Upload } from "lucide-react";
-import { ApiError, api, call, type PublicRequest, type PublicShare } from "../api";
+import { ApiError, api, call, shownText, type PublicRequest, type PublicShare } from "../api";
 import { LIMITS } from "../../shared/model";
 import { autoName, baseName, bytes, plural, until } from "../lib/format";
 import { startTransfer, isBusy, payloadBytes, uniquePaths, type Transfer } from "../lib/transfers";
@@ -25,6 +25,7 @@ import { AuthFrame } from "../features/auth/Auth";
 import { TransferCard, useTransfers } from "../features/send/TransferList";
 import { PublicCard, PublicFrame, PublicLoading, Unavailable } from "../components/PublicFrame";
 import { Icon } from "../components/icons";
+import { UserText } from "../components/UserText";
 
 // Shared with the Nearby guest page, which imports them from here.
 export { PublicFrame, Unavailable };
@@ -64,7 +65,7 @@ export function PublicSharePage({ token }: { token: string }) {
       ) : !data ? (
         <PublicLoading />
       ) : (
-        <PublicCard title={shareTitle(data)} subtitle={shareSummary(data)}>
+        <PublicCard title={<UserText>{shareTitle(data)}</UserText>} subtitle={shareSummary(data)}>
           <ShareView token={token} share={data} />
         </PublicCard>
       )}
@@ -143,7 +144,9 @@ export function PickupPage() {
         <div className="card-surface public-card">
           <div className="between">
             <div className="public-title">
-              <h1>{shareTitle(data)}</h1>
+              <h1>
+                <UserText>{shareTitle(data)}</UserText>
+              </h1>
               <p className="muted">{shareSummary(data)}</p>
             </div>
             <Button variant="ghost" size="sm" onClick={() => setToken(null)}>
@@ -232,7 +235,7 @@ function renames(items: Pick[], earlier: Transfer[]) {
  */
 function limitProblem(info: PublicRequest, size: number) {
   if (size <= info.remainingBytes) return null;
-  const who = info.owner || "The person who asked";
+  const who = shownText(info.owner) || "The person who asked";
   return `${
     info.storageLimited
       ? `${who} has room for ${bytes(info.remainingBytes)} more right now`
@@ -245,7 +248,7 @@ function limitProblem(info: PublicRequest, size: number) {
 /** "This request is full. admin has received the 2 GB it allows." Null while there is room. */
 function fullMessage(info: PublicRequest) {
   if (!info.full) return null;
-  const who = info.owner || "The person who asked";
+  const who = shownText(info.owner) || "The person who asked";
   return info.remainingBytes === 0 && !info.storageLimited
     ? `This request is full. ${who} has received the ${bytes(info.maxBytes)} it allows.`
     : `This request is full. ${who} can’t receive more with it.`;
@@ -415,9 +418,19 @@ export function GuestUpload({ token }: { token: string }) {
     <PublicFrame>
       <div className="card-surface public-card">
         <div className="public-title">
-          {info.owner && <p className="request-owner">{info.owner} is asking for</p>}
-          <h1>{info.name}</h1>
-          {info.description && <p className="request-description">{info.description}</p>}
+          {info.owner && (
+            <p className="request-owner">
+              <UserText>{info.owner}</UserText> is asking for
+            </p>
+          )}
+          <h1>
+            <UserText>{info.name}</UserText>
+          </h1>
+          {info.description && (
+            <p className="request-description">
+              <UserText>{info.description}</UserText>
+            </p>
+          )}
           <p className="muted">
             Up to {bytes(info.maxBytes)} · Closes {until(info.expires)}
           </p>
@@ -430,7 +443,13 @@ export function GuestUpload({ token }: { token: string }) {
             <h2>Sent</h2>
             <p className="muted">
               {composition(delivered, 0, deliveredTexts)} · {bytes(deliveredBytes)} sent
-              {info.owner ? ` to ${info.owner}` : ""}. You can close this page.
+              {info.owner && (
+                <>
+                  {" "}
+                  to <UserText>{info.owner}</UserText>
+                </>
+              )}
+              . You can close this page.
             </p>
             {full ? (
               <p className="muted">{full}</p>
@@ -447,7 +466,10 @@ export function GuestUpload({ token }: { token: string }) {
         ) : full ? (
           <div className="guest-full" role="status">
             <p>{full}</p>
-            <p className="muted">If you have more to send, ask {info.owner || "them"} for a new request link.</p>
+            <p className="muted">
+              If you have more to send, ask {info.owner ? <UserText>{info.owner}</UserText> : "them"} for a new request
+              link.
+            </p>
           </div>
         ) : (
           <>
@@ -474,7 +496,7 @@ export function GuestUpload({ token }: { token: string }) {
               <ul className="guest-renames muted" aria-label="Renamed files">
                 {renamed.slice(0, 5).map((r) => (
                   <li key={r.path}>
-                    {r.from} will be saved as {r.to}
+                    <UserText>{r.from}</UserText> will be saved as <UserText>{r.to}</UserText>
                   </li>
                 ))}
                 {renamed.length > 5 && <li>and {plural(renamed.length - 5, "more file")} renamed the same way</li>}
@@ -486,7 +508,10 @@ export function GuestUpload({ token }: { token: string }) {
               </p>
             )}
             {ready && (
-              <Field label="Your name (optional)" hint={`So ${info.owner || "they"} can tell who sent this.`}>
+              <Field
+                label="Your name (optional)"
+                hint={`So ${shownText(info.owner) || "they"} can tell who sent this.`}
+              >
                 <input
                   className="input"
                   autoComplete="name"

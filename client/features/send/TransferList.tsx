@@ -42,6 +42,7 @@ import { navigate } from "../../lib/router";
 import { LinkPanel } from "../../components/LinkPanel";
 import { addFilesTo } from "../library/actions";
 import { Button, IconButton, ProgressBar, confirmDialog } from "../../components/ui";
+import { UserText } from "../../components/UserText";
 
 export function useTransfers() {
   useSyncExternalStore(subscribe, snapshot);
@@ -129,7 +130,7 @@ export function TransferStrip({
         <CircleAlert className="transfer-x" size={16} aria-hidden />
       )}
       <strong className="transfer-name" title={t.name}>
-        {t.name}
+        <UserText>{t.name}</UserText>
       </strong>
       <span className="transfer-line muted">{status}</span>
       <Announce t={t} answer={answer} />
@@ -472,7 +473,7 @@ export function TransferCard({
           <X className="transfer-x" size={18} aria-hidden />
         )}
         <strong className="transfer-name" title={t.name}>
-          {t.name}
+          <UserText>{t.name}</UserText>
         </strong>
         <span className="transfer-line muted">
           {status}
@@ -621,7 +622,7 @@ function TransferHero({
       )}
       <Announce t={t} answer={answer} />
       <strong className="transfer-hero-name" title={t.name}>
-        {t.name}
+        <UserText>{t.name}</UserText>
       </strong>
       {showProgress ? (
         <div className="transfer-meter">

@@ -5,6 +5,7 @@ import { bytes, plural } from "../lib/format";
 import type { ContentSource } from "../lib/source";
 import { Thumbnail } from "./Thumbnail";
 import { Button, InlineEmpty } from "./ui";
+import { UserText } from "./UserText";
 
 /** A folder with the files anywhere beneath it. */
 export type FolderInfo = { node: Node; files: number; size: number };
@@ -100,7 +101,7 @@ export function EntryBrowser({
                     </div>
                   </div>
                   <span className="tile-name" title={node.name}>
-                    {node.name}
+                    <UserText>{node.name}</UserText>
                   </span>
                   <span className="tile-meta">
                     {plural(total.files, "file")} · {bytes(total.size)}
@@ -117,7 +118,7 @@ export function EntryBrowser({
                   <Thumbnail entry={node} source={source} />
                 </div>
                 <span className="tile-name" title={node.name}>
-                  {node.name}
+                  <UserText>{node.name}</UserText>
                 </span>
                 {node.damaged ? (
                   <span className="tile-meta danger">Damaged · can’t be downloaded</span>
@@ -166,10 +167,12 @@ function Crumbs({
         <span key={node.id} className="crumb">
           <ChevronRight size={14} aria-hidden />
           {i === crumbs.length - 1 ? (
-            <span aria-current="page">{node.name}</span>
+            <span aria-current="page">
+              <UserText>{node.name}</UserText>
+            </span>
           ) : (
             <button type="button" onClick={() => open(node.id)}>
-              {node.name}
+              <UserText>{node.name}</UserText>
             </button>
           )}
         </span>

@@ -3,6 +3,7 @@ import { Icon } from "./icons";
 import { Thumbnail } from "./Thumbnail";
 import { ownerSource } from "../lib/source";
 import type { ItemSummary } from "../../shared/model";
+import { UserText } from "./UserText";
 
 /**
  * One row of a list of things you shared or asked for (Links, Requests): a picture, the name with
@@ -45,7 +46,7 @@ export function StatusRow({
       >
         <strong className="status-row-title">
           {marker}
-          <span>{title}</span>
+          <UserText>{title}</UserText>
         </strong>
         <span className="chips">{chips}</span>
       </button>

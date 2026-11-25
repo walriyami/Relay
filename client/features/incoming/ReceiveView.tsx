@@ -5,6 +5,7 @@ import { bytes, plural, until } from "../../lib/format";
 import { shareSource } from "../../lib/source";
 import { ContentView, downloadContents, filesOf, isSingleFile } from "../../components/ContentView";
 import { Button } from "../../components/ui";
+import { UserText } from "../../components/UserText";
 
 export const SHARE_GONE = "This link has expired or was turned off.";
 
@@ -79,7 +80,10 @@ export function ShareUnlock({
         <LockKeyhole size={20} />
       </span>
       <p>
-        <strong>{locked.from}</strong> shared this with a password.
+        <strong>
+          <UserText>{locked.from}</UserText>
+        </strong>{" "}
+        shared this with a password.
       </p>
       <div className="share-unlock-row">
         <input
@@ -115,8 +119,12 @@ export function ShareNote({ share }: { share: PublicShare }) {
   if (!share.note) return null;
   return (
     <figure className="share-note">
-      <blockquote>{share.note}</blockquote>
-      <figcaption className="visually-hidden">Note from {share.from}</figcaption>
+      <blockquote>
+        <UserText>{share.note}</UserText>
+      </blockquote>
+      <figcaption className="visually-hidden">
+        Note from <UserText>{share.from}</UserText>
+      </figcaption>
     </figure>
   );
 }
@@ -132,9 +140,16 @@ export function contentSummary(c: { nodes: Node[]; expires: number | null }) {
   if (c.expires) parts.push(`Expires ${until(c.expires)}`);
   return parts.join(" · ");
 }
-/** "From Sara · 3 files · 2 MB · Expires in 6 days". */
-export const shareSummary = (share: PublicShare) =>
-  [`From ${share.from}`, contentSummary(share)].filter(Boolean).join(" · ");
+/** "From Sara · 3 files · 2 MB · Expires in 6 days", with the sender's name set apart from the rest. */
+export function shareSummary(share: PublicShare) {
+  const contents = contentSummary(share);
+  return (
+    <>
+      From <UserText>{share.from}</UserText>
+      {contents && ` · ${contents}`}
+    </>
+  );
+}
 
 /** "Download" for a lone file, "Download all" for anything that arrives as a ZIP. */
 export const downloadAllLabel = (nodes: Node[]) => (isSingleFile(nodes) ? "Download" : "Download all");

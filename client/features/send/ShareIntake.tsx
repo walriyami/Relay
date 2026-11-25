@@ -4,6 +4,7 @@ import { bytes, plural } from "../../lib/format";
 import { addShare, discardShare, leaveShare, readShare, type Incoming } from "../../lib/pwa-share";
 import { Thumbnail } from "../../components/Thumbnail";
 import { Button, toast } from "../../components/ui";
+import { UserText } from "../../components/UserText";
 
 // Relay opened from the share sheet (/share). What arrived is shown first, with Add and Discard:
 // an outside website can open this address or submit the same form, so nothing reaches the Send
@@ -104,7 +105,7 @@ export function ShareIntake() {
                 <Thumbnail compact file={file} entry={{ path: file.name, mime: file.type, size: file.size }} />
                 <div className="selection-text">
                   <span className="selection-name" title={file.name}>
-                    {file.name || "Unnamed file"}
+                    <UserText>{file.name || "Unnamed file"}</UserText>
                   </span>
                   <span className="muted">{bytes(file.size)}</span>
                 </div>

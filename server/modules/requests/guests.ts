@@ -5,6 +5,7 @@ import { LIMITS, type PublicRequest } from "../../../shared/model.ts";
 import { cookieOptions, grantFor, guestCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { cleanLabel } from "../../lib/names.ts";
+import { cleanFileName } from "../../../shared/text.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { addressKey, perAddress } from "../auth/limits.ts";
@@ -79,10 +80,10 @@ function submissionName(
   const chars = text?.trim() ? [...text].length : null;
   const label = sender ?? autoName(top[0]?.name ?? null, top.length, chars) ?? "submission";
   // The guest and the owner chose these words freely, so make them a valid item name (`cleanName`)
-  // rather than refuse the files: no slashes, control or direction marks, within the name limit
-  // and a file name's 255 bytes.
+  // rather than refuse the files: no slashes, control or direction marks or hidden characters,
+  // within the name limit and a file name's 255 bytes.
   const name = [
-    ...cleanLabel(`${request} · ${label}`, Number.MAX_SAFE_INTEGER)!
+    ...cleanFileName(cleanLabel(`${request} · ${label}`, Number.MAX_SAFE_INTEGER)!)
       .replace(/[/\\]/g, "-")
       // A lone half of a surrogate pair isn't a character a name can hold.
       .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"),

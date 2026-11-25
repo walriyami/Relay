@@ -3,6 +3,7 @@ import { ApiError, api, call, type NewLoginCode } from "../../api";
 import { notifyChange } from "../../lib/live";
 import { Button, Modal } from "../../components/ui";
 import { ShareAccess } from "../../components/ShareAccess";
+import { UserText } from "../../components/UserText";
 
 type State = "idle" | "busy" | "used" | "gone";
 /** The code plus its expiry on this device's clock, which may disagree with the server's. */
@@ -189,7 +190,13 @@ export function DeviceCode({
       {state === "used" ? (
         <>
           <p className="notice success" role="status">
-            {addedName ? `${addedName} is signed in.` : "The new device is signed in."}
+            {addedName ? (
+              <>
+                <UserText>{addedName}</UserText> is signed in.
+              </>
+            ) : (
+              "The new device is signed in."
+            )}
           </p>
           {added(() => void create())}
         </>

@@ -21,6 +21,7 @@ import { navigate, useModalLayer } from "../lib/router";
 import { lastFocused, returnFocus } from "../lib/focus";
 import { copyText } from "../lib/format";
 import { LIMITS } from "../../shared/model";
+import { shown } from "./UserText";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger";
@@ -251,8 +252,8 @@ export function Modal({
         >
           <div className="modal-head">
             <div className="modal-title">
-              <h2 id={titleId}>{title}</h2>
-              {subtitle && <p className="muted">{subtitle}</p>}
+              <h2 id={titleId}>{shown(title)}</h2>
+              {subtitle && <p className="muted">{shown(subtitle)}</p>}
             </div>
             <div className="modal-head-actions">
               {actions}
@@ -642,7 +643,7 @@ function ToastRegion({ inline = false }: { inline?: boolean }) {
           role={item.tone === "error" ? "alert" : "status"}
         >
           <div className="toast-text">
-            <strong>{item.message}</strong>
+            <strong>{shown(item.message)}</strong>
             {item.detail && <span className="muted">{item.detail}</span>}
           </div>
           {item.action && (
@@ -666,7 +667,7 @@ function ToastRegion({ inline = false }: { inline?: boolean }) {
 
 // Confirmation dialog that returns a promise.
 type ConfirmRequest = {
-  title: string;
+  title: ReactNode;
   body?: ReactNode;
   confirm: string;
   /** The dismiss button's label, when "Cancel" would be ambiguous (e.g. "Keep uploading"). */
@@ -675,7 +676,7 @@ type ConfirmRequest = {
   input?: {
     label: string;
     value: string;
-    hint?: string;
+    hint?: ReactNode;
     optional?: boolean;
     /** Selects the whole value at first, rather than a file name without its extension. */
     selectAll?: boolean;
@@ -775,7 +776,7 @@ function ConfirmBody({ request }: { request: ConfirmRequest }) {
         void submit();
       }}
     >
-      {request.body && <div className="muted">{request.body}</div>}
+      {request.body && <div className="muted">{shown(request.body)}</div>}
       {request.input && (
         <Field label={request.input.label} hint={request.input.hint}>
           <input
@@ -935,7 +936,7 @@ export function Field({
       </label>
       {hint && (
         <span className="field-hint" id={hintId}>
-          {hint}
+          {shown(hint)}
         </span>
       )}
       {after}

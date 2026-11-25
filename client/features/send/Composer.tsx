@@ -47,6 +47,7 @@ import { errorToast, sendItem } from "../library/actions";
 import { TransferCard, TransferStrip, useTransfers, type DeviceAnswer } from "./TransferList";
 import { OwnDevices } from "./Destinations";
 import { PausedUploads } from "./PausedUploads";
+import { UserText } from "../../components/UserText";
 
 const DRAFT_UNDO = "draft-undo";
 
@@ -586,7 +587,7 @@ export function DestinationRow({
               if (!unavailable) onClick();
             }}
           >
-            {label}
+            <UserText>{label}</UserText>
           </button>
           <small id={`${id}-detail`}>{detail}</small>
         </span>
