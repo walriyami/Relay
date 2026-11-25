@@ -393,6 +393,11 @@ export type PendingInvite = {
 
 export type AdminMember = User & {
   disabled: boolean;
+  /**
+   * When removing them stopped part way because some files couldn't be deleted. They stay
+   * suspended, and no longer an administrator, until removed again or their suspension is lifted.
+   */
+  removalStopped: Time | null;
   created: Time;
   usage: Usage;
   /** Devices holding a session now: the ones a suspension or password reset signs out. */

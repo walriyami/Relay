@@ -39,6 +39,9 @@ CREATE TABLE users (
   unsent_visitor INTEGER NOT NULL DEFAULT 0,
   -- Activity up to this time has been seen on some device of the account.
   activity_seen INTEGER NOT NULL DEFAULT 0,
+  -- When removing this member stopped part way (they stay suspended, with what couldn't be
+  -- deleted), until they are removed after all or their suspension is lifted.
+  removal_stopped INTEGER,
   created INTEGER NOT NULL
 ) STRICT;
 

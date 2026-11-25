@@ -203,6 +203,15 @@ test("removing a member with a deep tree completes; a failed removal leaves them
       stuck.sort(),
       "everything else was deleted",
     );
+    // The members list says the removal stopped, so it can be finished later.
+    const listed = async () =>
+      (await boss.call(api.admin.overview)).members.find((m) => m.id === id)?.removalStopped ?? null;
+    assert.ok(await listed());
+    // Suspending them again keeps it; lifting the suspension lets the removal go.
+    await boss.call(api.admin.updateMember, { params: { id }, body: { disabled: true } });
+    assert.ok(await listed());
+    await boss.call(api.admin.updateMember, { params: { id }, body: { disabled: false } });
+    assert.equal(await listed(), null);
 
     release(db);
     // A second click while the first removal is still deleting is turned away, not run twice.
