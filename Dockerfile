@@ -20,9 +20,14 @@ RUN node server/build-stamp.ts "$RELAY_COMMIT"
 RUN npm run build
 
 FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
-# Relay starts with node directly; npm and Yarn are only needed in the build stage.
-RUN rm -rf /usr/local/lib/node_modules/npm /opt/yarn* \
-       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg
+# Relay starts with node directly; npm, Yarn and corepack are only needed in the build stage. bash and
+# perl aren't needed at all: nothing in Relay, its health check, deploy/*.sh or Walriyami Control runs
+# them, so a bug that let someone run a program in here finds fewer tools. /bin/sh (dash), tar and find
+# stay for deploy/backup.sh and restore.sh.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn* \
+       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+       /usr/bin/bash /usr/bin/rbash /bin/bash /bin/rbash /usr/bin/perl /usr/bin/perl5.* \
+    && sed -i 's#^\(node:.*:\)/bin/bash$#\1/bin/sh#' /etc/passwd
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3090 RELAY_DATA=/data
 WORKDIR /app
 # The app's own files stay owned by root, so Relay (running as `node`) can read them but never

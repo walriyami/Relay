@@ -24,6 +24,11 @@ cf() {
     -v "$PWD/secrets:/home/cf/.cloudflared" "$image" "$@"
 }
 
+# cert.pem, written by the sign-in below, can create and delete tunnels and DNS records for your whole
+# domain. Running needs only the tunnel's credentials, so it is deleted however this script ends: done,
+# failed partway (a DNS record in the way, say) or interrupted. Running it again asks you to sign in again.
+trap 'rm -f "$PWD/secrets/cert.pem"' EXIT
+trap 'exit 1' HUP INT TERM
 if [ ! -f secrets/cert.pem ]; then
   echo "A Cloudflare link appears below. Open it in a browser, sign in, and choose $host."
   cf tunnel login
@@ -44,8 +49,7 @@ case "$id" in *[!0-9a-f-]*) id= ;; esac
 echo "Pointing $host at the tunnel (this replaces any other DNS record for $host)."
 cf tunnel route dns --overwrite-dns "$id" "$host"
 
-# cert.pem can create and delete tunnels and DNS records for your domain. Running needs only the
-# tunnel's credentials, so it isn't kept. Running this script again asks you to sign in again.
+# Done with the sign-in (see the trap above).
 rm -f secrets/cert.pem
 
 if grep -q '^TUNNEL_ID=' .env; then
