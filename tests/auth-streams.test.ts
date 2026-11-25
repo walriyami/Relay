@@ -197,7 +197,7 @@ test("a view read before its stream opened loads again only when something chang
       const stream = await Stream.open(base, urls.events(client.tab), client);
       await stream.until((events) => events.some(isReady));
       await stream.close();
-      return readyOf(stream.events.find(isReady)!).changes;
+      return readyOf(stream.events.find(isReady)!).changes!;
     };
 
     const quiet = await read();
