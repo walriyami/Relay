@@ -336,3 +336,27 @@ test("one network can hold only a few visitors' live-update streams per request;
     await instance.close();
   }
 });
+
+test("a session that ended in this browser doesn't hold a new one's live updates back", async () => {
+  const instance = await start();
+  const base = await listen(instance);
+  const streams: Stream[] = [];
+  try {
+    const browser = crypto.randomUUID();
+    const open = async (client: Client) => {
+      const stream = await Stream.open(base, urls.events(client.tab), client, browser);
+      streams.push(stream);
+      await stream.until((events) => events.length > 0);
+      return stream.events[0].split("\n")[0];
+    };
+    const before = await member(instance, "before-owner");
+    for (let i = 0; i < 4; i++) assert.equal(await open(before), "event: ready");
+    // The session runs out; nothing has checked its streams since.
+    instance.ctx.db.run("UPDATE sessions SET expires = ?", Date.now() - 1);
+    const after = await member(instance, "after-owner");
+    assert.equal(await open(after), "event: ready");
+  } finally {
+    await Promise.all(streams.map((stream) => stream.close()));
+    await instance.close();
+  }
+});

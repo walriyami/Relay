@@ -364,7 +364,8 @@ export class Receivers {
       // Stopped before it began copying, it has read and changed nothing, and the next PATCH makes
       // the same checks itself; re-reading every committed byte then only let anyone with an upload
       // make the server do so again and again by sending two PATCHes at once.
-      receiver.rebuildRequired = upload.offset > 0 && (detaching.copying || !signal.aborted);
+      const stopped = (error as Error | undefined)?.name === "AbortError";
+      receiver.rebuildRequired = upload.offset > 0 && (detaching.copying || !stopped);
       throw error;
     });
     try {

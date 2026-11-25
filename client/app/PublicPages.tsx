@@ -325,11 +325,12 @@ export function GuestUpload({ token }: { token: string }) {
   const size = items.reduce((n, i) => n + i.size, 0);
   const hasText = text.trim().length > 0;
   const ready = items.length > 0 || hasText;
-  // The server counts a visitor's text in bytes, and how many files one send may list: say so here
-  // rather than let Send be refused.
+  // The server counts a visitor's text in bytes, and how many files and folders one send may list:
+  // say so here rather than let Send be refused.
+  const entries = items.reduce((n, i) => n + (i.kind === "file" ? 1 : i.files.length + i.folders.length), 0);
   const sendProblem =
-    count > LIMITS.visitorEntriesPerTransfer
-      ? `Send up to ${LIMITS.visitorEntriesPerTransfer.toLocaleString("en-US")} files at a time. Remove ${(count - LIMITS.visitorEntriesPerTransfer).toLocaleString("en-US")} to continue.`
+    entries > LIMITS.visitorEntriesPerTransfer
+      ? `Send up to ${LIMITS.visitorEntriesPerTransfer.toLocaleString("en-US")} files and folders at a time. Remove some to continue.`
       : hasText && new TextEncoder().encode(text).length > LIMITS.textBytes
         ? "This text is too long to send. Shorten it to continue."
         : null;

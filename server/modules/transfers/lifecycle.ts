@@ -469,7 +469,7 @@ export async function sweep(ctx: Context, receivers: Receivers, now: number) {
      WHERE t.state = 'open' AND t.principal LIKE 'grant:%' AND t.created <= ?
        AND NOT EXISTS (SELECT 1 FROM transfers o JOIN uploads p ON p.transfer = o.id
                        WHERE o.principal = t.principal AND o.id != t.id AND o.state = 'open'
-                         AND (p.offset > 0 OR p.completed IS NOT NULL) AND p.touched > ?)
+                         AND p.offset > 0 AND p.touched > ?)
      GROUP BY t.id
      HAVING sum(u.completed IS NULL) > 0
        AND (sum(CASE WHEN u.completed IS NULL THEN u.offset ELSE u.size END) = 0
