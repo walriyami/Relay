@@ -438,3 +438,29 @@ test("a member hidden from Nearby neither announces their devices nor hears of o
     await instance.close();
   }
 });
+
+test("a device that moves to another network leaves the old network's Nearby at once", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const pia = await member(instance, "pia");
+    olga.address = "203.0.113.5";
+    pia.address = "203.0.113.5";
+    const olgaStream = await present(base, olga);
+    const piaStream = await present(base, pia);
+    const peers = async () => (await olga.call(api.nearby.get)).peers.length;
+    assert.equal(await peers(), 1, "pia is shown to olga");
+    const pings = () => olgaStream.events.filter((e) => e.startsWith("event: change") && e.includes('"nearby"')).length;
+    await sleep(300);
+    const before = pings();
+    // pia's laptop joins another network, and says it's still there.
+    pia.address = "198.51.100.9";
+    await pia.call(api.nearby.present, { body: { tab: pia.tab } });
+    await olgaStream.until(() => pings() > before);
+    assert.equal(await peers(), 0, "pia is gone from olga’s Nearby");
+    await Promise.all([olgaStream.close(), piaStream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
