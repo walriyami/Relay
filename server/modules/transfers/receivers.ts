@@ -357,10 +357,14 @@ export class Receivers {
     let crc = receiver.crc;
     let position = upload.offset;
     let source: Stats;
-    const file = await this.detach(upload, receiver, signal, receiver.source).catch((error) => {
+    const detaching = { copying: false };
+    const file = await this.detach(upload, receiver, signal, receiver.source, detaching).catch((error) => {
       // A superseding PATCH can interrupt copying before the identity check detects a replaced
       // or modified source. Never let the next PATCH reuse this potentially stale prefix hash.
-      receiver.rebuildRequired = upload.offset > 0;
+      // Stopped before it began copying, it has read and changed nothing, and the next PATCH makes
+      // the same checks itself; re-reading every committed byte then only let anyone with an upload
+      // make the server do so again and again by sending two PATCHes at once.
+      receiver.rebuildRequired = upload.offset > 0 && (detaching.copying || !signal.aborted);
       throw error;
     });
     try {
@@ -656,6 +660,8 @@ export class Receivers {
     receiver: Receiver,
     signal: AbortSignal,
     expected: Stats | null,
+    /** Set once it starts copying the committed prefix to a private file. */
+    progress: { copying: boolean } = { copying: false },
   ): Promise<FileHandle> {
     const file = this.partPath(upload.id);
     const temporary = `${file}.${randomUUID()}.detached`;
@@ -682,6 +688,7 @@ export class Receivers {
         return result;
       }
       if (before && before.size < upload.offset) throw new Error("Upload file is shorter than its committed offset.");
+      progress.copying = true;
       fresh = await open(temporary, "wx+", 0o600);
       // Copy only the committed prefix, with bounded memory and an abort check between async I/O.
       // New uploads also use this private file, so an in-flight open cannot recreate a discarded part.
