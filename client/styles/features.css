@@ -989,6 +989,34 @@
   justify-content: center;
   padding: 2px 0;
 }
+/* "Something was shared to Relay": what arrived, kept short so Add stays in reach on a phone. */
+.share-intake {
+  max-width: 640px;
+}
+.share-intake-text {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: var(--well);
+  color: var(--muted);
+}
+.share-intake-text > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.share-intake-text > p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  max-height: 8.5em;
+  overflow: auto;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .btn.btn-quiet {
   color: var(--muted);
 }

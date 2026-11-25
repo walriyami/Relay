@@ -69,24 +69,58 @@ test("Relay can be installed, and its worker keeps only the app itself", async (
   expect(cached.filter((path) => /^\/(api|uploads|local)\//.test(path))).toEqual([]);
 });
 
-test("Share to Relay puts files and text into the Send draft", async ({ page }) => {
+const arrived = (page: Page) => page.getByRole("heading", { name: "Something was shared to Relay" });
+
+test("Share to Relay shows what arrived, and one tap adds it to the Send draft", async ({ page }) => {
   await controlled(page);
   await shareSheet(page, { file: "shared.txt", text: "From the share sheet" });
+  await expect(arrived(page)).toBeVisible();
+  await expect(page.getByRole("list", { name: "Shared files" })).toContainText("shared.txt");
+  await expect(page.getByRole("group", { name: "Shared text" })).toContainText("From the share sheet");
+  await expect(page.getByRole("button", { name: "Add to Send" })).toBeFocused();
+  await page.getByRole("button", { name: "Add to Send" }).click();
   await expect(page).toHaveURL(`${BASE}/`);
   await expect(selected(page)).toContainText("shared.txt");
   await expect(page.getByText("1 file added. Choose where it goes.")).toBeVisible();
 
   // A link from a browser's share sheet arrives as text.
   await shareSheet(page, { title: "Relay docs", url: "https://example.com/docs" });
+  await expect(page.getByRole("group", { name: "Shared text" })).toContainText("https://example.com/docs");
+  await page.getByRole("button", { name: "Add to Send" }).click();
   await expect(page).toHaveURL(`${BASE}/`);
   await expect(composer(page).getByRole("textbox")).toHaveValue(/Relay docs\nhttps:\/\/example\.com\/docs/);
 });
 
-test("the iPhone Shortcut's address fills in text without sending it to the server", async ({ page }) => {
+test("nothing shared to Relay reaches the draft until Add, and Discard forgets it", async ({ page }) => {
+  // A website can post the same form as the share sheet, so arrival alone must not fill the draft.
+  await controlled(page);
+  await shareSheet(page, { text: "Planted by a website" });
+  await expect(arrived(page)).toBeVisible();
+  const shared = page.url();
+  await page.goto("/");
+  await expect(composer(page)).toBeVisible();
+  await expect(composer(page).locator("textarea")).toHaveValue("");
+
+  // Still waiting until it's added or discarded.
+  await page.goto(shared);
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(page).toHaveURL(`${BASE}/`);
+  await expect(page.getByText("Discarded. Nothing was added.")).toBeVisible();
+  await expect(composer(page).locator("textarea")).toHaveValue("");
+  // Gone for good: the same address now goes straight to Send.
+  await page.goto(shared);
+  await expect(page).toHaveURL(`${BASE}/`);
+  await expect(composer(page).locator("textarea")).toHaveValue("");
+});
+
+test("the iPhone Shortcut's address offers its text without sending it to the server", async ({ page }) => {
   await signedIn(page);
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
   await page.goto("/share#text=" + encodeURIComponent("Note from Shortcuts"));
+  await expect(page.getByRole("group", { name: "Shared text" })).toContainText("Note from Shortcuts");
+  await expect(composer(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "Add to Send" }).click();
   await expect(page).toHaveURL(`${BASE}/`);
   await expect(composer(page).getByRole("textbox")).toHaveValue(/Note from Shortcuts/);
   expect(requests.some((url) => url.includes("Note"))).toBe(false);

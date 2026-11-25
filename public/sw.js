@@ -5,7 +5,8 @@
 //    uploads, downloads, previews or anything else that belongs to an account: those always go to
 //    the network, and on browsers that support it they skip this worker entirely.
 // 2. Receives "Share to Relay" from the phone's share sheet (the manifest's share_target), keeps
-//    what was shared in this browser's own storage, and opens Send, which adds it to the draft.
+//    what was shared in this browser's own storage, and opens /share, which shows it and adds it to
+//    the Send draft only when the person chooses Add (a website can post the same form).
 // 3. Shows push notifications (server/modules/push) and opens the right page when one is tapped.
 //
 // Updates: the browser fetches this file again on every visit (Relay serves it "no-cache"); a new
