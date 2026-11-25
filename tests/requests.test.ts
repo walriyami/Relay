@@ -41,8 +41,8 @@ test("request pickup codes resolve only to an open request route", async () => {
     await owner.call(api.requests.close, { params: { id: request.id } });
     assert.equal(
       await status(new Client(instance).call(api.pickup.resolve, { body: { code: request.code } })),
-      410,
-      "closing the request invalidates its pickup code",
+      404,
+      "closing the request ends its pickup code, which then answers like an unknown one",
     );
   } finally {
     await instance.close();

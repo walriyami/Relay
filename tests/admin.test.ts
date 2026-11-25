@@ -113,7 +113,7 @@ test("pending invitations can be listed and withdrawn", async () => {
     await new Client(instance).call(api.session.join, {
       body: { token: used.token, username: "ivy", password: "Member-password-only" },
     });
-    assert.equal(await status(new Client(instance).call(api.pickup.resolve, { body: { code: used.code } })), 410);
+    assert.equal(await status(new Client(instance).call(api.pickup.resolve, { body: { code: used.code } })), 404);
 
     const pending = await boss.call(api.admin.invites);
     assert.equal(pending.length, 2, "used invitations are not pending");
