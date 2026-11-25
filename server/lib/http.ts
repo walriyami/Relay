@@ -132,18 +132,14 @@ function authorize(ctx: Context, req: FastifyRequest, auth: AuthKind, early = fa
 /**
  * The route's check again, read afresh, once the body has arrived: a sender may hold one back for
  * minutes, and a session signed out, a member suspended or a role taken away meanwhile must act for
- * no one. A request without a body had nothing to wait for, so its first check still stands.
+ * no one. Every request is checked, not only those that declare a body, so nothing depends on how
+ * a body is framed, and the wait for Walriyami sign-in (see sso.ts) is covered too.
  */
 function reauthorize(ctx: Context, req: FastifyRequest, auth: AuthKind, admit: RouteOptions["admit"]) {
-  if (!hasBody(req)) return authorize(ctx, req, auth);
   invalidateRequestAuth(req);
   if (admit) admit(req);
   return authorize(ctx, req, auth, !admit);
 }
-
-/** Whether the request declares a body, as Node reads one: a length above zero, or chunked. */
-const hasBody = (req: FastifyRequest) =>
-  req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
 
 declare module "fastify" {
   interface FastifyContextConfig {
