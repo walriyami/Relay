@@ -540,7 +540,8 @@ test("guest reservations survive short pauses while their tab is open, but not h
     const minute = 60_000;
     instance.ctx.db.run("UPDATE transfers SET created = ?", now - 120 * minute);
     instance.ctx.db.run("UPDATE uploads SET touched = ?", now - 20 * minute);
-    instance.ctx.db.run("UPDATE uploads SET touched = ? WHERE transfer = ?", now, transfers[0].id);
+    // Progress: a byte arrived just now (a send that never got its first byte is given up sooner).
+    instance.ctx.db.run("UPDATE uploads SET touched = ?, offset = 1 WHERE transfer = ?", now, transfers[0].id);
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", now + 180 * minute);
     await instance.ctx.transfers.sweep(now);
     const state = (id: string) => instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", id);

@@ -330,6 +330,13 @@ export const STALLED_GUEST_MS = 30 * 60_000;
 export const STALLED_MEMBER_MS = DAY_MS;
 
 /**
+ * How long a visitor's send may wait for its first byte. A declared upload holds the request's room
+ * from the start, so one that never begins gives it back sooner than a stalled one, unless the same
+ * visitor is busy sending something else (its turn may simply not have come yet).
+ */
+export const UNSTARTED_GUEST_MS = 10 * 60_000;
+
+/**
  * How long a guest's upload stays paused once its page goes quiet (a phone that slept): as long as
  * a guest may go without sending bytes, since a quiet page sends none.
  */
@@ -451,6 +458,26 @@ export async function sweep(ctx: Context, receivers: Receivers, now: number) {
   )) {
     const uploads = ctx.db.all<{ id: string }>("SELECT id FROM uploads WHERE transfer = ?", t.id);
     if (uploads.some((upload) => receivers.receiving(upload.id))) continue;
+    const transfer = transferRow(ctx, t.id);
+    if (transfer?.state === "open") abandon(ctx, receivers, transfer);
+  }
+
+  for (const t of ctx.db.all<{ id: string; principal: string }>(
+    `SELECT t.id, t.principal FROM transfers t
+     WHERE t.state = 'open' AND t.principal LIKE 'grant:%' AND t.created <= ?
+       AND EXISTS (SELECT 1 FROM uploads u WHERE u.transfer = t.id AND u.completed IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM uploads u WHERE u.transfer = t.id AND u.offset > 0)
+       AND NOT EXISTS (SELECT 1 FROM transfers o JOIN uploads u ON u.transfer = o.id
+                       WHERE o.principal = t.principal AND u.offset > 0 AND u.touched > ?)`,
+    now - UNSTARTED_GUEST_MS,
+    now - UNSTARTED_GUEST_MS,
+  )) {
+    const busy = ctx.db.all<{ id: string }>(
+      `SELECT u.id FROM transfers o JOIN uploads u ON u.transfer = o.id
+       WHERE o.principal = ? AND o.state = 'open' AND u.completed IS NULL`,
+      t.principal,
+    );
+    if (busy.some((upload) => receivers.receiving(upload.id))) continue;
     const transfer = transferRow(ctx, t.id);
     if (transfer?.state === "open") abandon(ctx, receivers, transfer);
   }

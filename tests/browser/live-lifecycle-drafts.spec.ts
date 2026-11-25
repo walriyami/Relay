@@ -37,6 +37,7 @@ async function expiringRequest(page: Page) {
         remainingBytes: 1024,
         remainingEntries: 100,
         full: false,
+        storageLimited: false,
         expires: now + 10_000,
       },
     }),

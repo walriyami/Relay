@@ -232,10 +232,13 @@ function renames(items: Pick[], earlier: Transfer[]) {
  */
 function limitProblem(info: PublicRequest, size: number) {
   if (size <= info.remainingBytes) return null;
+  const who = info.owner || "The person who asked";
   return `${
-    info.remainingBytes < info.maxBytes
-      ? `This request has room for ${bytes(info.remainingBytes)} more`
-      : `This request accepts up to ${bytes(info.maxBytes)}`
+    info.storageLimited
+      ? `${who} has room for ${bytes(info.remainingBytes)} more right now`
+      : info.remainingBytes < info.maxBytes
+        ? `This request has room for ${bytes(info.remainingBytes)} more`
+        : `This request accepts up to ${bytes(info.maxBytes)}`
   }. Remove ${bytes(size - info.remainingBytes)} to continue.`;
 }
 
@@ -243,7 +246,7 @@ function limitProblem(info: PublicRequest, size: number) {
 function fullMessage(info: PublicRequest) {
   if (!info.full) return null;
   const who = info.owner || "The person who asked";
-  return info.remainingBytes === 0
+  return info.remainingBytes === 0 && !info.storageLimited
     ? `This request is full. ${who} has received the ${bytes(info.maxBytes)} it allows.`
     : `This request is full. ${who} can’t receive more with it.`;
 }

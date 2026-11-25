@@ -1,7 +1,6 @@
 // POST /api/transfers: one synchronous transaction checks every limit, creates (or appends to) the
 // item, its folders, the text node, a pending node and an upload row per file. Zero-byte files are
 // completed on the spot. Retrying the same id with the same manifest returns the same result.
-import { statfsSync } from "node:fs";
 import { transferErrors } from "../../../shared/api.ts";
 import { LIMITS, type TransferCreated } from "../../../shared/model.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
@@ -11,58 +10,24 @@ import { fail } from "../../lib/errors.ts";
 import { cleanName } from "../../lib/names.ts";
 import { sha256 } from "../../lib/secrets.ts";
 import { EMPTY_SHA256 } from "../../storage/blobs.ts";
-import { capacityOf } from "../admin/settings.ts";
+import { CAPACITY_FULL, DISK_FULL, RECIPIENT_FULL, bytesLabel, capacityRoom, diskRoom, quotaRoom } from "./room.ts";
 import { allowedKeepDays } from "../auth/member-limits.ts";
 import { foldCase, planNodes, type PlannedNode } from "./plan.ts";
 import { publishItemChange } from "./publish.ts";
 import { startRetention } from "../library/retention.ts";
 import { assertTransferAvailability, ensureTransferAvailability } from "./availability.ts";
 
-const DISK_HEADROOM = 256 * 1024 ** 2;
-const DISK_FULL = "The server's disk does not have enough free space for this transfer.";
-
-const CAPACITY_FULL = "The server has reached its storage capacity.";
-
-/**
- * Bytes unfinished uploads will add. A request-link visitor's count only as far as they've sent
- * unless `visitors` is set, when they count in full, as members' always do.
- */
-function heldBytes(ctx: Context, visitors: boolean) {
-  const promised = visitors ? "n.size" : "u.offset";
-  return ctx.db.value<number>(
-    `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0)
-     FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
-     WHERE n.state = 'pending'`,
-  )!;
-}
-const storedBytes = (ctx: Context) => ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
-
-/**
- * Members' uploads are admitted without counting what request-link visitors have declared but not
- * sent (see `admit`), so a visitor's bytes are checked as they arrive instead. They're taken while
- * the rest of this visitor's file still fits beside everything stored and members' unfinished
- * uploads, within the capacity and on the disk with Relay's headroom. When a member's upload took
- * the room, the visitor whose room it was is the one refused.
- */
-export function ensureVisitorRoom(ctx: Context, remaining: number) {
-  if (storedBytes(ctx) + heldBytes(ctx, false) + remaining > capacityOf(ctx)) fail(507, CAPACITY_FULL);
-  const disk = statfsSync(ctx.config.root);
-  if (disk.bavail * disk.bsize - DISK_HEADROOM < ctx.transfers.outstandingBytes(false) + remaining)
-    fail(507, DISK_FULL);
-}
 export const { tabClosed: TAB_CLOSED, moved: MOVED, cancelled: CANCELLED } = transferErrors;
 const NAME_TAKEN = "A file or folder with that name already exists there.";
 
-export function bytesLabel(bytes: number) {
-  const units = ["bytes", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${Math.round(value * 10) / 10} ${units[unit]}`;
-}
+export { bytesLabel };
+
+/** Open sends one request-link visitor may hold: per visit, and from one address across visits. */
+const OPEN_PER_GRANT = 3;
+const OPEN_PER_ADDRESS = 10;
+
+/** NUL, and half of a surrogate pair on its own: characters a text can't be stored with. */
+const UNSTORABLE = /\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /** The request's room, the owner's quota, service capacity and free disk space must all hold the new bytes. */
 function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entries: number) {
@@ -73,31 +38,18 @@ function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entr
     if (entries > room.entries) fail(413, "This request cannot take that many more files.");
   }
 
-  const reserved = (where: string, ...args: string[]) =>
-    ctx.db.value<number>(`SELECT coalesce(sum(size), 0) FROM nodes WHERE state = 'pending' ${where}`, ...args)!;
-  const user = ctx.db.get<{ quota: number | null; bytes_used: number }>(
-    "SELECT quota, bytes_used FROM users WHERE id = ?",
-    options.owner,
-  )!;
-  if (
-    bytes > 0 &&
-    user.quota !== null &&
-    user.bytes_used + reserved("AND owner = ?", options.owner) + bytes > user.quota
-  )
+  if (bytes > 0 && bytes > quotaRoom(ctx, options.owner))
     fail(
       413,
       options.principal.kind === "grant"
-        ? "The recipient's storage is full."
+        ? RECIPIENT_FULL
         : "This would go over your storage limit. Free up space, or ask your administrator for more.",
     );
   // Room a visitor with a request link has declared but not yet sent doesn't count against a
-  // member's upload, here or on the disk below: otherwise one stranger could declare a large file,
-  // send nothing, and stop everyone on the server from uploading. Visitors still count each other's.
-  const forMember = options.principal.kind === "member";
-  if (bytes > 0 && storedBytes(ctx) + heldBytes(ctx, !forMember) + bytes > capacityOf(ctx)) fail(507, CAPACITY_FULL);
-  const disk = statfsSync(ctx.config.root);
-  if (bytes > 0 && disk.bavail * disk.bsize - ctx.transfers.outstandingBytes(!forMember) - DISK_HEADROOM < bytes)
-    fail(507, DISK_FULL);
+  // member's upload, here or on the disk below (see room.ts). Visitors still count each other's.
+  const visitor = options.principal.kind === "grant";
+  if (bytes > 0 && bytes > capacityRoom(ctx, visitor)) fail(507, CAPACITY_FULL);
+  if (bytes > 0 && bytes > diskRoom(ctx, visitor)) fail(507, DISK_FULL);
 }
 
 /**
@@ -193,14 +145,34 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
     const result = ctx.db.tx(() => {
       assertTransferAvailability(ctx, target);
       const plan = planNodes(input);
-      if (
-        options.principal.kind === "grant" &&
-        ctx.db.value<number>("SELECT count(*) FROM transfers WHERE principal = ? AND state = 'open'", principal)! >= 3
-      )
-        fail(429, "Finish or cancel an open transfer before sending more files.");
+      if (options.principal.kind === "grant") {
+        if (
+          ctx.db.value<number>("SELECT count(*) FROM transfers WHERE principal = ? AND state = 'open'", principal)! >=
+          OPEN_PER_GRANT
+        )
+          fail(429, "Finish or cancel an open transfer before sending more files.");
+        // A new visit (another /start) is a new grant, so its own count alone is easy to reset.
+        if (
+          ctx.db.value<number>(
+            `SELECT count(*) FROM transfers t JOIN guest_grants g ON g.token_hash = substr(t.principal, 7)
+             JOIN guest_grants mine ON mine.token_hash = ?
+             WHERE t.state = 'open' AND t.principal LIKE 'grant:%'
+               AND g.request_id = mine.request_id AND g.address = mine.address`,
+            options.principal.tokenHash,
+          )! >= OPEN_PER_ADDRESS
+        )
+          fail(429, "Too many sends to this request are still open from your network. Try again once they finish.");
+        if (plan.length > LIMITS.visitorEntriesPerTransfer)
+          fail(
+            413,
+            `Send up to ${LIMITS.visitorEntriesPerTransfer.toLocaleString("en-US")} files and folders at a time.`,
+          );
+      }
       if (!ctx.transfers.renewTab(input.tab, options.principal)) fail(409, TAB_CLOSED);
       const text = input.text?.trim() ? input.text : null;
       if (!plan.length && text === null) fail(400, "Choose something to send.");
+      if (text !== null && Buffer.byteLength(text) > LIMITS.textBytes) fail(413, "This text is too long to send.");
+      if (text !== null && UNSTORABLE.test(text)) fail(400, "This text contains characters that can't be saved.");
       const bytes = input.files.reduce((sum, f) => sum + f.size, 0) + (text === null ? 0 : Buffer.byteLength(text));
       admit(ctx, options, bytes, plan.length + (text === null ? 0 : 1));
 
@@ -301,7 +273,10 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           const file = input.files[node.file!];
           const id = uuidv7();
           const blob = file.size === 0 ? EMPTY_SHA256 : null;
-          const mime = file.mime.slice(0, 120);
+          // A type is a label for the browser; one with control characters is no type at all.
+          // A type with control characters (a line break, say) is no type at all.
+          // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
+          const mime = /[\0-\x1f\x7f]/.test(file.mime) ? "" : file.mime.slice(0, 120);
           insertNode.run(
             id,
             itemId,

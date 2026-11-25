@@ -7,10 +7,11 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { cleanLabel } from "../../lib/names.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
-import { perAddress } from "../auth/limits.ts";
+import { addressKey, perAddress } from "../auth/limits.ts";
 import { autoName } from "../library/summary.ts";
 import { planNodes } from "../transfers/plan.ts";
 import { ensureTransferAvailability } from "../transfers/availability.ts";
+import { visitorStorageRoom } from "../transfers/room.ts";
 
 type OpenRow = {
   id: string;
@@ -98,14 +99,19 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.requests.open, ({ params }): PublicRequest => {
     const request = openRequest(ctx, params.token);
     const left = remaining(ctx, request);
+    // The request's own room is only part of it: the server and the owner's storage must take the
+    // bytes too, or a visitor is told there is room and then refused at the first byte.
+    const storage = visitorStorageRoom(ctx, request.owner);
+    const bytes = Math.min(left.bytes, storage);
     return {
       name: request.name,
       description: request.description,
       expires: request.expires,
       owner: request.owner_name,
       maxBytes: request.max_bytes,
-      remainingBytes: left.bytes,
-      full: left.bytes === 0 || left.entries === 0,
+      remainingBytes: bytes,
+      full: bytes === 0 || left.entries === 0,
+      storageLimited: storage < left.bytes,
     };
   });
 
@@ -127,12 +133,13 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       const token = randomToken();
       const csrf = randomToken();
       ctx.db.run(
-        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires) VALUES(?, ?, ?, ?, ?)",
+        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address) VALUES(?, ?, ?, ?, ?, ?)",
         sha256(token),
         request.id,
         csrf,
         Date.now(),
         request.expires,
+        addressKey(req.ip),
       );
       reply.setCookie(cookie, token, options);
       return { csrf };

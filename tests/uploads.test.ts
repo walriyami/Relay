@@ -425,7 +425,8 @@ for (const cancellation of ["discard", "close", "supersede"] as const) {
         cancellation === "supersede"
           ? receivers.receive(upload, offset, Readable.from([data.subarray(offset)]), () => {})
           : receivers.settle(upload);
-      const rejected = assert.rejects(work, /aborted/i);
+      // A superseded request is answered as such, not as a server error.
+      const rejected = assert.rejects(work, cancellation === "supersede" ? { status: 409 } : /aborted/i);
       await copyingStarted;
       let yielded = false;
       await new Promise<void>((resolve) =>
@@ -508,7 +509,7 @@ for (const mutation of ["replacement", "source", "shorter"] as const) {
         const first = receivers.receive(upload, 4, Readable.from([data.subarray(4)]), superseded);
         const rejected = assert.rejects(
           first,
-          retry === "later" ? { status: 503, message: /storage changed/ } : /aborted/i,
+          retry === "later" ? { status: 503, message: /storage changed/ } : { status: 409, message: /newer request/ },
         );
         await copyingStarted;
         if (mutation !== "source") {
