@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { request, type IncomingMessage } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { api, urls } from "../shared/api.ts";
 import { localCandidates } from "../shared/candidates.ts";
 import { NEARBY, type NearbyEvent, type NearbySignal } from "../shared/nearby.ts";
@@ -384,6 +385,53 @@ test("a flood of signals can't push a slowly reading device out of Nearby", asyn
     hub.attach({ id: tablet, kind: "device", userId, network: "local", channel: behind });
     await rejects(phone.client.call(api.nearby.signal, { body: { to: tablet, signal: offer() } }), 503);
     await Promise.all([stream.close(), phoneStream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a member hidden from Nearby neither announces their devices nor hears of others'", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const pia = await member(instance, "pia");
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: false } } });
+    olga.address = "203.0.113.5";
+    pia.address = "203.0.113.5";
+    const pings = (stream: Stream) =>
+      stream.events.filter((e) => e.startsWith("event: change") && e.includes('"nearby"')).length;
+    // Change events go out a moment after the change; this is well past that.
+    const settle = () => sleep(300);
+
+    const olgaStream = await present(base, olga);
+    await settle();
+    const quiet = pings(olgaStream);
+    const piaStream = await present(base, pia);
+    await settle();
+    const piaHeard = pings(piaStream);
+    // pia renames herself while hidden: nothing anyone else is shown.
+    await pia.call(api.account.update, { body: { name: "Pia P" } });
+    // olga's phone comes: pia isn't told, and olga is, once.
+    const phone = await signIn(instance, "olga", "Phone");
+    phone.client.address = "203.0.113.5";
+    const phoneStream = await present(base, phone.client);
+    await settle();
+    assert.equal(pings(piaStream) - piaHeard, 1, "pia hears only of her own rename");
+    await piaStream.close();
+    await settle();
+    assert.equal(pings(olgaStream), quiet + 1, "olga hears only of her own phone");
+
+    // Becoming visible, and hiding again, are what olga is told of.
+    const again = await present(base, pia);
+    await settle();
+    const before = pings(olgaStream);
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: true } } });
+    await olgaStream.until(() => pings(olgaStream) > before);
+    const shown = pings(olgaStream);
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: false } } });
+    await olgaStream.until(() => pings(olgaStream) > shown);
+    await Promise.all([olgaStream.close(), again.close(), phoneStream.close()]);
   } finally {
     await instance.close();
   }
