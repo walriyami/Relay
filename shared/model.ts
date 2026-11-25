@@ -621,10 +621,13 @@ export type ChangeEvent = { topics: Topic[] };
  * `beatMs`, so a stream that goes quiet for longer has been cut somewhere on the way. `changes` is
  * where changes stood when the stream opened: a view whose last answer carried the same stamp, or
  * a later one, has missed nothing (see `headers.changes`). Only a member's stream carries it, since
- * the count moves with everyone's activity.
+ * it counts that member's changes.
  */
 export type StreamReady = { beatMs: number; changes?: ChangeStamp };
-/** `<boot>.<count>`: publishes counted since the server started. Compare only within one boot. */
+/**
+ * `<boot>.<count>`: the changes one member has been told of since the server started (their own, and
+ * those told to everyone), never anyone else's. Compare only within one boot, and one member.
+ */
 export type ChangeStamp = `${string}.${number}`;
 /**
  * Whether an answer stamped `read` can lack a change that a stream opened at `opened` won't send:

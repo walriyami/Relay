@@ -69,6 +69,8 @@ class Hub {
       this.endpoints.delete(prior.id);
       prior.release();
       if (prior.channel !== endpoint.channel) prior.channel.send("nearby", { type: "replaced" } satisfies NearbyEvent);
+      // It left the network it was on: those who could reach it there no longer can.
+      if (prior.network !== endpoint.network) this.changed(prior);
     }
     const entry: Entry = { ...endpoint, release: () => {} };
     this.endpoints.set(entry.id, entry);
@@ -105,13 +107,19 @@ class Hub {
     return a.network === b.network && this.visible(a.userId) && this.visible(b.userId);
   }
 
-  /** Something about a member changed (visibility, a device's name) that others may be showing. */
-  userChanged(userId: string) {
+  /**
+   * Something about a member changed (visibility, a device's name) that others may be showing.
+   * `wasVisible` is whether others could see the member before, when the change was to that.
+   */
+  userChanged(userId: string, wasVisible = this.visible(userId)) {
     const users = new Set([userId]);
-    for (const own of this.endpoints.values())
-      if (own.userId === userId && own.kind === "device")
-        for (const other of this.endpoints.values())
-          if (other.kind === "device" && other.network === own.network) users.add(other.userId);
+    // Only members who could see this one before or can now are told: to anyone else, nothing changed.
+    if (wasVisible || this.visible(userId))
+      for (const own of this.endpoints.values())
+        if (own.userId === userId && own.kind === "device")
+          for (const other of this.endpoints.values())
+            if (other.kind === "device" && other.network === own.network && this.visible(other.userId))
+              users.add(other.userId);
     for (const user of users) this.ctx.events.publish(user, "nearby");
     this.tellGuests(userId);
   }
@@ -122,11 +130,15 @@ class Hub {
       if (guest.kind === "guest" && guest.userId === userId) this.send(guest, { type: "peers" });
   }
 
-  private changed(entry: Endpoint) {
+  /**
+   * An endpoint came or went: those who may reach it are told, and nobody else, so a member hidden
+   * from others doesn't announce their comings and goings to the network, nor hear of others'.
+   */
+  private changed(entry: Place) {
     const users = new Set([entry.userId]);
     if (entry.kind === "device") {
       for (const other of this.endpoints.values())
-        if (other.kind === "device" && other.network === entry.network) users.add(other.userId);
+        if (other.kind === "device" && this.related(entry, other)) users.add(other.userId);
       this.tellGuests(entry.userId);
     }
     for (const user of users) this.ctx.events.publish(user, "nearby");

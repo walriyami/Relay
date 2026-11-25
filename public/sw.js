@@ -16,6 +16,9 @@
 const SHELL = "relay-shell-1";
 const SHELL_FILES = ["/", "/theme.js", "/favicon.svg", "/manifest.webmanifest", "/icon-192.png"];
 const SHARE_DB = "relay-share";
+/** Shares kept waiting for Add or Discard at once (a new one replaces the oldest), and for how long. */
+const SHARES_WAITING = 5;
+const SHARE_DAY = 24 * 3600 * 1000;
 /** Paths that are never the app shell: they are the account's data and go straight to the network. */
 const PRIVATE = ["/api/", "/uploads/", "/local/"];
 
@@ -155,9 +158,18 @@ async function receiveShare(event) {
     };
     const store = await shareStore("readwrite");
     await new Promise((resolve, reject) => {
-      const put = store.put(share);
-      put.onsuccess = resolve;
-      put.onerror = () => reject(put.error);
+      // Only the newest few wait, so a website posting this form over and over can't fill the
+      // browser's storage, which Nearby saves received files in. Those older than a day go too.
+      const all = store.getAll();
+      all.onsuccess = () => {
+        const waiting = all.result.sort((a, b) => b.created - a.created);
+        for (const [i, old] of waiting.entries())
+          if (i >= SHARES_WAITING - 1 || share.created - old.created > SHARE_DAY) store.delete(old.id);
+        const put = store.put(share);
+        put.onsuccess = resolve;
+        put.onerror = () => reject(put.error);
+      };
+      all.onerror = () => reject(all.error);
     });
     return Response.redirect(`/share?id=${share.id}`, 303);
   } catch {

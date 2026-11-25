@@ -16,6 +16,7 @@ import { expireItems } from "../library/items.ts";
 
 export function registerAccount(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.account.update, ({ member, body }) => {
+    const wasVisible = hubOf(ctx).visible(member.userId);
     const user = ctx.db.tx(() => {
       if (body.name !== undefined)
         ctx.db.run(
@@ -64,7 +65,8 @@ export function registerAccount(app: FastifyInstance, ctx: Context) {
       ...(body.prefs?.activity ? (["activity"] as const) : []),
     );
     // Other members on the same network see this member's devices, and name, in Nearby.
-    if (body.prefs?.nearbyVisible !== undefined || body.name !== undefined) hubOf(ctx).userChanged(member.userId);
+    if (body.prefs?.nearbyVisible !== undefined || body.name !== undefined)
+      hubOf(ctx).userChanged(member.userId, wasVisible);
     return { prefs: readPrefs(user.prefs), user: toUser(user) };
   });
 

@@ -217,6 +217,43 @@ test("a view read before its stream opened loads again only when something chang
   }
 });
 
+test("a member's change stamp counts their own changes, never another member's", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const pia = await member(instance, "pia");
+    const stamp = async (client: Client) =>
+      (await client.raw({ method: "GET", url: api.nearby.get.path })).headers[
+        headers.changes.toLowerCase()
+      ] as ChangeStamp;
+    const count = (value: ChangeStamp) => Number(value.slice(value.lastIndexOf(".") + 1));
+
+    const before = await stamp(olga);
+    // pia signs in elsewhere and renames herself: changes only she is told of.
+    await new Client(instance).signIn("pia", "Member-password-only", "Pia's phone");
+    await pia.call(api.account.update, { body: { name: "Pia P" } });
+    assert.equal(await stamp(olga), before, "olga's stamp doesn't move with pia's activity");
+    const stream = await Stream.open(base, urls.events(olga.tab), olga);
+    await stream.until((events) => events.some(isReady));
+    assert.equal(readyOf(stream.events.find(isReady)!).changes, before, "nor does her stream's");
+    await stream.close();
+
+    // olga's own changes do move it; stamps of two members never compare as one count.
+    await olga.call(api.account.update, { body: { name: "Olga O" } });
+    assert.ok(count(await stamp(olga)) > count(before));
+    assert.equal(missed(await stamp(pia), await stamp(olga)), true);
+
+    // Shared free space is told to everyone, so it moves every member's stamp: someone not
+    // listening then still reloads it. It shows no more than the free space itself, which all see.
+    const shared = await stamp(olga);
+    instance.ctx.events.broadcast("account");
+    assert.equal(count(await stamp(olga)), count(shared) + 1);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("a guest's request page stream renews the guest's tab", async () => {
   const instance = await start({ tabLeaseMs: 600 });
   try {
