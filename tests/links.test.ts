@@ -150,7 +150,7 @@ test("pickup codes resolve to the link; wrong codes are limited per network, nev
     assert.deepEqual(single, [...Array<number>(5).fill(404), 429]);
     const capped = await pickup("10.0.0.1", link.code);
     assert.equal(capped.statusCode, 429);
-    assert.match(capped.json<{ error: string }>().error, /Too many wrong codes from your network/);
+    assert.match(capped.json<{ error: string }>().error, /Too many wrong codes were entered from your network/);
 
     // Everyone else carries on.
     for (const ip of ["10.0.0.2", "10.0.1.1"]) assert.equal((await pickup(ip, link.code)).statusCode, 200);

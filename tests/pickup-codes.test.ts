@@ -8,9 +8,28 @@ import {
   livePickupCode,
   type PickupCodeKind,
 } from "../server/lib/pickup-codes.ts";
-import { checkCodeAttempt, recordCodeFailure, wideNetworkOf } from "../server/lib/pickup-code-guard.ts";
+import {
+  checkCodeAttempt,
+  codeNetworkOf,
+  lastCodeAttackAt,
+  recordCodeFailure,
+  wideNetworkOf,
+} from "../server/lib/pickup-code-guard.ts";
 import { normalizeCode, sha256 } from "../server/lib/secrets.ts";
-import { admin, type ApiError, Client, member, send, start, type Instance } from "./support/harness.ts";
+import { rm } from "node:fs/promises";
+import { HttpError } from "../server/lib/errors.ts";
+import { admin, type ApiError, Client, member, send, start, stop, type Instance } from "./support/harness.ts";
+
+const errorOf = (response: { json: () => unknown }) => (response.json() as { error: string }).error;
+
+const resolve = (instance: Instance, code: string, address: string) =>
+  instance.app.inject({
+    method: "POST",
+    url: api.pickup.resolve.path,
+    headers: { host: "relay.test" },
+    remoteAddress: address,
+    payload: { code },
+  });
 
 test("codes skip digits another recipient holds and stay the same while they work", async () => {
   const instance = await start();
@@ -156,6 +175,19 @@ test("an ended recipient keeps its code reserved, so a remembered code never ope
       instance.ctx.db.value("SELECT COUNT(*) FROM invites WHERE token_hash = ?", sha256(revokedInvite.token)),
       0,
     );
+
+    // Every ended code answers exactly as one that never existed, so guessing learns nothing.
+    const used = new Set(
+      [link.code, request.code, usedInvite.code, revokedInvite.code, device.code].map(normalizeCode),
+    );
+    const never = ["000000", "000001", "000002", "000003", "000004", "000005"].find((code) => !used.has(code))!;
+    const unknown = await resolve(instance, never, "198.18.10.1");
+    assert.equal(unknown.statusCode, 404);
+    for (const [i, code] of [link.code, request.code, usedInvite.code, revokedInvite.code, device.code].entries()) {
+      const ended = await resolve(instance, code, `198.18.${11 + i}.1`);
+      assert.equal(ended.statusCode, 404, code);
+      assert.equal(errorOf(ended), errorOf(unknown));
+    }
   } finally {
     await instance.close();
   }
@@ -170,17 +202,6 @@ function age(instance: Instance, kind: PickupCodeKind, targetId: string, ms: num
     targetId,
   );
 }
-
-const errorOf = (response: { json: () => unknown }) => (response.json() as { error: string }).error;
-
-const resolve = (instance: Instance, code: string, address: string) =>
-  instance.app.inject({
-    method: "POST",
-    url: api.pickup.resolve.path,
-    headers: { host: "relay.test" },
-    remoteAddress: address,
-    payload: { code },
-  });
 
 test("a code stops working after a day, and the owner sees a fresh one while the link stays the same", async () => {
   const instance = await start();
@@ -279,7 +300,7 @@ test("wrong codes slow down only the network sending them", async () => {
       assert.equal((await resolve(instance, wrong, "198.18.2.1")).statusCode, 404);
     const limited = await resolve(instance, link.code, "198.18.2.1");
     assert.equal(limited.statusCode, 429, "even a right code waits once the network has guessed too often");
-    assert.match(errorOf(limited), /Try again in about 15 minutes, or use the link instead/);
+    assert.match(errorOf(limited), /paused here for about 15 minutes\. The link or QR code you were sent still works/);
 
     // Sign-in codes share the same count.
     const signIn = await instance.app.inject({
@@ -356,30 +377,72 @@ test("the guard forgets a network's wrong codes once its window has passed", asy
   }
 });
 
-test("guessing from more networks than the guard holds doesn't wipe earlier guesses", async () => {
+test("wrong codes still count after a restart, and old ones are cleared out after a day", async () => {
+  const first = await start();
+  const root = first.root;
+  let again: Instance | undefined;
+  try {
+    const t0 = Date.now();
+    for (let attempt = 0; attempt < 5; attempt++) recordCodeFailure(first.ctx, "198.18.5.1", t0);
+    await stop(first);
+    again = await start({}, root);
+    assert.throws(() => checkCodeAttempt(again!.ctx, "198.18.5.1", t0 + 1000), { status: 429 });
+    // A day later, the next wrong code clears the old rows away.
+    recordCodeFailure(again.ctx, "198.18.6.1", t0 + 24 * 3_600_000 + 1);
+    assert.equal(again.ctx.db.value("SELECT count(*) FROM failures WHERE time = ?", t0), 0);
+    checkCodeAttempt(again.ctx, "198.18.5.1", t0 + 24 * 3_600_000 + 1);
+  } finally {
+    await (again ?? first).close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a network's addresses share one day's wrong codes, and an IPv6 neighbour has its own", async () => {
   const instance = await start();
   try {
     const t0 = Date.now();
-    const refused = (ip: string, now = t0) => {
-      try {
-        checkCodeAttempt(instance.ctx, ip, now);
-        return false;
-      } catch {
+    const { ctx } = instance;
+    // Twenty wrong codes, a few from each address of one /24, spread over the day.
+    for (let i = 0; i < 20; i++) recordCodeFailure(ctx, `198.18.7.${1 + (i >> 2)}`, t0 + i * 60 * 60_000);
+    const later = t0 + 20 * 60 * 60_000;
+    assert.throws(() => checkCodeAttempt(ctx, "198.18.7.200", later), { status: 429 });
+    checkCodeAttempt(ctx, "198.18.8.1", later);
+
+    // IPv6: one home's /56 is capped the same way, but the next /56 in the same /48 isn't.
+    for (let i = 0; i < 20; i++) recordCodeFailure(ctx, `2001:db8:1:${(i % 4) + 1}::1`, later);
+    assert.throws(
+      () => checkCodeAttempt(ctx, "2001:db8:1:ff::1", later),
+      (error: HttpError) => {
+        assert.equal(error.status, 429);
+        assert.match(error.message, /from your network.*The link or QR code you were sent still works/);
         return true;
-      }
-    };
-    for (let attempt = 0; attempt < 5; attempt++) recordCodeFailure(instance.ctx, "198.18.4.1", t0);
-    // One wrong code from each of 20,000 more networks fills the guard.
-    for (let i = 0; i < 20_000; i++) recordCodeFailure(instance.ctx, `10.${i >> 16}.${(i >> 8) & 255}.${i & 255}`, t0);
-    assert.ok(refused("198.18.4.1"), "the first network's wrong codes still count");
-    // Networks that don't fit share one allowance of 5 (each in its own /24, so only that limit
-    // applies). The last flood network already used one of them.
-    for (let n = 1; n <= 4; n++) {
-      assert.ok(!refused(`203.0.${n}.7`));
-      recordCodeFailure(instance.ctx, `203.0.${n}.7`, t0);
-    }
-    assert.ok(refused("203.0.9.7"), "the next new network shares the used-up allowance");
-    assert.ok(!refused("203.0.9.7", t0 + 24 * 3_600_000 + 1), "a day later there's room again");
+      },
+    );
+    checkCodeAttempt(ctx, "2001:db8:1:100::1", later);
+    assert.equal(codeNetworkOf("2001:db8:1:1ff::1"), "2001:db8:1:100::/56");
+    assert.equal(codeNetworkOf("198.18.7.9"), "198.18.7.0/24");
+  } finally {
+    await instance.close();
+  }
+});
+
+test("slow guessing from everywhere raises the alarm within a day", async () => {
+  const instance = await start();
+  try {
+    const t0 = Date.now();
+    const { ctx } = instance;
+    // One wrong code every 25 minutes from a new network never makes 30 in an hour…
+    let started = false;
+    for (let i = 0; i < 49; i++) if (recordCodeFailure(ctx, `203.0.${i}.7`, t0 + i * 25 * 60_000)) started = true;
+    assert.equal(started, false);
+    assert.equal(lastCodeAttackAt(ctx), null);
+    // …but fifty in a day are someone guessing.
+    const at = t0 + 49 * 25 * 60_000;
+    assert.equal(recordCodeFailure(ctx, "203.0.49.7", at), true);
+    assert.equal(lastCodeAttackAt(ctx), at);
+    // Each network now gets only a few wrong codes.
+    for (let i = 0; i < 3; i++) recordCodeFailure(ctx, "198.18.9.1", at);
+    assert.throws(() => checkCodeAttempt(ctx, "198.18.9.2", at), { status: 429 });
   } finally {
     await instance.close();
   }
@@ -399,7 +462,7 @@ test("one account can't make sign-in codes without end", async () => {
         `filler-token-${i}`,
         first.id,
       );
-    await assert.rejects(owner.call(api.loginCodes.create), (error: ApiError) => {
+    await assert.rejects(owner.call(api.loginCodes.create), (error: HttpError) => {
       assert.equal(error.status, 429);
       assert.match(error.message, /sign-in link/);
       return true;
