@@ -6,9 +6,10 @@ import { uuidv7 } from "../../../shared/ids.ts";
 import { authOf, cookieOptions, visitorCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
-import { FailureLog, wideNetworkOf } from "../auth/limits.ts";
+import { wideNetworkOf } from "../auth/limits.ts";
+import { FailureCounter } from "../../lib/failures.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
-import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { countNewCode, issuePickupCode, lastPickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
 
 /** A browser keeps its visitor cookie this long; it only tells one person from another. */
@@ -67,7 +68,12 @@ export function toLinks(ctx: Context, rows: LinkRow[], now = Date.now()): Link[]
     id: row.id,
     itemId: row.item,
     token: ctx.secrets.linkToken(row.id),
-    code: livePickupCode(ctx, "share", row.id, isAvailable(row, now) && !row.owner_disabled, now)?.code ?? "",
+    // Listing doesn't issue codes: a link's share screen asks for the working one when it shows it.
+    // Only a link whose last code was freed for reuse (a month unused) gets one here, to ask with.
+    code:
+      (isAvailable(row, now) && !row.owner_disabled
+        ? (lastPickupCode(ctx, "share", row.id) ?? livePickupCode(ctx, "share", row.id, true, now)?.code)
+        : livePickupCode(ctx, "share", row.id, false, now)?.code) ?? "",
     created: row.created,
     expires: effectiveLinkExpiry(row.expires, summaries.get(row.item)?.expires ?? null),
     revoked: !!row.revoked,
@@ -111,6 +117,8 @@ type VisitRow = { id: string; unlocked: string | null; last: number };
 const UNLOCK_FAILURES = { max: 10, windowMs: 15 * 60_000 };
 /** Wrong passwords per link from everyone together in an hour: a ceiling on guessing from many networks. */
 const UNLOCK_FAILURES_PER_LINK = { max: 100, windowMs: 60 * 60_000 };
+/** Wrong passwords for a link after which a network's checks wait behind everyone else's. */
+const SUSPECT_AFTER = 3;
 
 /**
  * Who is asking for a link's content: "owner" for its owner, signed in, who is never counted or
@@ -193,8 +201,9 @@ export function createLinks(ctx: Context): Links {
     locked,
   });
   const ownerAccess = (row: LinkRow): ShareAccess => ({ ...granted(row, null), byOwner: true });
-  const failures = new FailureLog(UNLOCK_FAILURES.windowMs);
-  const linkFailures = new FailureLog(UNLOCK_FAILURES_PER_LINK.windowMs);
+  // Kept in the database, so a restart doesn't forgive anyone guessing.
+  const failures = new FailureCounter(ctx, "link-password", UNLOCK_FAILURES.windowMs);
+  const linkFailures = new FailureCounter(ctx, "link-password-link", UNLOCK_FAILURES_PER_LINK.windowMs);
 
   function open(token: string, req: FastifyRequest, reply: FastifyReply): ShareAccess {
     const row = find(token);
@@ -242,7 +251,9 @@ export function createLinks(ctx: Context): Links {
             "This link has had too many wrong passwords. Try again in an hour, or ask the person who shared it for a new link.",
           );
         try {
-          if (!(await verifyPassword(password, row.password_hash))) {
+          // A network that keeps getting it wrong waits behind everyone else for the password check.
+          const lane = failures.atLeast(pair, SUSPECT_AFTER, now) ? "suspect" : "fresh";
+          if (!(await verifyPassword(password, row.password_hash, { lane }))) {
             failures.add(pair, Date.now());
             linkFailures.add(row.id, Date.now());
             fail(403, "That password isn’t right.");
@@ -310,7 +321,8 @@ export function createLinks(ctx: Context): Links {
           !ctx.db.get("SELECT 1 FROM nodes WHERE item = ? AND kind IN ('file', 'text', 'folder') LIMIT 1", input.item)
         )
           fail(409, "There is nothing to share yet.");
-        const pickup = issuePickupCode(ctx.db, ctx.secrets, "share", input.id);
+        countNewCode(ctx, owner, now);
+        const pickup = issuePickupCode(ctx.db, ctx.secrets, "share", input.id, now);
         ctx.db.run(
           `INSERT INTO links(id, owner, item, token_hash, code_hash, created, expires, password_hash, visitor_limit, note)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

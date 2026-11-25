@@ -13,48 +13,118 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken } from "../../lib/secrets.ts";
 import { finishSignIn, insertSession, newDevice } from "./sessions.ts";
-import { addressKey, perAddress } from "./limits.ts";
+import { addressKey, perAddress, wideNetworkOf } from "./limits.ts";
 import { checkPassword } from "./passwords.ts";
 
 const CHALLENGE_MS = 5 * 60_000;
 /** Bounds memory if someone requests options without ever finishing a ceremony. */
 const MAX_CHALLENGES_PER_KIND = 10_000;
 const MAX_CHALLENGES_PER_IP: Record<ChallengeKind, number> = { register: 50, signin: 150 };
+/**
+ * The share of the store one wider network (an IPv4 /24 or IPv6 /48) may hold. Past it, the
+ * network's own oldest challenge makes room, so a flood from one network churns only its own.
+ */
+const MAX_CHALLENGES_PER_NETWORK = 1_000;
 
 type ChallengeKind = "register" | "signin";
 type Challenge = {
   challenge: string;
   kind: ChallengeKind;
   userId: string | null;
+  /** `addressKey` of the address that asked. */
   ip: string;
   sessionHash: string | null;
   passwordHash: string | null;
   expires: number;
 };
 
+/**
+ * One kind's outstanding challenges. Every step is constant time, so a full store costs no more
+ * per request than an empty one: challenges are kept in the order they were issued (which is the
+ * order they expire in), and per network, and networks are grouped by how many they hold so the
+ * busiest is found at once.
+ */
+class Pending {
+  readonly byId = new Map<string, Challenge & { network: string }>();
+  private readonly perAddress = new Map<string, number>();
+  private readonly byNetwork = new Map<string, Set<string>>();
+  private readonly bySize = new Map<number, Set<string>>();
+  private largest = 0;
+
+  addressCount(ip: string) {
+    return this.perAddress.get(ip) ?? 0;
+  }
+
+  add(id: string, challenge: Challenge) {
+    const network = wideNetworkOf(challenge.ip);
+    const own = this.byNetwork.get(network);
+    // A network at its share makes room from its own oldest; a full store, from the busiest network's.
+    if (own && own.size >= MAX_CHALLENGES_PER_NETWORK) this.delete(own.values().next().value!);
+    else if (this.byId.size >= MAX_CHALLENGES_PER_KIND) {
+      const busiest = this.bySize.get(this.largest)!.values().next().value!;
+      this.delete(this.byNetwork.get(busiest)!.values().next().value!);
+    }
+    this.byId.set(id, { ...challenge, network });
+    this.perAddress.set(challenge.ip, this.addressCount(challenge.ip) + 1);
+    const ids = this.byNetwork.get(network) ?? new Set();
+    this.byNetwork.set(network, ids);
+    ids.add(id);
+    this.resize(network, ids.size - 1, ids.size);
+  }
+
+  delete(id: string) {
+    const found = this.byId.get(id);
+    if (!found) return undefined;
+    this.byId.delete(id);
+    const left = this.addressCount(found.ip) - 1;
+    if (left) this.perAddress.set(found.ip, left);
+    else this.perAddress.delete(found.ip);
+    const ids = this.byNetwork.get(found.network)!;
+    ids.delete(id);
+    if (!ids.size) this.byNetwork.delete(found.network);
+    this.resize(found.network, ids.size + 1, ids.size);
+    return found;
+  }
+
+  /** Removes expired challenges; issue order is expiry order, so it stops at the first live one. */
+  sweep(now: number) {
+    for (const [id, challenge] of this.byId) {
+      if (challenge.expires > now) break;
+      this.delete(id);
+    }
+  }
+
+  private resize(network: string, from: number, to: number) {
+    const before = this.bySize.get(from);
+    before?.delete(network);
+    if (before && !before.size) this.bySize.delete(from);
+    if (to) {
+      const after = this.bySize.get(to) ?? new Set();
+      this.bySize.set(to, after);
+      after.add(network);
+    }
+    if (to > this.largest) this.largest = to;
+    while (this.largest && !this.bySize.has(this.largest)) this.largest--;
+  }
+}
+
 /** Outstanding WebAuthn challenges, each usable once, keyed by an id handed to the client. */
 class Challenges {
-  private readonly pending: Record<ChallengeKind, Map<string, Challenge>> = {
-    register: new Map(),
-    signin: new Map(),
-  };
+  private readonly pending: Record<ChallengeKind, Pending> = { register: new Pending(), signin: new Pending() };
 
   issue(challenge: Challenge): string {
-    this.sweep(Date.now());
     const pending = this.pending[challenge.kind];
-    const perIp = [...pending.values()].filter((item) => item.ip === challenge.ip).length;
-    if (perIp >= MAX_CHALLENGES_PER_IP[challenge.kind]) fail(429, "Too many passkey requests. Try again later.");
+    pending.sweep(Date.now());
+    if (pending.addressCount(challenge.ip) >= MAX_CHALLENGES_PER_IP[challenge.kind])
+      fail(429, "Too many passkey requests. Try again later.");
     const id = randomToken();
-    pending.set(id, challenge);
-    if (pending.size > MAX_CHALLENGES_PER_KIND) pending.delete(pending.keys().next().value!);
+    pending.add(id, challenge);
     return id;
   }
 
   /** Removes the challenge whether or not it matches, so a response can never be replayed. */
   take(id: string, kind: Challenge["kind"], userId: string | null, sessionHash: string | null = null): Challenge {
-    const found = this.pending.register.get(id) ?? this.pending.signin.get(id);
-    this.pending.register.delete(id);
-    this.pending.signin.delete(id);
+    const found = this.pending.register.delete(id) ?? this.pending.signin.delete(id);
     if (
       !found ||
       found.kind !== kind ||
@@ -67,8 +137,13 @@ class Challenges {
   }
 
   sweep(now: number) {
-    for (const pending of Object.values(this.pending))
-      for (const [id, challenge] of pending) if (challenge.expires <= now) pending.delete(id);
+    this.pending.register.sweep(now);
+    this.pending.signin.sweep(now);
+  }
+
+  /** Whether a challenge is still outstanding. */
+  has(id: string) {
+    return this.pending.register.byId.has(id) || this.pending.signin.byId.has(id);
   }
 }
 

@@ -328,7 +328,8 @@ test("login codes sign in a new browser once", async () => {
 
     const reuse = new Client(instance).call(api.session.code, { body: { code: created.code, deviceName: "Again" } });
     assert.equal(await status(reuse), 410);
-    assert.equal(await status(new Client(instance).call(api.pickup.resolve, { body: { code: created.code } })), 410);
+    // A used code answers like one that never existed.
+    assert.equal(await status(new Client(instance).call(api.pickup.resolve, { body: { code: created.code } })), 404);
     const junk = new Client(instance).call(api.session.code, { body: { code: "not a code", deviceName: "Junk" } });
     assert.equal(await status(junk), 410);
   } finally {

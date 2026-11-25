@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { api } from "../shared/api.ts";
 import { LIMITS } from "../shared/model.ts";
 import { hashPassword } from "../server/lib/secrets.ts";
-import { ADMIN_PASSWORD, admin, type ApiError, Client, member, start, type Instance } from "./support/harness.ts";
+import { recordFailure } from "../server/lib/failures.ts";
+import { wideNetworkOf } from "../server/modules/auth/limits.ts";
+import { rm } from "node:fs/promises";
+import { ADMIN_PASSWORD, admin, type ApiError, Client, member, start, stop, type Instance } from "./support/harness.ts";
 
 const MEMBER_PASSWORD = "Member-password-only";
 
@@ -38,7 +41,10 @@ test("guessing a member's password from many networks can't lock them out of a b
     // A new device is asked to wait, and told what still works…
     const stranger = await signIn(instance, "198.51.100.1", "victim", MEMBER_PASSWORD);
     assert.equal(stranger.statusCode, 429);
-    assert.match(stranger.json<{ error: string }>().error, /device you've used before, use a passkey/);
+    assert.match(
+      stranger.json<{ error: string }>().error,
+      /device you've used before or from where you usually sign in, use a passkey/,
+    );
 
     // …while the member's own browser signs in from anywhere.
     assert.equal((await signIn(instance, "198.51.100.2", "victim", MEMBER_PASSWORD, known)).statusCode, 200);
@@ -173,5 +179,84 @@ test("joins with a dead invitation are refused before any password work", async 
     assert.deepEqual([...statuses], [410]);
   } finally {
     await instance.close();
+  }
+});
+
+test("while new devices are locked out, the owner still signs in on a new browser where they usually do", async () => {
+  const instance = await start();
+  try {
+    const victim = await member(instance, "victim");
+    // Signed in once from home.
+    assert.equal((await signIn(instance, "192.0.2.10", "victim", MEMBER_PASSWORD)).statusCode, 200);
+    for (let attempt = 0; attempt < 20; attempt++)
+      await signIn(instance, `203.0.${attempt}.1`, "victim", "wrong-password");
+
+    // A new phone at home gets in; the same right password from a stranger's network doesn't.
+    assert.equal((await signIn(instance, "192.0.2.77", "victim", MEMBER_PASSWORD)).statusCode, 200);
+    assert.equal((await signIn(instance, "198.51.100.1", "victim", MEMBER_PASSWORD)).statusCode, 429);
+    // Home's own wrong passwords are still limited, as any network's are.
+    for (let attempt = 0; attempt < 10; attempt++)
+      assert.equal((await signIn(instance, "192.0.2.78", "victim", "wrong-password")).statusCode, 401);
+    assert.equal((await signIn(instance, "192.0.2.79", "victim", MEMBER_PASSWORD)).statusCode, 429);
+
+    // A new password forgets the networks it was used from.
+    await victim.call(api.account.password, { body: { current: MEMBER_PASSWORD, password: "Another-password-1" } });
+    instance.ctx.db.run("DELETE FROM failures WHERE kind = 'password-network'");
+    assert.equal((await signIn(instance, "192.0.2.80", "victim", "Another-password-1")).statusCode, 429);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("networks that keep getting passwords wrong wait behind joins and first sign-ins", async () => {
+  const instance = await start();
+  try {
+    await member(instance, "owner");
+    const boss = await admin(instance);
+    const invite = await boss.call(api.admin.invite);
+    // Forty networks that have been guessing all hour.
+    const now = Date.now();
+    const networks = Array.from({ length: 40 }, (_, i) => `2001:db8:${i.toString(16)}::`);
+    for (const network of networks)
+      for (let i = 0; i < 3; i++)
+        recordFailure(instance.ctx, "password-any-account", [wideNetworkOf(`${network}1`)], now);
+    // Two at a time from each: more than the password queue holds.
+    const flood = networks.flatMap((network) =>
+      [1, 2].map((host) => signIn(instance, `${network}${host}`, `nobody${host}`, "wrong-password")),
+    );
+    const first = signIn(instance, "192.0.2.20", "owner", MEMBER_PASSWORD);
+    const join = instance.app.inject({
+      method: "POST",
+      url: api.session.join.path,
+      headers: { host: "relay.test" },
+      remoteAddress: "192.0.2.21",
+      payload: { token: invite.token, username: "newcomer", password: MEMBER_PASSWORD, deviceName: "Join" },
+    });
+    const results = await Promise.all([...flood, first, join]);
+    assert.equal(results.at(-2)!.statusCode, 200, "a first sign-in on a clean network got through");
+    assert.equal(results.at(-1)!.statusCode, 200, "a join got through");
+    assert.ok(
+      results.slice(0, -2).some((response) => response.statusCode === 429),
+      "the guessing networks were turned away in part",
+    );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("wrong passwords still count after a restart", async () => {
+  const first = await start();
+  const root = first.root;
+  let again: Instance | undefined;
+  try {
+    await member(first, "steady");
+    for (let attempt = 0; attempt < 10; attempt++)
+      assert.equal((await signIn(first, "198.18.3.1", "steady", "wrong-password")).statusCode, 401);
+    await stop(first);
+    again = await start({}, root);
+    assert.equal((await signIn(again, "198.18.3.2", "steady", MEMBER_PASSWORD)).statusCode, 429);
+  } finally {
+    await (again ?? first).close();
+    await rm(root, { recursive: true, force: true });
   }
 });

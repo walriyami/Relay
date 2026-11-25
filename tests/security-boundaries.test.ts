@@ -156,16 +156,42 @@ test("client addresses come only from trusted proxies, given by address, range o
       await behind.close();
     }
   }
-  // An untrusted peer's header is ignored, as is a name that doesn't resolve: both addresses are the peer's.
-  for (const trustProxy of [["192.0.2.1"], ["relay-proxy.invalid"]]) {
-    const open = await start({ trustProxy }, undefined, { setup: false });
-    try {
-      for (let i = 1; i <= 5; i++) await pickup(open, "198.51.100.1");
-      assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
-    } finally {
-      await open.close();
-    }
+  // An untrusted peer's header is ignored: every address is the peer's.
+  const open = await start({ trustProxy: ["192.0.2.1"] }, undefined, { setup: false });
+  try {
+    for (let i = 1; i <= 5; i++) await pickup(open, "198.51.100.1");
+    assert.equal((await pickup(open, "198.51.100.2")).statusCode, 429);
+  } finally {
+    await open.close();
   }
+  // A proxy named but not found yet: requests through it wait rather than all count as one
+  // visitor, so no wrong codes are counted, and requests that don't come through a proxy go on.
+  const waiting = await start({ trustProxy: ["relay-proxy.invalid"] }, undefined, { setup: false });
+  try {
+    for (let i = 1; i <= 6; i++) {
+      const response = await pickup(waiting, `198.51.100.${i}`);
+      assert.equal(response.statusCode, 503);
+      assert.match(response.json<{ error: string }>().error, /starting up/);
+    }
+    const direct = await waiting.app.inject({
+      method: "POST",
+      url: api.pickup.resolve.path,
+      remoteAddress: "127.0.0.1",
+      headers: { host: "relay.test" },
+      payload: { code: "short" },
+    });
+    assert.equal(direct.statusCode, 404);
+  } finally {
+    await waiting.close();
+  }
+  const named = new ProxyTrust(["localhost", "192.0.2.1"]);
+  assert.equal(named.awaitingProxy("127.0.0.1"), true, "before the name is looked up");
+  await named.start({ info() {}, warn() {} });
+  assert.equal(named.awaitingProxy("127.0.0.1"), false, "the proxy itself, once found");
+  assert.equal(named.awaitingProxy("198.51.100.9"), false, "a stranger, once every name resolves");
+  assert.equal(named.awaitingProxy("192.0.2.1"), false);
+  named.stop();
+  assert.equal(new ProxyTrust(["192.0.2.1"]).awaitingProxy("198.51.100.9"), false, "no names, nothing to wait for");
   const trust = new ProxyTrust(["192.0.2.0/24"]);
   assert.equal(new ProxyTrust(["streaming_lab_cloudflared"]).trusts("192.0.2.1"), false, "a container name");
   assert.equal(trust.trusts("::ffff:192.0.2.7"), true, "a dual-stack socket's IPv4 peer");
@@ -271,5 +297,46 @@ test("existing data directories are made private at startup", async () => {
     }
   } finally {
     await instance.close();
+  }
+});
+
+test("a named proxy that moves is followed at once, and a resolver hiccup doesn't turn visitors away", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const answers = new Map<string, string[] | { code: string }>([["proxy", ["192.0.2.5"]]]);
+  const resolve = (name: string) => {
+    const answer = answers.get(name)!;
+    return Array.isArray(answer)
+      ? Promise.resolve(answer)
+      : Promise.reject(Object.assign(new Error("lookup failed"), answer));
+  };
+  const settle = () => new Promise((done) => setImmediate(done));
+  const proxy = new ProxyTrust(["proxy"], resolve);
+  await proxy.start({ info() {}, warn() {} });
+  try {
+    assert.equal(proxy.trusts("192.0.2.5"), true);
+
+    // Recreated with a new address: the first request from it waits while the name is looked up again.
+    answers.set("proxy", ["192.0.2.6"]);
+    t.mock.timers.tick(1_000);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), true);
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), true);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), false);
+
+    // A resolver timeout keeps the addresses it had…
+    answers.set("proxy", { code: "EAI_AGAIN" });
+    t.mock.timers.tick(1_000);
+    proxy.awaitingProxy("198.51.100.1");
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), true);
+    // …while a name that no longer exists is trusted nowhere, and requests naming a visitor wait.
+    answers.set("proxy", { code: "ENOTFOUND" });
+    t.mock.timers.tick(1_000);
+    proxy.awaitingProxy("198.51.100.1");
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), false);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), true);
+  } finally {
+    proxy.stop();
   }
 });

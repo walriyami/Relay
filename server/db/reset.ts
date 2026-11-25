@@ -43,6 +43,7 @@ export const CLONE_TABLES = [
   "passkeys",
   "sso_flows",
   "external_identities",
+  "sign_in_networks",
 ] as const;
 
 /**
@@ -62,6 +63,9 @@ export const KEPT_TABLES = [
   "sso_flows",
   "pickup_codes",
   "push_subscriptions",
+  // Wrong guesses still count after a reset, and accounts keep the networks they sign in from.
+  "failures",
+  "sign_in_networks",
 ] as const;
 
 /** Clears content and its files. Run only with Relay stopped. */

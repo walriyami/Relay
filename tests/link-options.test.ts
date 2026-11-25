@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api, urls } from "../shared/api.ts";
 import type { LinkSettings } from "../shared/model.ts";
-import { ApiError, Client, member, openShare, send, start } from "./support/harness.ts";
+import { rm } from "node:fs/promises";
+import { ApiError, Client, member, openShare, send, start, stop, type Instance } from "./support/harness.ts";
 
 const status = async (promise: Promise<unknown>) => {
   try {
@@ -314,5 +315,29 @@ test("a stranger guessing a link's password can't lock out the person it was mea
     );
   } finally {
     await instance.close();
+  }
+});
+
+test("a link's wrong passwords still count after a restart", async () => {
+  const { instance, link } = await setup({ password: "correct secret" });
+  const root = instance.root;
+  let again: Instance | undefined;
+  try {
+    const unlock = (target: Instance, password: string) =>
+      target.app.inject({
+        method: "POST",
+        url: `/api/s/${link.token}/unlock`,
+        headers: { host: "relay.test" },
+        remoteAddress: "203.0.113.9",
+        payload: { password },
+      });
+    for (let i = 0; i < 10; i++) assert.equal((await unlock(instance, `guess ${i}`)).statusCode, 403);
+    await stop(instance);
+    again = await start({}, root);
+    assert.equal((await unlock(again, "correct secret")).statusCode, 429, "a restart forgives nobody");
+  } finally {
+    if (again) await again.close();
+    else await instance.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

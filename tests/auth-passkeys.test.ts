@@ -399,3 +399,34 @@ test("passkeys with the same default name are numbered", async () => {
     await instance.close();
   }
 });
+
+test("one network flooding passkey requests churns only its own share of challenges", async () => {
+  const instance = await start();
+  try {
+    const challenges = challengesOf(instance.ctx);
+    const issue = (address: string) =>
+      challenges.issue({
+        challenge: crypto.randomUUID(),
+        kind: "signin",
+        userId: null,
+        ip: addressKey(address),
+        sessionHash: null,
+        passwordHash: null,
+        expires: Date.now() + 60_000,
+      });
+    const someone = issue("198.51.100.1");
+    // One /48, from many /64s: past its share of 1,000 it replaces its own oldest.
+    const first = issue("2001:db8:1:0::1");
+    for (let host = 0; host < 10; host++)
+      for (let i = host === 0 ? 1 : 0; i < 150; i++) issue(`2001:db8:1:${host.toString(16)}::1`);
+    assert.equal(challenges.has(first), false, "the flood's own oldest made room");
+    assert.equal(challenges.has(someone), true);
+    // Many networks filling the whole store take room from the busiest, never from someone with one.
+    for (let network = 2; network < 14; network++)
+      for (let host = 0; host < 7; host++)
+        for (let i = 0; i < 150; i++) issue(`2001:db8:${network.toString(16)}:${host.toString(16)}::1`);
+    assert.equal(challenges.has(someone), true, "a lone visitor's challenge survives a full store");
+  } finally {
+    await instance.close();
+  }
+});

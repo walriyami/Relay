@@ -17,7 +17,7 @@ import { clearCookie, cookieOptions, nearbyCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { cleanLabel } from "../../lib/names.ts";
-import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { countNewCode, issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { perAddress } from "../auth/limits.ts";
 import { browserOf, openStream, sessionKey, streamsOf, type EndReason } from "../auth/streams.ts";
@@ -237,7 +237,8 @@ export function registerNearby(app: FastifyInstance, ctx: Context) {
       // An ended code is never reopened: its guests go with it, and its number is retired.
       if (current) ctx.db.run("DELETE FROM nearby_invites WHERE id = ?", current.id);
       const id = uuidv7(now);
-      const { codeHash } = issuePickupCode(ctx.db, ctx.secrets, "nearby", id);
+      countNewCode(ctx, member.userId, now);
+      const { codeHash } = issuePickupCode(ctx.db, ctx.secrets, "nearby", id, now);
       ctx.db.run(
         "INSERT INTO nearby_invites(id, user_id, token_hash, code_hash, created, expires) VALUES(?, ?, ?, ?, ?, ?)",
         id,

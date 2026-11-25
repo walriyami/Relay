@@ -530,3 +530,27 @@ CREATE INDEX history_created ON history(created);
 CREATE INDEX history_kind ON history(kind, created);
 CREATE INDEX history_user ON history(user_id, created);
 CREATE INDEX history_dedupe ON history(dedupe, created) WHERE dedupe IS NOT NULL;
+
+-- Wrong guesses that still count against a limit: pickup and sign-in codes, account passwords and
+-- link passwords. `kind` names the limit and `key` what it counts (an address, a network, an
+-- account, a link). Kept across restarts so a restart doesn't forgive anyone; rows older than a
+-- day no longer count and are removed.
+CREATE TABLE failures (
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  time INTEGER NOT NULL
+) STRICT;
+CREATE INDEX failures_key ON failures(kind, key, time);
+CREATE INDEX failures_time ON failures(time);
+
+-- Networks (an IPv4 /24 or IPv6 /48) an account has signed in from, with the password it has now
+-- (`password` is a digest of its hash, so a new password forgets them). A new browser on one of
+-- them isn't held by the account-wide limit on wrong passwords, so a stranger guessing elsewhere
+-- can't keep the owner out at home or at work.
+CREATE TABLE sign_in_networks (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  network TEXT NOT NULL,
+  password TEXT NOT NULL,
+  last INTEGER NOT NULL,
+  PRIMARY KEY (user_id, network)
+) STRICT;

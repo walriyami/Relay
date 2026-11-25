@@ -3,6 +3,14 @@ import { BlockList, isIP } from "node:net";
 
 /** How often host names are looked up again: a proxy's container gets a new address when it's recreated. */
 const REFRESH_MS = 15_000;
+/** The soonest names are looked up again when a request suggests a proxy has moved. */
+const RETRY_MS = 1_000;
+
+type Resolve = (name: string) => Promise<string[]>;
+const resolveAll: Resolve = async (name) =>
+  (await lookup(name, { all: true, verbatim: true })).map((found) => found.address);
+/** Lookup errors that mean the name doesn't exist (yet); others, such as a timeout, may pass. */
+const MISSING = new Set(["ENOTFOUND", "ENODATA"]);
 
 type Log = { warn: (fields: object, message: string) => void; info: (fields: object, message: string) => void };
 
@@ -18,8 +26,13 @@ export class ProxyTrust {
   private timer: NodeJS.Timeout | undefined;
   private log: Log | undefined;
   private warned = false;
+  private refreshing: Promise<void> | undefined;
+  private lastRefresh = 0;
+  private readonly resolve: Resolve;
 
-  constructor(entries: string[]) {
+  /** `resolve` is for tests; Relay looks names up with the system resolver. */
+  constructor(entries: string[], resolve: Resolve = resolveAll) {
+    this.resolve = resolve;
     for (const entry of entries) {
       const [address, bits, extra] = entry.split("/");
       const family = isIP(address);
@@ -63,6 +76,20 @@ export class ProxyTrust {
     );
   }
 
+  /**
+   * Whether a request from `address` that names its visitor (in the client-address header) should
+   * wait: a proxy listed by name doesn't resolve yet, as when its container starts after Relay, or
+   * a request from an address Relay doesn't trust has the names looked up again, in case the proxy
+   * has just moved there. Counted as the proxy's own address, every visitor would share one set of
+   * limits, so one stranger's wrong passwords could lock out everyone. Lookups run at most once a
+   * second; requests that arrive while one runs wait too.
+   */
+  awaitingProxy(address: string | undefined): boolean {
+    if (!this.names.length || !address || this.trusts(address)) return false;
+    if (!this.refreshing && Date.now() - this.lastRefresh >= RETRY_MS) void this.refresh();
+    return !!this.refreshing || this.names.some((name) => !this.resolved.get(name)?.size);
+  }
+
   /** Looks the names up now, then keeps them current until `stop`. */
   async start(log: Log) {
     this.log = log;
@@ -76,14 +103,24 @@ export class ProxyTrust {
     clearInterval(this.timer);
   }
 
-  private async refresh() {
+  private refresh() {
+    this.refreshing ??= this.lookUp().finally(() => {
+      this.refreshing = undefined;
+      this.lastRefresh = Date.now();
+    });
+    return this.refreshing;
+  }
+
+  private async lookUp() {
     await Promise.all(
       this.names.map(async (name) => {
         const before = this.resolved.get(name);
         let now: Set<string>;
         try {
-          now = new Set((await lookup(name, { all: true, verbatim: true })).map((a) => unmapped(a.address)));
-        } catch {
+          now = new Set((await this.resolve(name)).map(unmapped));
+        } catch (error) {
+          // A resolver that's briefly unavailable doesn't mean the proxy has gone: keep its addresses.
+          if (before?.size && !MISSING.has((error as { code?: string }).code ?? "")) return;
           now = new Set();
         }
         this.resolved.set(name, now);
@@ -92,7 +129,7 @@ export class ProxyTrust {
         else
           this.log?.warn(
             { proxy: name },
-            "a trusted proxy's name doesn't resolve; its requests count as its own until it does",
+            "a trusted proxy's name doesn't resolve; requests through it are asked to wait until it does",
           );
       }),
     );
