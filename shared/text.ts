@@ -82,7 +82,9 @@ export function fileNameHides(name: string): boolean {
 /**
  * A name from elsewhere (a file on disk, a Nearby peer, words typed as a name) made into one that
  * hides nothing: direction marks and hidden characters go; control characters and long runs of
- * spaces become one space. "" when nothing visible is left, for the caller to choose a name.
+ * spaces become one space. "" when nothing visible is left, or when what's left is "." or ".."
+ * (".<U+200B>." without its zero-width space), which a path reads as this folder or the one above, for
+ * the caller to choose a name.
  */
 export function cleanFileName(value: string): string {
   const name = value
@@ -92,5 +94,5 @@ export function cleanFileName(value: string): string {
     .replace(HIDDEN, "")
     .replace(SPACE_RUN, " ")
     .trim();
-  return name.replace(BLANK, "") === "" ? "" : name;
+  return name.replace(BLANK, "") === "" || name === "." || name === ".." ? "" : name;
 }

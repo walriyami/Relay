@@ -49,6 +49,9 @@ test("a file name can't hide its real ending, and names from elsewhere are clean
   assert.equal(cleanFileName(`invoice.pdf${" ".repeat(40)}.exe`), "invoice.pdf .exe");
   assert.equal(cleanFileName("photo‮gpj.exe"), "photogpj.exe");
   assert.equal(cleanFileName(`invoice.pdf${" \u0301".repeat(20)}.exe`), "invoice.pdf .exe");
+  // What is left of a name may not be a path's "this folder" or "the folder above".
+  assert.equal(cleanFileName(".\u200b."), "");
+  assert.equal(cleanFileName("\u202e."), "");
   assert.equal(cleanFileName("​ㅤ "), "");
   for (const name of REAL) assert.equal(cleanFileName(name), name.normalize("NFC"));
   // Received over Nearby: every part of the path, and nothing that climbs out of it.

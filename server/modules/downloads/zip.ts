@@ -132,6 +132,13 @@ function partAt(starts: Float64Array, count: number, at: number) {
   return low;
 }
 
+/**
+ * A path that an unzip tool could place outside the folder it unzips into, or that names its own
+ * folder: one starting with a slash, with an empty, "." or ".." part, or with a backslash, which
+ * Windows tools read as a slash.
+ */
+const OUTSIDE = /^\/|\/$|\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\\/;
+
 /** "photo.jpg" → "photo (2).jpg"; folders and names without an extension get the number at the end. */
 function numbered(name: string, n: number, folder: boolean) {
   const dot = folder ? -1 : name.lastIndexOf(".");
@@ -144,11 +151,16 @@ function numbered(name: string, n: number, folder: boolean) {
  * ".exe"), and an unzip tool shows them as they are. Each such name is cleaned as a downloaded
  * file's is, and a folder's new name carries over to everything inside it. A cleaned name that
  * now matches another in its folder, ignoring case as macOS and Windows do, gets a number; names
- * that needed no cleaning keep theirs. Null when nothing needs it, as for nearly every archive.
+ * that needed no cleaning keep theirs. Nothing may put an entry outside its folder when unzipped:
+ * a name that is, or cleans to, "." or ".." is written "Untitled", and a slash or backslash "-".
+ * Null when nothing needs it, as for nearly every archive.
  */
 function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null {
   const changed: number[] = [];
-  for (let i = 0; i < entries.length; i++) if (cleanFileName(entries[i].path) !== entries[i].path) changed.push(i);
+  for (let i = 0; i < entries.length; i++) {
+    const path = entries[i].path;
+    if (cleanFileName(path) !== path || OUTSIDE.test(path)) changed.push(i);
+  }
   if (!changed.length) return null;
   // Every name already in use, with the folders above it, claims its place first.
   const taken = new Set<string>();
@@ -171,8 +183,9 @@ function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null 
     const name = slash < 0 ? path : path.slice(slash + 1);
     const into = parent ? `${write(parent, true)}/` : "";
     // Spaces at either end hide nothing, so a folder isn't split from its contents over them.
-    const cleanName = cleanFileName(name);
-    const clean = cleanName && cleanName === name.trim() ? name : cleanName || "Untitled";
+    let clean = cleanFileName(name).replace(/[/\\]/g, "-");
+    if (!clean) clean = "Untitled";
+    else if (clean === name.trim()) clean = name;
     let result = into + clean;
     if (result !== path) {
       for (let n = 2; taken.has(result.toLowerCase()); n++) result = into + numbered(clean, n, folder);
@@ -205,6 +218,9 @@ export function zipPlan(entries: readonly ZipEntry[], content: (index: number) =
   const recordAt = new Float64Array(count + 1);
   const cleaned = cleanedPaths(entries);
   const pathOf = (i: number) => cleaned?.get(i) ?? entries[i].path;
+  // Whatever the names, no entry may land outside the folder the archive is unzipped into.
+  if (cleaned)
+    for (const path of cleaned.values()) if (OUTSIDE.test(path)) throw new Error("An archive path escapes its folder.");
   let offset = 0;
   let directory = 0;
   for (let i = 0; i < count; i++) {

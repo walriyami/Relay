@@ -141,13 +141,18 @@ test("zipLayout: names stored before the name rules are written as they'd downlo
   });
   const entries = [
     entry("Reports", "folder"),
-    // An override that shows "photo‮gpj.exe" as "photoexe.jpg", beside the name it cleans to.
-    entry("Reports/photo‮gpj.exe"),
+    // An override that shows "photo<U+202E>gpj.exe" as "photoexe.jpg", beside the name it cleans to.
+    entry("Reports/photo\u202egpj.exe"),
     entry("Reports/photogpj.exe"),
     entry("old", "folder"),
-    entry("Old‮", "folder"),
-    entry("Old‮/a.txt"),
-    entry("​"),
+    entry("Old\u202e", "folder"),
+    entry("Old\u202e/a.txt"),
+    entry("\u200b"),
+    // Names that clean to "." or "..", or hold a backslash, which Windows tools read as a slash.
+    entry(".\u200b.", "folder"),
+    entry(".\u200b./x.txt"),
+    entry("Reports/\u202e."),
+    entry("..\\evil.txt"),
   ];
   const zip = await read(
     zipLayout(entries, () => ({ data: text })),
@@ -164,6 +169,10 @@ test("zipLayout: names stored before the name rules are written as they'd downlo
     "Old (2)/",
     "Old (2)/a.txt",
     "Untitled",
+    "Untitled (2)/",
+    "Untitled (2)/x.txt",
+    "Reports/Untitled",
+    "..-evil.txt",
   ]);
 });
 
