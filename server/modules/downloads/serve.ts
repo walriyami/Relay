@@ -129,6 +129,43 @@ async function* metered(chunks: AsyncIterable<Buffer>, onSent: (bytes: number) =
 }
 
 /**
+ * A running download asks again whether it may go on once it has sent RECHECK_BYTES or RECHECK_MS
+ * has passed, and never more often than RECHECK_GAP_MS: a fast download costs a handful of checks a
+ * second, however fast it goes.
+ */
+export const RECHECK_BYTES = 1024 * 1024;
+export const RECHECK_MS = 1000;
+export const RECHECK_GAP_MS = 100;
+
+/**
+ * Passes a response's bytes through, asking `allowed` again as RECHECK_* say. When access has gone
+ * (a link turned off, a session signed out, a member suspended, an item deleted) `allowed` throws,
+ * which cuts the response short of its Content-Length: the download fails rather than finishing
+ * with what it was no longer allowed to have. The first bytes always go, so the response has begun
+ * and the cut can't turn into an error page under the download's headers.
+ */
+export async function* rechecked(source: AsyncIterable<Buffer>, allowed: () => unknown) {
+  let started = false;
+  let bytes = 0;
+  let checked = Date.now();
+  for await (const chunk of source) {
+    const waited = Date.now() - checked;
+    if (started && waited >= RECHECK_GAP_MS && (bytes >= RECHECK_BYTES || waited >= RECHECK_MS)) {
+      allowed();
+      bytes = 0;
+      checked = Date.now();
+    }
+    yield chunk;
+    started = true;
+    bytes += chunk.length;
+  }
+}
+
+/** A response body that keeps asking `allowed`; anything other than a stream is already complete. */
+export const whileAllowed = <T>(payload: T, allowed: () => unknown) =>
+  payload instanceof Readable ? Readable.from(rechecked(payload, allowed), { objectMode: false }) : payload;
+
+/**
  * Sends a body with ETag, Accept-Ranges and single-range support (If-Range honoured). The caller
  * sets Content-Type and Content-Disposition first. `onSent` learns how many bytes were delivered.
  */

@@ -8,9 +8,10 @@ import type { Context, ShareAccess } from "../../context.ts";
 import { currentMember, requireMember } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { ownedReadable } from "../library/items.ts";
-import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send } from "./serve.ts";
+import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send, whileAllowed } from "./serve.ts";
 import { createThumbnails } from "./thumbnails.ts";
-import { validTimeZone, zipLayout, type ZipContent } from "./zip.ts";
+import { crc32 } from "node:zlib";
+import { validTimeZone, zipPlan, type ZipContent, type ZipEntry, type ZipPlan } from "./zip.ts";
 
 type NodeRow = {
   id: string;
@@ -29,8 +30,21 @@ type TreeRow = Omit<NodeRow, "item" | "name" | "mime" | "text"> & {
 };
 
 // An archive holds every entry of an item, however many transfers added to it; its headers are
-// written as they are sent. Texts are held in memory while it is sent, so their total is bounded.
+// written as they are sent. Its texts are all read to measure them, so their total is bounded.
 export const MAX_ZIP_TEXT_BYTES = LIMITS.manifestBytes;
+
+/**
+ * A ZIP worked out once: where every byte goes, after checking each file is on disk. Working it out
+ * costs a little for every file, so a HEAD, a resumed download or a download manager's many ranges
+ * reuse it while the item's ready contents (`content_version`) and the server's list of damaged
+ * copies stay as they were, for at most PREPARED_MS before the files are checked again.
+ */
+type Prepared = { version: number; degraded: number; made: number; rows: number; plan: ZipPlan; digest: string };
+export const PREPARED_MS = 60_000;
+/** Entries kept across all prepared ZIPs; the least recently used go first. One full item fits. */
+const PREPARED_ROWS = 100_000;
+/** Prepared ZIPs kept, however small: each costs a few kilobytes besides its entries. */
+const PREPARED_ZIPS = 256;
 
 const NODE = "SELECT id, item, name, kind, size, mime, blob, text FROM nodes WHERE id = ? AND state = 'ready'";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -114,11 +128,98 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
           itemId,
         ) ?? notFound("That folder"))
       : null;
+    const ready = await preparedZip(itemId, folderId ?? null);
+    const name =
+      folder?.name ??
+      ctx.library.summaries([itemId]).get(itemId)?.name ??
+      fail(410, "This item's recovery period has ended.");
+    // MS-DOS times have no time zone, so they are written in the downloader's, as their unzip expects.
+    const timeZone = validTimeZone((req.query as Query).tz);
+    const etag = hash(`${ready.digest}\n${timeZone ?? ""}`);
+    reply.type("application/zip").header("Content-Disposition", contentDisposition("attachment", `${name}.zip`));
+    return send(req, reply, { ...ready.plan.body(timeZone), etag }, onSent);
+  }
+
+  const prepared = new Map<string, Prepared>();
+  let preparedRows = 0;
+  const preparing = new Map<string, Promise<Prepared>>();
+  const working = new Map<string, Promise<unknown>>();
+
+  /** One item's ZIPs are worked out one at a time, so asking for many folders at once gains nothing. */
+  function oneAtATime<T>(itemId: string, work: () => Promise<T>): Promise<T> {
+    const run = (working.get(itemId) ?? Promise.resolve()).then(work);
+    const settled = run.then(
+      () => {},
+      () => {},
+    );
+    working.set(itemId, settled);
+    void settled.then(() => {
+      if (working.get(itemId) === settled) working.delete(itemId);
+    });
+    return run;
+  }
+
+  /** The item's (or folder's) ZIP, worked out again only when something it depends on changed. */
+  function preparedZip(itemId: string, folderId: string | null): Promise<Prepared> {
+    const key = `${itemId}/${folderId ?? ""}`;
+    const cached = prepared.get(key);
+    if (cached && fresh(itemId, cached)) {
+      prepared.delete(key);
+      prepared.set(key, cached);
+      return Promise.resolve(cached);
+    }
+    if (cached) forget(key);
+    let pending = preparing.get(key);
+    if (!pending) {
+      // Everyone asking while it's worked out waits for the same answer.
+      pending = oneAtATime(itemId, () => prepareZip(itemId, folderId)).finally(() => preparing.delete(key));
+      preparing.set(key, pending);
+      void pending.then(
+        (ready) => remember(key, ready),
+        () => {},
+      );
+    }
+    return pending;
+  }
+
+  const contentVersion = (itemId: string) =>
+    ctx.db.value<number>("SELECT content_version FROM items WHERE id = ?", itemId) ?? -1;
+  // Damaged copies are few and indexed: any change to the list means a file may have gone.
+  const degradedCopies = () => ctx.db.value<number>("SELECT count(*) FROM blobs WHERE integrity <> 'ok'") ?? 0;
+  const fresh = (itemId: string, ready: Prepared) =>
+    Date.now() - ready.made < PREPARED_MS &&
+    ready.version === contentVersion(itemId) &&
+    ready.degraded === degradedCopies();
+
+  function forget(key: string) {
+    const old = prepared.get(key);
+    if (!old) return;
+    prepared.delete(key);
+    preparedRows -= old.rows;
+  }
+  function remember(key: string, ready: Prepared) {
+    if (ready.rows > PREPARED_ROWS) return;
+    forget(key);
+    prepared.set(key, ready);
+    preparedRows += ready.rows;
+    // Least recently used first: past either limit, or too old to be used again.
+    const now = Date.now();
+    for (const [oldest, entry] of prepared) {
+      if (preparedRows <= PREPARED_ROWS && prepared.size <= PREPARED_ZIPS && now - entry.made < PREPARED_MS) break;
+      forget(oldest);
+    }
+  }
+
+  async function prepareZip(itemId: string, folderId: string | null): Promise<Prepared> {
+    // Read first: a change while the files are checked makes the next request work it out again.
+    const version = contentVersion(itemId);
+    const degraded = degradedCopies();
+    const made = Date.now();
     const rows = ctx.db.all<TreeRow>(
       // The walk carries every column: joining back to nodes lets the planner scan the whole table.
       `WITH RECURSIVE tree(id, path, kind, size, blob, created) AS (
          SELECT id, name, kind, size, blob, created
-         FROM nodes WHERE ${folder ? "id = ?" : "item = ? AND parent IS NULL"} AND state = 'ready'
+         FROM nodes WHERE ${folderId ? "id = ? AND item = ?" : "item = ? AND parent IS NULL"} AND state = 'ready'
          UNION ALL
          SELECT n.id, tree.path || '/' || n.name, n.kind, n.size, n.blob, n.created
          FROM nodes n JOIN tree ON n.parent = tree.id WHERE n.state = 'ready'
@@ -126,7 +227,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
        SELECT tree.id, tree.path, tree.kind, tree.size, tree.blob, tree.created, b.crc32
        FROM tree LEFT JOIN blobs b ON b.sha256 = tree.blob
        ORDER BY tree.path`,
-      folderId ?? itemId,
+      ...(folderId ? [folderId, itemId] : [itemId]),
     );
     if (!rows.length) fail(404, "There is nothing here to download.");
     const textBytes = rows.reduce((sum, row) => sum + (row.kind === "text" ? row.size : 0), 0);
@@ -134,34 +235,41 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     // Do not fan out a stat for every file in a large archive; many simultaneous filesystem
     // operations can exhaust the libuv queue or storage device.
     for (const row of rows) if (row.kind === "file") await ctx.blobs.verify(row.blob!, row.size);
-    const textRows = rows.filter((row) => row.kind === "text");
-    const texts = new Map(
-      textRows.length
-        ? ctx.db
-            .all<{ id: string; text: string | null }>(
-              "SELECT id, text FROM nodes WHERE id IN (SELECT value FROM json_each(?))",
-              JSON.stringify(textRows.map((row) => row.id)),
-            )
-            .map((row) => [row.id, row.text ?? ""])
-        : [],
-    );
-    const data = new Map(textRows.map((row) => [row.id, Buffer.from(texts.get(row.id) ?? "", "utf8")]));
+    // Texts are measured now and read again only when their bytes are sent, so a prepared ZIP
+    // holds no text. Saved texts never change.
+    const textRows = new Map(rows.filter((row) => row.kind === "text").map((row) => [row.id, row]));
+    if (textRows.size)
+      for (const { id, text } of ctx.db.all<{ id: string; text: string | null }>(
+        "SELECT id, text FROM nodes WHERE id IN (SELECT value FROM json_each(?))",
+        JSON.stringify([...textRows.keys()]),
+      )) {
+        const row = textRows.get(id)!;
+        const data = Buffer.from(text ?? "", "utf8");
+        row.size = data.length;
+        row.crc32 = crc32(data);
+      }
+    // A text gone while the files were checked went with its item: there's nothing to send.
+    for (const row of textRows.values()) if (row.crc32 === null) fail(404, "There is nothing here to download.");
+    const entries: ZipEntry[] = rows;
     const content = (index: number): ZipContent => {
       const row = rows[index];
-      return row.kind === "text" ? { data: data.get(row.id)! } : { file: ctx.blobs.path(row.blob!) };
+      if (row.kind !== "text") return { file: ctx.blobs.path(row.blob!) };
+      const text = ctx.db.value<string>("SELECT text FROM nodes WHERE id = ? AND state = 'ready'", row.id);
+      const data = Buffer.from(text ?? "", "utf8");
+      // Gone with its item: end the archive rather than send something else under its header.
+      if (text === undefined || data.length !== row.size) throw new Error("A text in this archive is no longer there.");
+      return { data };
     };
-    // MS-DOS times have no time zone, so they are written in the downloader's, as their unzip expects.
-    const timeZone = validTimeZone((req.query as Query).tz);
-    const layout = zipLayout(rows, content, timeZone);
-    const digest = createHash("sha256").update(timeZone ?? "");
+    const digest = createHash("sha256");
     for (const r of rows) digest.update(JSON.stringify([r.id, r.path, r.kind, r.blob, r.size, r.created]));
-    const etag = digest.digest("hex");
-    const name =
-      folder?.name ??
-      ctx.library.summaries([itemId]).get(itemId)?.name ??
-      fail(410, "This item's recovery period has ended.");
-    reply.type("application/zip").header("Content-Disposition", contentDisposition("attachment", `${name}.zip`));
-    return send(req, reply, { ...layout, etag }, onSent);
+    return {
+      version,
+      degraded,
+      made,
+      rows: rows.length,
+      plan: zipPlan(entries, content),
+      digest: digest.digest("hex"),
+    };
   }
 
   // GET and HEAD share a handler: the automatic HEAD route would replace Content-Length with 0.
@@ -196,7 +304,11 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
             return;
           }
         }
-        done(null, payload);
+        // Taking access away also stops a download already running, within a megabyte or a second.
+        done(
+          null,
+          whileAllowed(payload, () => authorize(req)),
+        );
       },
     });
 

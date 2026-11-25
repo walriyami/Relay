@@ -40,15 +40,15 @@ export function createActivity(ctx: Context): Activity {
         const joined = ctx.db.run(
           `UPDATE activity SET created = ?,
              data = json_set(data, '$.browsers', ifnull(json_extract(data, '$.browsers'), 1) + 1, '$.device', ?)
-           WHERE id = (SELECT id FROM activity WHERE owner = ? AND kind = 'link' AND created > ?
-             AND json_extract(data, '$.linkId') = ? AND json_extract(data, '$.action') = ?
-             ORDER BY created DESC LIMIT 1)`,
+           WHERE id = (SELECT id FROM activity WHERE kind = 'link'
+             AND json_extract(data, '$.linkId') = ? AND json_extract(data, '$.action') = ? AND created > ?
+             ORDER BY created DESC LIMIT 1) AND owner = ?`,
           now,
           event.device,
-          owner,
-          now - LINK_ENTRY_MS,
           event.linkId,
           event.action,
+          now - LINK_ENTRY_MS,
+          owner,
         ).changes;
         if (joined) return ctx.events.publish(owner, "activity");
       }

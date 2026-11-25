@@ -188,7 +188,10 @@ CREATE TABLE items (
   -- Cached ItemSummary fields derived from the nodes. Triggers set summary_dirty on any node change;
   -- the library recomputes dirty summaries when it next reads them.
   summary TEXT NOT NULL DEFAULT '{}',
-  summary_dirty INTEGER NOT NULL DEFAULT 1
+  summary_dirty INTEGER NOT NULL DEFAULT 1,
+  -- Moves whenever the item's ready contents change (see nodes_ready_*), so a ZIP worked out
+  -- for one version can be served again until the next.
+  content_version INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX items_owner ON items(owner, trashed, created);
 CREATE INDEX items_request ON items(request_id);
@@ -288,6 +291,18 @@ BEGIN
   INSERT INTO stored_types(owner, mime, bytes, files)
     SELECT NEW.owner, NEW.mime, NEW.size, NEW.kind = 'file' WHERE NEW.state = 'ready' AND NEW.kind <> 'folder'
     ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files;
+END;
+
+-- What a download can see is the ready nodes, so only they move an item's content_version: a
+-- folder or text saved, a file finishing, or anything about a ready node changing or going.
+CREATE TRIGGER nodes_ready_insert AFTER INSERT ON nodes WHEN NEW.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id = NEW.item;
+END;
+CREATE TRIGGER nodes_ready_update AFTER UPDATE ON nodes WHEN OLD.state = 'ready' OR NEW.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id IN (OLD.item, NEW.item);
+END;
+CREATE TRIGGER nodes_ready_delete AFTER DELETE ON nodes WHEN OLD.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id = OLD.item;
 END;
 
 -- One browser page load. Its event stream renews the lease; an expired or closed tab abandons its transfers.
@@ -569,6 +584,9 @@ CREATE TRIGGER link_visits_update AFTER UPDATE OF downloads, last ON link_visits
     WHERE id = NEW.link;
 END;
 
+-- Whether a link has been downloaded before, however many people only opened it.
+CREATE INDEX link_visits_downloaded ON link_visits(link) WHERE downloads > 0;
+
 -- An item sent to one of the owner's devices. The device needn't have Relay open: the delivery waits
 -- until it does (see delivery_receipts). The receiving device answers it: accepted (downloaded there)
 -- or declined. The item stays in Files either way.
@@ -602,6 +620,9 @@ CREATE TABLE activity (
 CREATE INDEX activity_owner ON activity(owner, created);
 CREATE INDEX activity_owner_kind ON activity(owner, kind, created);
 CREATE INDEX activity_created ON activity(created);
+-- A link's latest entry for opening or downloading, which others within the hour join.
+CREATE INDEX activity_link_entry ON activity(json_extract(data, '$.linkId'), json_extract(data, '$.action'), created)
+  WHERE kind = 'link';
 
 -- Hourly usage per member, for their Usage page and for Admin. `hour` counts whole hours since the
 -- epoch (UTC). Bytes: `uploaded` by the member, `received` from guests through their requests,

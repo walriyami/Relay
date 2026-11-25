@@ -11,11 +11,15 @@ import { finishSignIn, insertSession, newDevice, type NewDevice } from "./sessio
 import { addressKey, perAddress } from "./limits.ts";
 import { memberFromToken, sessionCookie } from "../../lib/auth.ts";
 import { checkCodeAttempt, recordCodeFailure } from "../../lib/pickup-code-guard.ts";
+import { nthNewestFailure, recordFailure } from "../../lib/failures.ts";
 
 const CODE_MS = DEFAULTS.loginCodeMinutes * 60_000;
 const DAY_MS = 86_400_000;
 /** Sign-in codes one account may make in a day: far more than adding devices ever needs. */
-const CODES_PER_DAY = 100;
+export const CODES_PER_DAY = 100;
+// Counted in the failures table's day-long event log, not from login_codes: replaced, used and
+// expired codes leave that table long before their digits stop being held back.
+const NEW_DEVICE_CODE = "new-device-code";
 const invalid = () =>
   fail(410, "This sign-in code is invalid, expired or already used. Create a new one on your signed-in device.");
 
@@ -101,13 +105,12 @@ export function registerLoginCodes(app: FastifyInstance, ctx: Context) {
       const id = uuidv7(now);
       const issued = ctx.db.tx(() => {
         // Each code holds six digits for a while after it ends, so one account can't use them all up.
-        const today = ctx.db.value<number>(
-          "SELECT count(*) FROM login_codes WHERE user_id = ? AND created > ?",
-          member.userId,
-          now - DAY_MS,
-        );
-        if (today! >= CODES_PER_DAY)
-          fail(429, "You’ve made a lot of sign-in codes today. Use the sign-in link, or try again tomorrow.");
+        if (nthNewestFailure(ctx, NEW_DEVICE_CODE, member.userId, now - DAY_MS, CODES_PER_DAY) !== undefined)
+          fail(
+            429,
+            "You’ve made a lot of sign-in codes today. Sign in on the new device another way, or try again tomorrow.",
+          );
+        recordFailure(ctx, NEW_DEVICE_CODE, [member.userId], now);
         ctx.db.run(
           "UPDATE login_codes SET revoked = ? WHERE session_hash = ? AND used IS NULL AND revoked IS NULL",
           now,

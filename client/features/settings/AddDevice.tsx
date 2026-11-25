@@ -77,7 +77,9 @@ export function DeviceCode({
     } catch (e) {
       if (!current.active) return;
       setError((e as Error).message);
-      if (e instanceof ApiError && e.status === 429) setRetryAt(Date.now() + (e.retryAfter ?? 60) * 1000);
+      // Only the per-minute limit says when to come back; the daily one explains itself.
+      if (e instanceof ApiError && e.status === 429 && e.retryAfter !== undefined)
+        setRetryAt(Date.now() + e.retryAfter * 1000);
     } finally {
       current.creating = false;
     }
