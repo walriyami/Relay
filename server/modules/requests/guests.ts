@@ -276,12 +276,14 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       const grant = grantFor(ctx, req, request.id) ?? fail(401, "Open the request link again to continue.");
       // A retry of a send already made is answered as before; only a new one counts towards the limits.
       const network = codeNetworkOf(req.ip);
-      const entries = body.files.length + body.folders.length + (body.text?.trim() ? 1 : 0);
-      const isNew = ctx.db.value("SELECT 1 FROM transfers WHERE id = ?", body.id) === undefined;
-      if (isNew)
+      const admitted = (entries: number) =>
         admitVisitorSend(ctx, request.id, network, entries, (seconds) => {
           reply.header("Retry-After", String(seconds));
         });
+      // What the list names is checked before it is planned, which is the costly part; the plan,
+      // with the folders its paths imply, is what is counted.
+      if (ctx.db.value("SELECT 1 FROM transfers WHERE id = ?", body.id) === undefined)
+        admitted(body.files.length + body.folders.length + (body.text?.trim() ? 1 : 0));
       // One synchronous block: the limits read here are the ones the new uploads are admitted against.
       // Each new transfer gets an independent item; retries resolve their original item by transfer ID.
       const { sender: typed, ...input } = body;
@@ -301,24 +303,25 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
           itemName: (plan) => submissionName(request.name, sender, input.text, plan),
           sender,
           limit: room(ctx, request),
+          // In the create's own transaction, so a send is counted exactly when it is made.
+          planned: (entries) => {
+            admitted(entries);
+            const now = Date.now();
+            ctx.db.run(
+              "DELETE FROM visitor_sends WHERE request_id = ? AND created <= ?",
+              request.id,
+              now - VISITOR_SENDS.windowMs,
+            );
+            ctx.db.run(
+              "INSERT INTO visitor_sends(request_id, network, entries, created) VALUES(?, ?, ?, ?)",
+              request.id,
+              network,
+              entries,
+              now,
+            );
+          },
         },
       );
-      if (isNew)
-        ctx.db.tx(() => {
-          const now = Date.now();
-          ctx.db.run(
-            "DELETE FROM visitor_sends WHERE request_id = ? AND created <= ?",
-            request.id,
-            now - VISITOR_SENDS.windowMs,
-          );
-          ctx.db.run(
-            "INSERT INTO visitor_sends(request_id, network, entries, created) VALUES(?, ?, ?, ?)",
-            request.id,
-            network,
-            entries,
-            now,
-          );
-        });
       ctx.events.publish(request.owner, "requests");
       return created;
     },

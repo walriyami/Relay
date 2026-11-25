@@ -217,6 +217,15 @@ test("cancelled sends still count towards how much a network and a link may send
       ),
       429,
     );
+    // The folders a path implies are entries too: one file two folders down is three.
+    assert.equal(await status(sendTo(other, request.token, [{ path: "x/y/deep", size: 1 }])), 429);
+    assert.equal(
+      instance.ctx.db.value(
+        "SELECT entries FROM visitor_sends WHERE network = ? ORDER BY created DESC LIMIT 1",
+        "203.0.113.0/24",
+      ),
+      6,
+    );
     await sendAndCancel(other, 2);
 
     // Five sends in all reach the link's own limit, whichever network the next one comes from.
@@ -555,6 +564,14 @@ test("a visitor naming new pages again and again keeps only a few on record", as
       "the latest pages stay, and the page that sent something",
     );
     assert.ok(kept(guest.tab));
+    // A page closed just now is kept over ones used before it, so a create still on its way from
+    // it is refused rather than starting the page again.
+    const closing = crypto.randomUUID();
+    assert.equal(instance.ctx.transfers.renewTab(closing, grant), true);
+    db.run("UPDATE tabs SET closed = ? WHERE id = ?", Date.now(), closing);
+    assert.equal(instance.ctx.transfers.renewTab(crypto.randomUUID(), grant), true);
+    assert.ok(kept(closing));
+    assert.equal(instance.ctx.transfers.renewTab(closing, grant), false);
     // The page that sent goes on as before.
     await guest.call(api.transfers.cancel, { params: { id: sent.id } });
     // A member's pages are theirs to name, and aren't limited this way.

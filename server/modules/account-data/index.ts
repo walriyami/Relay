@@ -202,7 +202,8 @@ export function registerAccountData(app: FastifyInstance, ctx: Context) {
         const made: Exported = {
           etag,
           degraded,
-          made: now,
+          // Kept from when the checks finished, so a slow export is still there for the GET after it.
+          made: Date.now(),
           layout: zipLayout(entries, (index) => entries[index].content!, timeZone),
         };
         // One per member: the last one asked for, which is the one a HEAD is followed by.

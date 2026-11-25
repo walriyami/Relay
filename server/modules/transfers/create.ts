@@ -273,6 +273,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       visitorEntries(plan.length);
       if (options.limit && plan.length + (text === null ? 0 : 1) > options.limit.entries)
         fail(413, "This request cannot take that many more files.");
+      options.planned?.(plan.length + (text === null ? 0 : 1));
 
       const now = Date.now();
       const named = typeof options.itemName === "function" ? options.itemName(plan) : options.itemName;

@@ -49,14 +49,16 @@ export function renewTab(ctx: Context, tab: string, principal: Principal): boole
   );
   if (!row) {
     // A request-link visit names its own pages, so each new name would otherwise add a row until
-    // the daily sweep. It keeps its latest few that sent nothing (open ones before closed ones);
-    // pages that sent something stay, and there are only as many of those as the visit may send.
+    // the daily sweep. It keeps the few that sent nothing and were used (or closed) most recently,
+    // so a page just closed still refuses a create on its way; pages that sent something stay, and
+    // there are only as many of those as the visit may send.
     if (principal.kind === "grant")
       ctx.db.run(
         `DELETE FROM tabs WHERE id IN (SELECT id FROM tabs WHERE principal = ?
            AND NOT EXISTS (SELECT 1 FROM transfers WHERE tab = tabs.id)
-           ORDER BY closed IS NOT NULL, lease_expires DESC, rowid DESC LIMIT -1 OFFSET ?)`,
+           ORDER BY coalesce(closed, lease_expires - ?) DESC, rowid DESC LIMIT -1 OFFSET ?)`,
         key,
+        ctx.config.tabLeaseMs,
         GUEST_TABS_KEPT - 1,
       );
     ctx.db.run("INSERT INTO tabs(id, principal, lease_expires) VALUES(?, ?, ?)", tab, key, lease);

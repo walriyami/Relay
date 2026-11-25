@@ -150,6 +150,11 @@ export type CreateTransferOptions = {
   sender?: string | null;
   /** What a guest request can still accept: bytes, and entries (every created file, folder and text). */
   limit?: { bytes: number; entries: number };
+  /**
+   * Called once a new transfer is planned, inside its transaction and before anything is written,
+   * with every entry it creates (files, the folders that hold them, and text). Throw to refuse.
+   */
+  planned?: (entries: number) => void;
 };
 
 /** Transfers, their tus uploads, and the tabs that own them. */

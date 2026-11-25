@@ -9,6 +9,11 @@ import { fail } from "./errors.ts";
 export const JOBS_PER_MEMBER = 2;
 /** Archives being prepared at once on the whole server. */
 export const JOBS_TOTAL = 4;
+/**
+ * Archives being prepared at once for everyone opening share links, whoever shared them, so
+ * visitors of several members' links can't take the places members need for their own.
+ */
+export const JOBS_SHARED_TOTAL = 2;
 export const MEMBER_BUSY = "Your other downloads are still being prepared. Try again once they start.";
 export const SERVER_BUSY = "Relay is busy preparing other downloads. Try again in a moment.";
 export const SHARED_BUSY = "Other downloads from this person's links are being prepared. Try again in a moment.";
@@ -32,6 +37,7 @@ export async function preparing<T>(ctx: Context, reply: FastifyReply, holder: Ho
     typeof holder === "string"
       ? { key: `member:${holder}`, max: JOBS_PER_MEMBER, message: MEMBER_BUSY }
       : { key: `shared:${holder.sharedBy}`, max: JOBS_PER_MEMBER, message: SHARED_BUSY },
+    ...(typeof holder === "string" ? [] : [{ key: "shared", max: JOBS_SHARED_TOTAL, message: SERVER_BUSY }]),
     { key: "all", max: JOBS_TOTAL, message: SERVER_BUSY },
   ];
   const taken = places.find((place) => (held.get(place.key) ?? 0) >= place.max);
