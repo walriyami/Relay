@@ -1,4 +1,4 @@
-import Fastify, { LogController, type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance, type FastifyReply } from "fastify";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import staticFiles from "@fastify/static";
@@ -12,8 +12,8 @@ import { Database } from "./db/database.ts";
 import { EventBus } from "./lib/events.ts";
 import { HttpError } from "./lib/errors.ts";
 import { Secrets } from "./lib/secrets.ts";
-import { checkHost, checkCsrf, currentMember, isLocal } from "./lib/auth.ts";
-import { route } from "./lib/http.ts";
+import { authOf, checkHost, checkCsrf, currentMember, isLocal } from "./lib/auth.ts";
+import { DEFAULT_BODY_BYTES, route } from "./lib/http.ts";
 import { api, headers } from "../shared/api.ts";
 import { createBlobStore } from "./storage/blobs.ts";
 import { createLibrary, registerLibrary } from "./modules/library/index.ts";
@@ -59,7 +59,7 @@ export async function buildApp(config: Config): Promise<App> {
     logger: config.logger ? { level: "info", redact: ["req.headers.cookie", "req.headers['x-relay-csrf']"] } : false,
     // Fastify's own request lines include raw URLs; the onResponse hook below logs routes instead.
     logController: new LogController({ disableRequestLogging: true }),
-    bodyLimit: 1024 * 1024,
+    bodyLimit: DEFAULT_BODY_BYTES,
     // Receiving a request, body included, may take two minutes. Browsers size upload chunks to take
     // about 15 seconds at the rate they are getting, shrinking them when a request is cut short, so
     // only a stalled or trickling request reaches it. Idle sockets close too; active downloads and
@@ -67,6 +67,15 @@ export async function buildApp(config: Config): Promise<App> {
     requestTimeout: 120_000,
     connectionTimeout: 120_000,
     trustProxy: proxies.trusts,
+    // Routing refuses a malformed address (bad % encoding, an over-long parameter) before any hook
+    // runs. Answer it as Relay answers everything, without echoing the address: it may hold a link.
+    frameworkErrors: (error, req, reply) => {
+      req.log.info({ method: req.method, code: error.code, status: 400 }, "request with an invalid address");
+      secured(reply, config.origin)
+        .header("Cache-Control", "no-store")
+        .code(400)
+        .send({ error: "That address isn't valid. Check the link and try again." });
+    },
   });
 
   try {
@@ -150,26 +159,14 @@ export async function buildApp(config: Config): Promise<App> {
 
     app.addHook("onRequest", async (req, reply) => {
       proxies.checkForwarded(req.socket.remoteAddress, req.headers["x-forwarded-for"]);
-      reply
-        .header("X-Content-Type-Options", "nosniff")
-        .header("Referrer-Policy", "no-referrer")
-        .header("Cross-Origin-Resource-Policy", "same-origin")
-        .header("X-Frame-Options", "DENY")
-        // Another site's window can't keep a handle on Relay's, and nothing here may use the camera,
-        // microphone, location or payment devices.
-        .header("Cross-Origin-Opener-Policy", "same-origin")
-        .header(
-          "Permissions-Policy",
-          "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=()",
-        )
-        .header(
-          "Content-Security-Policy",
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-        );
-      if (config.origin?.startsWith("https:")) reply.header("Strict-Transport-Security", "max-age=31536000");
-      // Stamped before the handler reads anything, so a view can tell what it may have missed.
-      if (req.url.startsWith("/api/"))
-        reply.header("Cache-Control", "no-store").header(headers.changes, ctx.events.stamp());
+      secured(reply, config.origin);
+      if (pathOf(req.url).startsWith("/api/")) {
+        reply.header("Cache-Control", "no-store");
+        // Stamped before the handler reads anything, so a view can tell what it may have missed. The
+        // count moves with everyone's activity, so only members see it; a guest's views reload when
+        // their stream opens instead.
+        if (authOf(ctx, req).member) reply.header(headers.changes, ctx.events.stamp());
+      }
       checkHost(ctx, req);
       checkCsrf(ctx, req, req.routeOptions.config ?? {});
     });
@@ -326,7 +323,7 @@ export async function buildApp(config: Config): Promise<App> {
       });
       // /local/ belongs to the direct download worker (public/local-sw.js); what it doesn't serve is gone.
       app.setNotFoundHandler((req, reply) =>
-        ["/api/", "/uploads/", "/assets/", "/local/"].some((prefix) => req.url.startsWith(prefix))
+        ["/api/", "/uploads/", "/assets/", "/local/"].some((prefix) => pathOf(req.url).startsWith(prefix))
           ? reply.code(404).send({ error: "Not found." })
           : reply.type("text/html").sendFile("index.html"),
       );
@@ -342,6 +339,38 @@ export async function buildApp(config: Config): Promise<App> {
     db.close();
     throw error;
   }
+}
+
+/** The headers every answer carries, whatever it is. */
+/**
+ * The path as the router reads it: it decodes escapes, so /%61pi/session is /api/session and must
+ * get the same headers.
+ */
+function pathOf(url: string) {
+  const path = url.split("?")[0];
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function secured(reply: FastifyReply, origin: string | undefined) {
+  reply
+    .header("X-Content-Type-Options", "nosniff")
+    .header("Referrer-Policy", "no-referrer")
+    .header("Cross-Origin-Resource-Policy", "same-origin")
+    .header("X-Frame-Options", "DENY")
+    // Another site's window can't keep a handle on Relay's, and nothing here may use the camera,
+    // microphone, location or payment devices.
+    .header("Cross-Origin-Opener-Policy", "same-origin")
+    .header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=()")
+    .header(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    );
+  if (origin?.startsWith("https:")) reply.header("Strict-Transport-Security", "max-age=31536000");
+  return reply;
 }
 
 /** Filesystem or SQLite writes that failed for lack of space (SQLITE_FULL is 13). */

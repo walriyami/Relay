@@ -170,6 +170,13 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       ctx.events.publish(request.owner, "requests");
       return created;
     },
-    { bodyLimit: LIMITS.manifestBytes },
+    {
+      bodyLimit: LIMITS.manifestBytes,
+      // Only this request's guests may send a manifest, checked before Relay reads one.
+      admit: (req) => {
+        const request = openRequest(ctx, (req.params as { token: string }).token);
+        if (!grantFor(ctx, req, request.id)) fail(401, "Open the request link again to continue.");
+      },
+    },
   );
 }

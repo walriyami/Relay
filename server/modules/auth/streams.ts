@@ -358,8 +358,9 @@ export function openStream(
       : () => {},
   };
   // Taken once subscribed, and before this device is announced online: every change after it,
-  // that announcement included, reaches this stream.
-  const changes = ctx.events.stamp();
+  // that announcement included, reaches this stream. The count moves with everyone's activity, so
+  // only a member's stream, which gets their changes, is told it.
+  const changes = subscribe ? ctx.events.stamp() : undefined;
   res.on("close", () => streams.end(stream));
   res.on("error", () => streams.end(stream));
   streams.add(stream);

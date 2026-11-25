@@ -6,7 +6,8 @@ import { admin, member, Client, send, start } from "./support/harness.ts";
 import { build } from "../server/build-info.ts";
 
 /** What /api/health reports about the running code; see tests/build-info.test.ts. */
-const release = { version: build.version, commit: build.commit };
+// The public probe names the build by its short commit, as Admin shows it.
+const release = { version: build.version, commit: build.commit?.slice(0, 7) ?? null };
 
 test("diagnostics are bounded to the last hour and never retain request details", () => {
   const ops = new Operations();
