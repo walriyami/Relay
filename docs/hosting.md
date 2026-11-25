@@ -92,6 +92,10 @@ If the disk filled up mid-write, power was lost on a disk that ignores flushes, 
 
 If recovery fails, restore the snapshot walctl took before the last deploy. That loses whatever changed since.
 
+### If the key file is damaged
+
+Relay writes `secret.key` in full before using it. If an older start was cut short and left it empty or shorter than 32 characters, Relay stops with **Relay's key file … is empty or damaged** rather than use a key anyone could guess, and it doesn't replace the file itself. Put back `secret.key` from a backup of the data, such as the snapshot walctl took before the last deploy, and start Relay. Without a backup, delete `secret.key` and start Relay: it makes a new key and every file stays, but links, requests, invitations and codes handed out before stop working and have to be shared again.
+
 ### Resetting content
 
 walctl resets a stopped Relay with `node server/control-reset.ts --content`, which deletes every transfer, file, link, request, delivery, statistic and the admin history but keeps accounts, devices, invitations, every code ever given out and settings, or `--clone`, which signs everyone out and removes the keys and notification subscriptions tied to this copy's address before it runs somewhere else. The tables each clears are listed in `server/db/reset.ts`; a new table is kept until someone adds it there.

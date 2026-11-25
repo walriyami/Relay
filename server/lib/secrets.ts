@@ -1,8 +1,19 @@
 import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { CODE_LENGTH, formatCode } from "../../shared/codes.ts";
+import { fsyncDirectory } from "../storage/files.ts";
 import { fail } from "./errors.ts";
 import type { PickupCodeKind } from "./pickup-codes.ts";
 
@@ -83,6 +94,40 @@ export async function verifyPassword(password: string, encoded: string, { priori
 export const dummyPasswordHash = () =>
   `scrypt$${SCRYPT.N}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
 
+/** At least 32 visible characters, as RELAY_SECRET; a generated key is 43. */
+const SECRET_KEY = /^[\x21-\x7e]{32,}$/;
+
+export class SecretKeyInvalid extends Error {
+  readonly code = "RELAY_SECRET_KEY_INVALID";
+  constructor() {
+    super(
+      "Relay's key file (secret.key in the data folder) is empty or damaged, so Relay has stopped rather than " +
+        "use a key anyone could guess. If you have a backup of the data folder, put its secret.key back. " +
+        "Otherwise delete secret.key and start Relay again to make a new key: every file stays, but links, " +
+        "requests, invitations and codes handed out before stop working and have to be shared again.",
+    );
+  }
+}
+
+/** Writes a new key in full before it appears under its name, so a crash can't leave it empty. */
+function createKeyFile(dataRoot: string, file: string) {
+  const temporary = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  try {
+    try {
+      writeFileSync(fd, `${randomBytes(32).toString("base64url")}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    // A link, unlike a rename, never replaces a key that is already there.
+    linkSync(temporary, file);
+  } finally {
+    unlinkSync(temporary);
+  }
+  fsyncDirectory(dataRoot);
+}
+
 /**
  * Derives the bearer secrets of links and upload requests from their ids with a server key, so
  * the database holds only hashes, while the owner can still be shown the link. The key comes from
@@ -98,8 +143,12 @@ export class Secrets {
       return;
     }
     const file = join(dataRoot, "secret.key");
-    if (!existsSync(file)) writeFileSync(file, randomBytes(32).toString("base64url"), { mode: 0o600, flag: "wx" });
-    this.key = Buffer.from(readFileSync(file, "utf8").trim());
+    if (!existsSync(file)) createKeyFile(dataRoot, file);
+    const key = readFileSync(file, "utf8").trim();
+    // An empty or cut-short key would let anyone work out every link and request token from its id.
+    // Making a new one would silently break every link already handed out, so the owner decides.
+    if (!SECRET_KEY.test(key)) throw new SecretKeyInvalid();
+    this.key = Buffer.from(key);
   }
   private mac(purpose: string, id: string) {
     return createHmac("sha256", this.key).update(`${purpose}:${id}`).digest();
