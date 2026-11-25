@@ -30,29 +30,65 @@ export function bytesLabel(bytes: number) {
 }
 
 /**
+ * The totals the held_* triggers keep on users (see schema.sql), summed over the members: a few rows
+ * however many uploads are unfinished, so the checks below can run on every visitor's page view and
+ * every MiB they send.
+ */
+function totals(ctx: Context) {
+  return ctx.db.get<{
+    stored: number;
+    reserved: number;
+    visitorUnsent: number;
+    unsentMember: number;
+    unsentVisitor: number;
+  }>(
+    `SELECT coalesce(sum(bytes_used), 0) AS stored, coalesce(sum(reserved_bytes), 0) AS reserved,
+       coalesce(sum(reserved_visitor_unsent), 0) AS visitorUnsent,
+       coalesce(sum(unsent_member), 0) AS unsentMember, coalesce(sum(unsent_visitor), 0) AS unsentVisitor
+     FROM users`,
+  )!;
+}
+
+/**
  * Bytes unfinished uploads will add to the server. Members' count in full. Visitors' count in full
  * when `visitors` is set; otherwise only as far as they've arrived, committed or streaming in now,
  * since bytes on their way don't show in the committed offset until their chunk is saved.
  */
 export function heldBytes(ctx: Context, visitors: boolean, except?: string) {
-  const from = `FROM nodes n LEFT JOIN uploads u ON u.node = n.id LEFT JOIN transfers t ON t.id = u.transfer
-    WHERE n.state = 'pending' AND (u.id IS NULL OR u.id != ?)`;
-  const promised = visitors ? "n.size" : "u.offset";
-  const held = ctx.db.value<number>(
-    `SELECT coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN ${promised} ELSE n.size END), 0) ${from}`,
-    except ?? "",
-  )!;
-  const arriving = visitors ? undefined : receiversOf(ctx)?.arriving();
+  const sums = totals(ctx);
+  if (visitors) return sums.reserved - (except ? ownHold(ctx, except, true) : 0);
+  const held = sums.reserved - sums.visitorUnsent - (except ? ownHold(ctx, except, false) : 0);
+  const arriving = receiversOf(ctx)?.arriving();
   if (!arriving?.size) return held;
+  // Only the uploads streaming now are looked up, by id.
   const streaming = ctx.db.all<{ id: string }>(
-    `SELECT u.id ${from} AND t.principal LIKE 'grant:%' AND u.id IN (SELECT value FROM json_each(?))`,
-    except ?? "",
+    `SELECT u.id FROM json_each(?) j JOIN uploads u ON u.id = j.value JOIN nodes n ON n.id = u.node
+     JOIN transfers t ON t.id = u.transfer
+     WHERE n.state = 'pending' AND t.principal LIKE 'grant:%' AND u.id != ?`,
     JSON.stringify([...arriving.keys()]),
+    except ?? "",
   );
   return streaming.reduce((sum, row) => sum + arriving.get(row.id)!, held);
 }
 
-export const storedBytes = (ctx: Context) => ctx.db.value<number>("SELECT coalesce(sum(bytes_used), 0) FROM users")!;
+/** What one upload's pending file adds to `heldBytes`: its size, or a visitor's sent bytes when `visitors` is off. */
+function ownHold(ctx: Context, upload: string, visitors: boolean) {
+  const row = ctx.db.get<{ size: number; offset: number; visitor: number }>(
+    `SELECT n.size, u.offset, t.principal LIKE 'grant:%' AS visitor FROM uploads u
+     JOIN nodes n ON n.id = u.node JOIN transfers t ON t.id = u.transfer WHERE u.id = ? AND n.state = 'pending'`,
+    upload,
+  );
+  if (!row) return 0;
+  return row.visitor && !visitors ? row.offset : row.size;
+}
+
+export const storedBytes = (ctx: Context) => totals(ctx).stored;
+
+/** Bytes still to arrive in open transfers: everyone's, or members' only. */
+export function outstandingBytes(ctx: Context, visitors: boolean) {
+  const sums = totals(ctx);
+  return sums.unsentMember + (visitors ? sums.unsentVisitor : 0);
+}
 
 /** What the server's capacity can still take, judged as for a visitor or for a member. */
 export const capacityRoom = (ctx: Context, visitors: boolean) =>
@@ -61,21 +97,17 @@ export const capacityRoom = (ctx: Context, visitors: boolean) =>
 /** Free disk space beyond Relay's headroom that unfinished uploads haven't claimed. */
 export function diskRoom(ctx: Context, visitors: boolean) {
   const disk = statfsSync(ctx.config.root);
-  return disk.bavail * disk.bsize - DISK_HEADROOM - ctx.transfers.outstandingBytes(visitors);
+  return disk.bavail * disk.bsize - DISK_HEADROOM - outstandingBytes(ctx, visitors);
 }
 
 /** What the owner's storage limit still allows, every unfinished upload counted in full. */
 export function quotaRoom(ctx: Context, owner: string) {
-  const user = ctx.db.get<{ quota: number | null; bytes_used: number }>(
-    "SELECT quota, bytes_used FROM users WHERE id = ?",
+  const user = ctx.db.get<{ quota: number | null; bytes_used: number; reserved_bytes: number }>(
+    "SELECT quota, bytes_used, reserved_bytes FROM users WHERE id = ?",
     owner,
   );
   if (!user || user.quota === null) return Infinity;
-  const reserved = ctx.db.value<number>(
-    "SELECT coalesce(sum(size), 0) FROM nodes WHERE state = 'pending' AND owner = ?",
-    owner,
-  )!;
-  return user.quota - user.bytes_used - reserved;
+  return user.quota - user.bytes_used - user.reserved_bytes;
 }
 
 /**

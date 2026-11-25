@@ -51,7 +51,23 @@ export function used(ctx: Context, requestId: string) {
   )!;
 }
 
-/** What the request can still accept: its size limit, and the fixed entry guard against empty-file floods. */
+/**
+ * What the request can still accept, for its visitors: its size limit, and the fixed entry guard
+ * against empty-file floods. Read from the totals the request_held_* triggers keep (schema.sql), so
+ * a visitor's page view or send costs the same however many files the request holds.
+ */
+export function room(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes">) {
+  const held = ctx.db.get<{ entries: number; bytes: number }>(
+    "SELECT held_entries AS entries, held_bytes AS bytes FROM requests WHERE id = ?",
+    request.id,
+  ) ?? { entries: 0, bytes: 0 };
+  return {
+    bytes: Math.max(0, request.max_bytes - held.bytes),
+    entries: Math.max(0, LIMITS.requestEntries - held.entries),
+  };
+}
+
+/** What the request can still accept, with how its bytes divide, for the owner's list. */
 export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes">) {
   const held = used(ctx, request.id);
   return {
@@ -98,7 +114,7 @@ function submissionName(
 export function registerGuests(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.requests.open, ({ params }): PublicRequest => {
     const request = openRequest(ctx, params.token);
-    const left = remaining(ctx, request);
+    const left = room(ctx, request);
     // The request's own room is only part of it: the server and the owner's storage must take the
     // bytes too, or a visitor is told there is room and then refused at the first byte.
     const storage = visitorStorageRoom(ctx, request.owner);
@@ -172,7 +188,7 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
           // Worked out from the plan the create makes anyway, so a long list is planned once.
           itemName: (plan) => submissionName(request.name, sender, input.text, plan),
           sender,
-          limit: remaining(ctx, request),
+          limit: room(ctx, request),
         },
       );
       ctx.events.publish(request.owner, "requests");

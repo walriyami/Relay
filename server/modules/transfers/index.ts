@@ -22,6 +22,7 @@ import {
 } from "./lifecycle.ts";
 import { Receivers, uploadRow } from "./receivers.ts";
 import { registerTus } from "./tus.ts";
+import { outstandingBytes } from "./room.ts";
 
 const receiversByContext = new WeakMap<Context, Receivers>();
 
@@ -38,12 +39,7 @@ export function createTransfers(ctx: Context): Transfers {
     renewTab: (tab, principal) => renewTab(ctx, tab, principal),
     cancelForItem: (itemId, principal) => cancelForItem(ctx, receivers, itemId, principal),
     cancelForRequest: (requestId) => cancelForRequest(ctx, receivers, requestId),
-    outstandingBytes: (visitors) =>
-      count(
-        visitors
-          ? "coalesce(sum(u.size - u.offset), 0)"
-          : "coalesce(sum(CASE WHEN t.principal LIKE 'grant:%' THEN 0 ELSE u.size - u.offset END), 0)",
-      ),
+    outstandingBytes: (visitors) => outstandingBytes(ctx, visitors),
     activeUploads: () => count("count(*)"),
     receivedBytesSince: (time) => receivers.receivedSince(time),
     sweep: (now) => sweep(ctx, receivers, now),
