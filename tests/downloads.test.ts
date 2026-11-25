@@ -698,6 +698,14 @@ test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the
   // Byte ranges can be listed in no bytes at all, so how many there may be is bounded.
   assert.equal(refusal({ ranges: 1000 }), null);
   assert.match(refusal({ ranges: 100_001 })!, /damaged/);
+  // So are parameter sets, which can also be of no bytes: millions took seconds to walk.
+  assert.equal(refusal({ emptyUnits: 1000 }), null);
+  assert.match(refusal({ emptyUnits: 100_001 })!, /damaged/);
+  // libheif reads the compact form (`mini`, brand `mif3`) instead of `meta`, so a `meta` beside it
+  // would be a decoy; nor is a file with two `meta` boxes judged by either.
+  assert.match(refusal({ after: "mini" })!, /damaged/);
+  assert.match(refusal({ mif3: true })!, /damaged/);
+  assert.match(refusal({ after: "meta" })!, /damaged/);
   assert.match(heicRefusal(heifLayout(heic().subarray(0, 200)))!, /damaged/);
 
   const instance = await start();

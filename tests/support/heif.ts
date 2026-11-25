@@ -161,6 +161,12 @@ export type HeicOptions = {
   twice?: "iloc" | "iinf";
   /** This many more byte ranges in `iloc`, listed for items no image uses. */
   ranges?: number;
+  /** This many more parameter sets of no bytes in the tile's `hvcC`. */
+  emptyUnits?: number;
+  /** The compact form's brand, `mif3`, among the compatible ones. */
+  mif3?: boolean;
+  /** A top-level `mini` box (the compact form), or a second `meta`, after the image data. */
+  after?: "mini" | "meta";
 };
 
 export function heic(options: HeicOptions = {}) {
@@ -179,15 +185,22 @@ export function heic(options: HeicOptions = {}) {
     u8((grid?.columns ?? 1) - 1),
     ...(wide ? [u32(canvas[0]), u32(canvas[1])] : [u16(canvas[0]), u16(canvas[1])]),
   ]);
+  const empty: Buffer[] = [];
+  for (let left = options.emptyUnits ?? 0; left > 0; left -= 65_535) {
+    const count = Math.min(left, 65_535);
+    // An SEI array of `count` units, each a length of 0.
+    empty.push(Buffer.concat([u8(39), u16(count), Buffer.alloc(2 * count)]));
+  }
   const hvcC = box(
     "hvcC",
     ...[u8(1), u8(1), u32(0x60000000), Buffer.alloc(6), u8(93), u16(0xf000), u8(0xfc), u8(0xfd)],
-    ...[u8(0xf8), u8(0xf8), u16(0), u8(0x0f), u8(3)],
+    ...[u8(0xf8), u8(0xf8), u16(0), u8(0x0f), u8(3 + empty.length)],
     ...[
       [32, TILE.vps],
       [33, options.sps ?? TILE.sps],
       [34, TILE.pps],
     ].flatMap(([type, n]) => [u8(0x80 | (type as number)), u16(1), u16((n as Buffer).length), n as Buffer]),
+    ...empty,
   );
   const ispeBox = (size: [number, number]) => full("ispe", 0, 0, u32(size[0]), u32(size[1]));
   const clap = (size: [number, number]) =>
@@ -262,8 +275,13 @@ export function heic(options: HeicOptions = {}) {
       ),
     );
   };
-  const ftyp = box("ftyp", Buffer.from("heic", "latin1"), u32(0), Buffer.from("mif1heic", "latin1"));
+  const brands = options.mif3 ? "mif1heicmif3" : "mif1heic";
+  const ftyp = box("ftyp", Buffer.from("heic", "latin1"), u32(0), Buffer.from(brands, "latin1"));
   const size = ftyp.length + meta(0).length;
   const payload = grid && !grid.inIdat ? Buffer.concat([gridData, tileData]) : tileData;
-  return Buffer.concat([ftyp, meta(size + 8), box("mdat", payload)]);
+  const file = Buffer.concat([ftyp, meta(size + 8), box("mdat", payload)]);
+  // Appended, so the offsets above still hold. A real compact file holds its image in `mini`.
+  if (options.after === "mini") return Buffer.concat([file, box("mini", Buffer.alloc(16))]);
+  if (options.after === "meta") return Buffer.concat([file, meta(size + 8)]);
+  return file;
 }

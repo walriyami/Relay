@@ -29,10 +29,26 @@ export type HeifLayout = {
 
 type Box = { type: string; body: number; end: number };
 
+/**
+ * Boxes, parameter sets, NAL units, OBUs and byte ranges a walk may visit in all of a file. A phone
+ * photo has a few hundred; a file made of millions of tiny ones (empty boxes, parameter sets of no
+ * bytes) would otherwise take seconds of the thumbnail worker to walk each time it's asked for.
+ */
+const MAX_UNITS = 100_000;
+
+/** What a walk has visited so far. Throws once it passes MAX_UNITS. */
+class Walk {
+  private units = 0;
+  visit() {
+    if (++this.units > MAX_UNITS) throw new RangeError("too many units");
+  }
+}
+
 /** The boxes inside [start, end) of an ISO media file. Throws if one doesn't fit. */
-function* boxes(data: Buffer, start: number, end: number): Generator<Box> {
+function* boxes(data: Buffer, start: number, end: number, walk: Walk): Generator<Box> {
   let i = start;
   while (i + 8 <= end) {
+    walk.visit();
     let size = data.readUInt32BE(i);
     let header = 8;
     if (size === 1) {
@@ -142,13 +158,14 @@ function* nalUnits(data: Buffer) {
 }
 
 /** The parameter sets an `hvcC` property carries for its image. */
-function* configurationUnits(data: Buffer, box: Box) {
+function* configurationUnits(data: Buffer, box: Box, walk: Walk) {
   const r = new Reader(data, box.body + 22, box.end);
   const arrays = r.uint(1);
   for (let a = 0; a < arrays; a++) {
     r.uint(1); // array_completeness and NAL_unit_type
     const count = r.uint(2);
     for (let n = 0; n < count; n++) {
+      walk.visit();
       const length = r.uint(2);
       if (r.at + length > box.end) throw new RangeError("parameter set overruns its box");
       yield data.subarray(r.at, r.at + length);
@@ -160,16 +177,10 @@ function* configurationUnits(data: Buffer, box: Box) {
 type Extent = { start: number; end: number };
 
 /**
- * NAL units and OBUs walked in all of a file's items, and byte ranges listed for them. A photo's
- * tiles have a few units each, and one range.
- */
-const MAX_UNITS = 100_000;
-
-/**
  * Where each item's data is (the `iloc` box): byte ranges in the file or in `idat`. Null for an item
  * whose data is elsewhere (another file, or other items' data), which these limits can't read.
  */
-function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined) {
+function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined, walk: Walk) {
   const r = new Reader(data, iloc.body, iloc.end);
   const version = r.uint(1);
   r.uint(3);
@@ -180,16 +191,13 @@ function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined) {
   const indexSize = version ? more & 15 : 0;
   const count = r.uint(version < 2 ? 2 : 4);
   const items = new Map<number, Extent[] | null>();
-  // With offsets and lengths of no bytes, a range costs nothing to list.
-  let listed = 0;
   for (let n = 0; n < count; n++) {
+    walk.visit();
     const id = r.uint(version < 2 ? 2 : 4);
     const method = version ? r.uint(2) & 15 : 0;
     const external = r.uint(2) !== 0;
     const base = r.uint(baseSize);
     const extentCount = r.uint(2);
-    listed += extentCount;
-    if (listed > MAX_UNITS) throw new RangeError("too many ranges");
     const source =
       external || method > 1
         ? null
@@ -200,6 +208,8 @@ function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined) {
             : null;
     let extents: Extent[] | null = source ? [] : null;
     for (let e = 0; e < extentCount; e++) {
+      // With offsets and lengths of no bytes, a range costs nothing to list.
+      walk.visit();
       r.uint(indexSize);
       const offset = r.uint(offsetSize);
       const length = r.uint(lengthSize);
@@ -315,25 +325,31 @@ const DERIVED_ITEMS = new Set(["grid", "iovl", "iden"]);
  * Walks a HEIF file's boxes without decoding it: the largest image it declares or carries, and
  * whether any image is derived from others. Null if the file's structure is damaged, if image data
  * these limits need is out of reach, or if the file reads the same data over and over.
+ *
+ * Only files that describe their images in one `meta` box are read. The compact form (a `mini` box,
+ * brand `mif3`) describes them differently, and libheif reads it instead of any `meta` beside it, so
+ * such a file, or one with two `meta` boxes, is treated as damaged rather than judged by a decoy.
  */
 export function heifLayout(data: Buffer): HeifLayout | null {
   try {
-    // Only the boxes up to meta are read: what follows is the image data.
+    const walk = new Walk();
     let meta: Box | undefined;
-    for (const box of boxes(data, 0, data.length)) {
-      if (box.type !== "meta") continue;
-      meta = box;
-      break;
+    for (const box of boxes(data, 0, data.length, walk)) {
+      if (box.type === "mini" || (box.type === "meta" && meta)) return null;
+      if (box.type === "meta") meta = box;
+      else if (box.type === "ftyp")
+        for (let at = box.body; at + 4 <= box.end; at += 4)
+          if (at !== box.body + 4 && data.toString("latin1", at, at + 4) === "mif3") return null;
     }
     if (!meta) return null;
     const found: Record<string, Box> = {};
     // meta, iinf, infe, iloc and ispe are full boxes: a version byte and three bytes of flags come first.
-    for (const box of boxes(data, meta.body + 4, meta.end)) found[box.type] ??= box;
+    for (const box of boxes(data, meta.body + 4, meta.end, walk)) found[box.type] ??= box;
 
     const types = new Map<number, string>();
     if (found.iinf) {
       const first = found.iinf.body + (data[found.iinf.body] === 0 ? 6 : 8);
-      for (const entry of boxes(data, first, found.iinf.end)) {
+      for (const entry of boxes(data, first, found.iinf.end, walk)) {
         const version = data[entry.body];
         if (entry.type !== "infe" || version < 2) continue;
         const r = new Reader(data, entry.body + 4, entry.end);
@@ -358,12 +374,11 @@ export function heifLayout(data: Buffer): HeifLayout | null {
     // Cleared by anything that isn't plainly an 8-bit AV1 stream.
     let eightBitAv1 = all.has("av01") && !all.has("hvc1");
     let av1Headers = 0;
-    let units = 0;
     /** Declares what each sequence header in an AV1 stream allows; the number of them. */
     const av1Stream = (stream: Buffer) => {
       let headers = 0;
       for (const obu of obus(stream)) {
-        if (++units > MAX_UNITS) throw new RangeError("too many units");
+        walk.visit();
         if (obu.type !== AV1_SEQUENCE_HEADER) continue;
         headers++;
         const header = av1SequenceHeader(obu.payload);
@@ -374,12 +389,13 @@ export function heifLayout(data: Buffer): HeifLayout | null {
       return headers;
     };
 
-    const ipco = found.iprp && [...boxes(data, found.iprp.body, found.iprp.end)].find((box) => box.type === "ipco");
+    const ipco =
+      found.iprp && [...boxes(data, found.iprp.body, found.iprp.end, walk)].find((box) => box.type === "ipco");
     if (ipco) {
-      for (const property of boxes(data, ipco.body, ipco.end)) {
+      for (const property of boxes(data, ipco.body, ipco.end, walk)) {
         if (property.type === "ispe" && property.body + 12 <= property.end)
           declare(data.readUInt32BE(property.body + 4), data.readUInt32BE(property.body + 8));
-        else if (property.type === "hvcC") for (const nal of configurationUnits(data, property)) declareSps(nal);
+        else if (property.type === "hvcC") for (const nal of configurationUnits(data, property, walk)) declareSps(nal);
         // Transparency, depth and the like are images of their own, with their own costs.
         else if (property.type === "auxC") eightBitAv1 = false;
         // configOBUs, which libheif hands to aom ahead of the item's own data.
@@ -389,7 +405,7 @@ export function heifLayout(data: Buffer): HeifLayout | null {
 
     const needsData = [...types].filter(([, type]) => type === "grid" || type === "hvc1" || type === "av01");
     if (needsData.length) {
-      const locations = found.iloc ? itemLocations(data, found.iloc, found.idat) : new Map<number, null>();
+      const locations = found.iloc ? itemLocations(data, found.iloc, found.idat, walk) : new Map<number, null>();
       // A file's items can't hold more than the file does: bytes that several items share count
       // once. Items of one type that share bytes say the same, so they are read once; items of
       // different types that share them are each read as their own type.
@@ -424,7 +440,7 @@ export function heifLayout(data: Buffer): HeifLayout | null {
           declare(r.uint(wide), r.uint(wide));
         } else if (type === "hvc1") {
           for (const nal of nalUnits(item)) {
-            if (++units > MAX_UNITS) return null;
+            walk.visit();
             declareSps(nal);
           }
         } else if (!av1Stream(item)) {
