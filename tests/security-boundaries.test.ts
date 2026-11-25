@@ -299,3 +299,43 @@ test("existing data directories are made private at startup", async () => {
     await instance.close();
   }
 });
+
+test("a named proxy that moves is followed at once, and a resolver hiccup doesn't turn visitors away", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const answers = new Map<string, string[] | { code: string }>([["proxy", ["192.0.2.5"]]]);
+  const resolve = async (name: string) => {
+    const answer = answers.get(name)!;
+    if (!Array.isArray(answer)) throw Object.assign(new Error("lookup failed"), answer);
+    return answer;
+  };
+  const settle = () => new Promise((done) => setImmediate(done));
+  const proxy = new ProxyTrust(["proxy"], resolve);
+  await proxy.start({ info() {}, warn() {} });
+  try {
+    assert.equal(proxy.trusts("192.0.2.5"), true);
+
+    // Recreated with a new address: the first request from it waits while the name is looked up again.
+    answers.set("proxy", ["192.0.2.6"]);
+    t.mock.timers.tick(1_000);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), true);
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), true);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), false);
+
+    // A resolver timeout keeps the addresses it had…
+    answers.set("proxy", { code: "EAI_AGAIN" });
+    t.mock.timers.tick(1_000);
+    proxy.awaitingProxy("198.51.100.1");
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), true);
+    // …while a name that no longer exists is trusted nowhere, and requests naming a visitor wait.
+    answers.set("proxy", { code: "ENOTFOUND" });
+    t.mock.timers.tick(1_000);
+    proxy.awaitingProxy("198.51.100.1");
+    await settle();
+    assert.equal(proxy.trusts("192.0.2.6"), false);
+    assert.equal(proxy.awaitingProxy("192.0.2.6"), true);
+  } finally {
+    proxy.stop();
+  }
+});
