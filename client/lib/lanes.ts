@@ -1,3 +1,4 @@
+import { localCandidates } from "../../shared/candidates";
 import { LANES, Mux, type Lane, type MuxEvents } from "../../shared/lanes";
 
 // A browser's side of a connection made of lanes (see shared/lanes.ts): the first peer connection,
@@ -94,7 +95,9 @@ export class Lanes {
     // Fewer answers than offers: the other side takes that many.
     this.drop(pcs.slice(sdps.length));
     await Promise.all(
-      sdps.map((sdp, i) => pcs[i].setRemoteDescription({ type: "answer", sdp }).catch(() => this.drop([pcs[i]]))),
+      sdps.map((sdp, i) =>
+        pcs[i].setRemoteDescription({ type: "answer", sdp: localCandidates(sdp) }).catch(() => this.drop([pcs[i]])),
+      ),
     );
   }
 
@@ -222,14 +225,17 @@ const GATHERING = 4;
 let gathering = 0;
 const turns: (() => void)[] = [];
 
-/** `pc`'s description with the local addresses it found: its offer, or its answer to `offer`. */
+/**
+ * `pc`'s description with the local addresses it found: its offer, or its answer to `offer`. The
+ * other side's offer is used only for its local candidates (see shared/candidates.ts).
+ */
 export async function describe(pc: RTCPeerConnection, offer?: string) {
   if (gathering < GATHERING) gathering++;
   else await new Promise<void>((resolve) => turns.push(resolve));
   try {
     if (offer === undefined) await pc.setLocalDescription(await pc.createOffer());
     else {
-      await pc.setRemoteDescription({ type: "offer", sdp: offer });
+      await pc.setRemoteDescription({ type: "offer", sdp: localCandidates(offer) });
       await pc.setLocalDescription(await pc.createAnswer());
     }
     await gathered(pc, GATHER_MS);

@@ -12,6 +12,7 @@ import {
   type NearbyPeer,
   type NearbySignal,
 } from "../../../shared/nearby.ts";
+import { localCandidates } from "../../../shared/candidates.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { clearCookie, cookieOptions, nearbyCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
@@ -202,7 +203,9 @@ export function registerNearby(app: FastifyInstance, ctx: Context) {
     if (!from) fail(409, "Open Nearby again to continue.");
     const target = hub.get(to);
     if (!target || !hub.related(from, target)) fail(404, "That device isn’t in Nearby any more.");
-    hub.send(target, { type: "signal", from: from.id, signal });
+    // Only local candidates go on (see shared/candidates.ts), for browsers that don't filter them themselves.
+    const passed = signal.kind === "bye" ? signal : { ...signal, sdp: localCandidates(signal.sdp) };
+    hub.send(target, { type: "signal", from: from.id, signal: passed });
     return { ok: true as const };
   };
 

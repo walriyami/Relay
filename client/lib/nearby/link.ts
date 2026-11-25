@@ -1,3 +1,4 @@
+import { localCandidates } from "../../../shared/candidates";
 import { NEARBY, type NearbySignal } from "../../../shared/nearby";
 import type { Mux } from "../../../shared/lanes";
 import { describe, Lanes } from "../lanes";
@@ -127,7 +128,8 @@ export class Link {
   async answered(sdp: string) {
     if (!this.offering || this.state !== "connecting" || this.pc.signalingState !== "have-local-offer") return;
     try {
-      await this.pc.setRemoteDescription({ type: "answer", sdp });
+      // Only its local candidates: the other side may be anyone holding a Nearby code.
+      await this.pc.setRemoteDescription({ type: "answer", sdp: localCandidates(sdp) });
     } catch {
       this.end("unreachable");
     }

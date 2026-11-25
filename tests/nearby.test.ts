@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api, urls } from "../shared/api.ts";
+import { localCandidates } from "../shared/candidates.ts";
 import type { NearbyEvent, NearbySignal } from "../shared/nearby.ts";
 import { networkOf } from "../server/modules/nearby/hub.ts";
 import { ApiError, Client, member, start, type Instance } from "./support/harness.ts";
@@ -248,6 +249,80 @@ test("ending or outliving a Nearby code ends it for its guests and retires its n
     assert.notEqual(renewed.id, next.id);
     await instance.sweep();
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM nearby_invites"), 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+/** A guest who joined `host`'s Nearby code from another network, with their stream open. */
+async function guestOf(instance: Instance, base: string, host: Client) {
+  const invite = await host.call(api.nearby.invite);
+  const guest = new Client(instance);
+  guest.address = "198.51.100.77";
+  const joined = await guest.call(api.nearby.join, {
+    params: { token: invite.token },
+    body: { name: "Dana", kind: "computer" },
+  });
+  guest.csrf = joined.self!.csrf;
+  const stream = await Stream.open(base, urls.nearbyEvents(invite.token), guest);
+  await stream.until((events) => events.some((event) => event.startsWith("event: ready")));
+  const signal = (to: string, signal: NearbySignal) =>
+    guest.call(api.nearby.guestSignal, { params: { token: invite.token }, body: { to, signal } });
+  return { stream, signal };
+}
+
+test("only local candidates reach a browser, so nobody can make it contact the internet", async () => {
+  const lines = (sdp: string) => sdp.split("\r\n").filter((line) => /a=candidate/i.test(line));
+  const sdp = [
+    "v=0",
+    "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+    "c=IN IP4 0.0.0.0",
+    "a=candidate:1 1 udp 2122260223 4b1c2f3e-8a9d-4e5f-a6b7-c8d9e0f1a2b3.local 50000 typ host",
+    "a=candidate:2 1 udp 2122260223 192.168.1.30 50001 typ host",
+    "a=candidate:3 1 tcp 1518280447 192.168.1.30 9 typ host tcptype active",
+    "a=candidate:4 1 udp 2122260223 fd12:3456::30 50002 typ host",
+    "a=candidate:5 1 udp 2122260223 fe80::1c2b:3a4d 50003 typ host",
+    "a=candidate:6 1 udp 2122260223 198.51.100.77 40000 typ host",
+    "a=candidate:7 1 tcp 1518280447 198.51.100.77 443 typ host tcptype passive",
+    "a=candidate:8 1 udp 1686052607 198.51.100.77 40001 typ srflx raddr 0.0.0.0 rport 0",
+    "a=candidate:9 1 udp 2122260223 2001:db8::30 50004 typ host",
+    // Written to slip past a careless reading: behind a lone carriage return, in capitals, indented,
+    // with leading zeros, as a short IPv6 that isn't unique local, as a mapped IPv4, or a long name.
+    "a=mid:0\ra=candidate:10 1 udp 2122260223 198.51.100.77 40002 typ host",
+    "A=CANDIDATE:11 1 UDP 2122260223 198.51.100.77 40003 typ host",
+    " a=candidate:12 1 udp 2122260223 198.51.100.77 40004 typ host",
+    "a=candidate:13 1 udp 2122260223 010.0.0.1 40005 typ host",
+    "a=candidate:14 1 udp 2122260223 fd::1 40006 typ host",
+    "a=candidate:15 1 udp 2122260223 ::ffff:198.51.100.77 40007 typ host",
+    "a=candidate:16 1 udp 2122260223 relay.local.example.com 40008 typ host",
+    "a=end-of-candidates",
+    "",
+  ].join("\r\n");
+  assert.deepEqual(lines(localCandidates(sdp)), [
+    "a=candidate:1 1 udp 2122260223 4b1c2f3e-8a9d-4e5f-a6b7-c8d9e0f1a2b3.local 50000 typ host",
+    "a=candidate:2 1 udp 2122260223 192.168.1.30 50001 typ host",
+    "a=candidate:3 1 tcp 1518280447 192.168.1.30 9 typ host tcptype active",
+    "a=candidate:4 1 udp 2122260223 fd12:3456::30 50002 typ host",
+    "a=candidate:5 1 udp 2122260223 fe80::1c2b:3a4d 50003 typ host",
+  ]);
+  assert.ok(localCandidates(sdp).includes("a=mid:0\r\n"), "the line it hid behind stays");
+  // Direct's helper takes UDP only, at the same addresses.
+  assert.equal(lines(localCandidates(sdp, { udpOnly: true })).length, 4);
+
+  // Relay passes on only the local ones too, for browsers that don't filter them.
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const olgaId = (await olga.call(api.session.get)).device.id;
+    const olgaStream = await present(base, olga);
+    const { stream, signal } = await guestOf(instance, base, olga);
+    await signal(olgaId, { kind: "offer", session: "session-one", sdp });
+    await olgaStream.until(() => nearbyEvents(olgaStream).some((event) => event.type === "signal"));
+    const got = nearbyEvents(olgaStream).find((event) => event.type === "signal");
+    assert.ok(got?.type === "signal" && got.signal.kind === "offer");
+    assert.equal(got.signal.sdp, localCandidates(sdp));
+    await Promise.all([olgaStream.close(), stream.close()]);
   } finally {
     await instance.close();
   }
