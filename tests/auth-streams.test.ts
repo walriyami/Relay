@@ -376,7 +376,11 @@ test("one device listing validates each relevant stream once, regardless of devi
     });
     const devices = await owner.call(api.devices.list);
     assert.equal(devices.length, 31);
-    assert.equal(validations, 5, "rate-limit and route auth plus one check per stream, not per device");
+    assert.equal(
+      validations,
+      6,
+      "rate-limit auth, route auth before and after the body, and one check per stream, not per device",
+    );
     assert.equal(devices.find((device) => device.current)!.online, true);
     instance.ctx.db.run("UPDATE sessions SET expires = ?", Date.now() - 1);
     // A separate valid browser lists after expiry, proving presence does not cache credentials.

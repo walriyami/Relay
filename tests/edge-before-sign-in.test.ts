@@ -150,7 +150,7 @@ test("a request link's guests can have only a few large manifests read at once",
   }
 });
 
-test("made-up guest cookies cost one lookup, of at most a fixed number", async () => {
+test("made-up guest cookies cost one lookup per check, of at most a fixed number", async () => {
   const instance = await start();
   try {
     const owner = await member(instance, "xena");
@@ -182,7 +182,8 @@ test("made-up guest cookies cost one lookup, of at most a fixed number", async (
       assert.equal((await visitor.raw({ url: api.health.path })).statusCode, 200);
       assert.equal(lookups.length, 0);
 
-      // Each open request still works, from one lookup of the newest well-formed cookies.
+      // Each open request still works, from one lookup of the newest well-formed cookies before its
+      // body is read and one after.
       for (const request of requests) {
         lookups.length = 0;
         // Each request's guest is its own principal, with its own page.
@@ -191,7 +192,11 @@ test("made-up guest cookies cost one lookup, of at most a fixed number", async (
           params: { token: request.token },
           body: { id: crypto.randomUUID(), tab, folders: [], files: [{ path: "a.pdf", size: 3 }] },
         });
-        assert.deepEqual(lookups, [MAX_GUEST_COOKIES], "one lookup, of the newest well-formed cookies");
+        assert.deepEqual(
+          lookups,
+          [MAX_GUEST_COOKIES, MAX_GUEST_COOKIES],
+          "one lookup each time, of the newest well-formed cookies",
+        );
       }
     } finally {
       mock.restoreAll();
