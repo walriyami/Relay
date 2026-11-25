@@ -71,23 +71,29 @@ export function createBlobStore(ctx: Context): BlobStore {
   const changing = (sha256: string) => {
     if (examining?.sha256 === sha256) examining.changed = true;
   };
-  const renditionFiles = (sha256: string) => [
+  /**
+   * A blob's renditions and decoder markers. Its interrupted-render notes go only with the blob
+   * itself: they record that decoding these bytes stopped Relay, which stays true while the bytes
+   * are kept, and startup cleanup after such a stop must not forget it.
+   */
+  const renditionFiles = (sha256: string, { notes }: { notes: boolean }) => [
     thumbnailPath(ctx.config.root, sha256, "s"),
     thumbnailPath(ctx.config.root, sha256, "l"),
     thumbnailFailure(ctx.config.root, sha256, "image"),
     thumbnailFailure(ctx.config.root, sha256, "heif"),
-    thumbnailAttempt(ctx.config.root, sha256, "image"),
-    thumbnailAttempt(ctx.config.root, sha256, "heif"),
+    ...(notes
+      ? [thumbnailAttempt(ctx.config.root, sha256, "image"), thumbnailAttempt(ctx.config.root, sha256, "heif")]
+      : []),
   ];
-  const invalidateThumbnails = (sha256: string) => {
+  const invalidateThumbnails = (sha256: string, notes = false) => {
     let removed = 0;
-    for (const file of renditionFiles(sha256)) if (unlinkIfPresent(file)) removed++;
+    for (const file of renditionFiles(sha256, { notes })) if (unlinkIfPresent(file)) removed++;
     fsyncDirectory(thumbnails);
     return removed;
   };
   const invalidateThumbnailsAsync = async (sha256: string) => {
     const removed = await Promise.all(
-      renditionFiles(sha256).map((file) =>
+      renditionFiles(sha256, { notes: false }).map((file) =>
         unlink(file).then(
           () => true,
           (error: NodeJS.ErrnoException) => {
@@ -108,7 +114,7 @@ export function createBlobStore(ctx: Context): BlobStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    return removed + invalidateThumbnails(sha256);
+    return removed + invalidateThumbnails(sha256, true);
   };
   const collect = (candidates: Iterable<string>) => {
     const errors: unknown[] = [];
@@ -192,7 +198,7 @@ export function createBlobStore(ctx: Context): BlobStore {
           if (unlinkIfPresent(path(sha256))) removedFiles++;
           directories.add(directory);
         }
-        for (const file of renditionFiles(sha256)) if (unlinkIfPresent(file)) removedFiles++;
+        for (const file of renditionFiles(sha256, { notes: !referenced })) if (unlinkIfPresent(file)) removedFiles++;
         thumbnailsChanged = true;
         done.push({ sha256, referenced, rows: pending.map((row) => row.temporary) });
       } catch (error) {

@@ -67,6 +67,7 @@ These scripts exercise Relay at a scale that's too slow for every commit. Each o
 | `npm run verify:browser-scale`                           | Sends 10,000 files through a real browser.                                                                                                               |
 | `npm run verify:container`                               | Builds the Docker image and checks the single-writer lock, recovery after `SIGKILL` and a full disk, on throwaway containers and volumes.                |
 | `npm run verify:deployment -- --run-live --origin <url>` | Smoke-tests a running instance end to end. It needs `RELAY_VERIFY_USERNAME` and `RELAY_VERIFY_PASSWORD`, and never runs without `--run-live`.            |
+| `npm run verify:thumbnails`                              | Renders the costliest images still previewed in each format, and images built to exhaust memory, each in its own process, and checks memory and time.    |
 
 Each script's header comment lists its options, for example `--size 80MiB --files 300` for a quick run.
 
