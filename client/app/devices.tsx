@@ -1,7 +1,7 @@
 // One device identity and editor, wherever the device appears.
 import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 import { Check, Laptop, Pencil, Smartphone, Tablet } from "lucide-react";
-import { api, ApiError, call, LIMITS, type Device, type DeviceKind } from "../api";
+import { api, ApiError, call, LIMITS, oneLine, type Device, type DeviceKind } from "../api";
 import { Button, Field, Modal, toast } from "../components/ui";
 import { useSession } from "./session";
 
@@ -78,7 +78,8 @@ function DeviceEditor({ device, onClose }: { device: EditableDevice; onClose: ()
   const saving = useRef(false);
   const field = useRef<HTMLInputElement>(null);
   const id = useId();
-  const cleanName = name.trim();
+  // As the server keeps it, so this device shows the name that was saved.
+  const cleanName = oneLine(name);
   const changed = cleanName !== device.name || kind !== device.kind;
   const close = () => {
     if (!saving.current) onClose();

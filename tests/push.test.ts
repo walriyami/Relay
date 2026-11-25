@@ -90,8 +90,8 @@ function assertSigned(headers: IncomingHttpHeaders, key: string, audience: strin
   assert.equal(headers["content-encoding"], "aes128gcm");
 }
 
-async function subscribe(client: Client, endpoint: string) {
-  const browser = browserKeys();
+/** `browser` is the same browser subscribing again, with the keys it made the first time. */
+async function subscribe(client: Client, endpoint: string, browser = browserKeys()) {
   await client.call(api.push.subscribe, { body: { endpoint, keys: browser.keys } });
   return browser;
 }
@@ -317,13 +317,24 @@ test("a subscription is forgotten when the browser drops it, the device signs ou
     assert.equal((await client.call(api.push.status)).subscribed, false, "410 from the push service removes it");
 
     const endpoint = `${service.origin}/shared-browser`;
-    await subscribe(client, endpoint);
+    const shared = await subscribe(client, endpoint);
     const other = await member(instance, "hal");
-    await subscribe(other, endpoint);
+    // Knowing the endpoint isn't enough: someone elsewhere can't take gus's notifications away.
+    assert.equal(await status(subscribe(other, endpoint)), 409);
+    assert.equal((await client.call(api.push.status)).subscribed, true, "gus keeps his notifications");
+    assert.equal((await other.call(api.push.status)).subscribed, false);
+    // On the browser itself, which holds the subscription's keys, the account signed in now gets them.
+    await subscribe(other, endpoint, shared);
     assert.equal((await client.call(api.push.status)).subscribed, false, "one browser, one subscription");
     assert.equal((await other.call(api.push.status)).subscribed, true);
+    // The same account signing in again on that browser keeps it too, whatever keys it sends.
+    const again = new Client(instance);
+    await again.signIn("hal", "Member-password-only");
+    await subscribe(again, endpoint);
+    assert.equal((await other.call(api.push.status)).subscribed, false);
+    assert.equal((await again.call(api.push.status)).subscribed, true);
 
-    await other.call(api.session.signOut);
+    await again.call(api.session.signOut);
     assert.equal(instance.ctx.db.value("SELECT count(*) FROM push_subscriptions"), 0, "signing out forgets it");
 
     const deviceOwner = await member(instance, "ivy");

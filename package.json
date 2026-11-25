@@ -33,7 +33,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
     "@fastify/rate-limit": "^10.3.0",
-    "@fastify/static": "^10.1.11",
+    "@fastify/static": "^10.1.12",
     "@simplewebauthn/server": "^14.0.2",
     "@walriyami/auth": "file:vendor/walriyami-auth-0.1.4.tgz",
     "fastify": "^5.12.8",

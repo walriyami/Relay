@@ -3,6 +3,7 @@
 // through one of your links. Requests and links follow the member's Activity choices, like the bell.
 // Messages are encrypted for the device (webpush.ts); sending is best effort and never holds up the
 // change that caused it.
+import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { api } from "../../../shared/api.ts";
 import type { ActivityEvent } from "../../../shared/model.ts";
@@ -152,6 +153,11 @@ function messageFor(
   return null;
 }
 
+const sameText = (a: string, b: string) => {
+  const [x, y] = [Buffer.from(a), Buffer.from(b)];
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
 export function registerPush(app: FastifyInstance, ctx: Context) {
   const services = ctx.config.pushServices ?? PUSH_SERVICES;
 
@@ -165,7 +171,20 @@ export function registerPush(app: FastifyInstance, ctx: Context) {
       fail(400, "This browser’s notification service isn’t supported. Try Chrome, Edge, Firefox or Safari.");
     if (!validKeys(body.keys.p256dh, body.keys.auth)) fail(400, "This browser sent an unusable notification key.");
     ctx.db.tx(() => {
-      // The same browser signed in again (perhaps as someone else) keeps one subscription: the newest.
+      // The same browser signed in again keeps one subscription: the newest. Its endpoint alone isn't
+      // proof of that, since it could be learned elsewhere, so another account's subscription moves
+      // only to a browser that also holds its keys, which never leave the browser that made them.
+      const held = ctx.db.get<{ user_id: string; p256dh: string; auth: string }>(
+        "SELECT user_id, p256dh, auth FROM push_subscriptions WHERE endpoint = ? AND device_id != ?",
+        body.endpoint,
+        member.deviceId,
+      );
+      if (
+        held &&
+        held.user_id !== member.userId &&
+        !(sameText(held.p256dh, body.keys.p256dh) && sameText(held.auth, body.keys.auth))
+      )
+        fail(409, "This browser’s notification address belongs to another account.");
       ctx.db.run(
         "DELETE FROM push_subscriptions WHERE endpoint = ? AND device_id != ?",
         body.endpoint,

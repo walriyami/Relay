@@ -8,6 +8,7 @@ import { HISTORY_GROUPS, LIMITS, USAGE_RANGES, USERNAME } from "./model.ts";
 import type * as M from "./model.ts";
 import { NEARBY } from "./nearby.ts";
 import type * as N from "./nearby.ts";
+import { oneLine, plainText } from "./text.ts";
 
 export type Method = "GET" | "POST" | "PATCH" | "DELETE";
 /**
@@ -75,7 +76,16 @@ const id = z.uuid();
 const text = (min: number, max: number) => z.string().check(z.minLength(min), z.maxLength(max));
 const int = (min: number, max: number) => z.number().check(z.int(), z.gte(min), z.lte(max));
 const name = z.string().check(z.trim(), z.minLength(1), z.maxLength(LIMITS.nameLength));
-const deviceName = z.optional(name);
+/**
+ * Text a person sets that other people see (names, notes, messages). It is cleaned before the
+ * lengths are checked: a label becomes one line, a message keeps its line breaks, and neither keeps
+ * control or direction characters. See shared/text.ts.
+ */
+const label = (min: number, max: number) => z.string().check(z.overwrite(oneLine), z.minLength(min), z.maxLength(max));
+const message = (max: number) => z.string().check(z.overwrite(plainText), z.maxLength(max));
+/** A device's, passkey's or request's name. Unlike `name`, it isn't a file name, so it's cleaned rather than refused. */
+const labelName = label(1, LIMITS.nameLength);
+const deviceName = z.optional(labelName);
 const deviceKind = z.enum(["phone", "tablet", "computer"]);
 /** What a signing-in browser says it is; the server falls back to its user agent. */
 const deviceHint = { deviceName, deviceKind: z.optional(deviceKind) };
@@ -84,9 +94,9 @@ const days = int(1, LIMITS.linkDaysMax);
 const retentionDays = z.nullable(int(1, LIMITS.retentionDaysMax));
 const trashDays = int(1, LIMITS.trashDaysMax);
 const quota = int(1, Number.MAX_SAFE_INTEGER);
-const displayName = z.nullable(z.string().check(z.trim(), z.maxLength(LIMITS.displayNameLength)));
+const displayName = z.nullable(label(0, LIMITS.displayNameLength));
 const username = z.string().check(z.trim(), z.toLowerCase(), z.regex(USERNAME));
-const requestMessage = z._default(text(0, LIMITS.requestMessageLength), "");
+const requestMessage = z._default(message(LIMITS.requestMessageLength), "");
 const requestBytes = int(1, 1024 ** 4);
 const path = text(1, 2048);
 const passkeyResponse = z.record(z.string(), z.unknown());
@@ -103,7 +113,7 @@ const memberLimits = z.object({
   keepDays: z.nullable(int(1, LIMITS.retentionDaysMax)),
   linkDays: z.nullable(days),
 });
-const inviteNote = z.string().check(z.trim(), z.maxLength(LIMITS.inviteNoteLength));
+const inviteNote = label(0, LIMITS.inviteNoteLength);
 const usageQuery = z.object({
   range: z._default(z.enum(USAGE_RANGES), "30d"),
   /** The viewer's time zone, in minutes east of UTC, so days and months start at their midnight. */
@@ -111,7 +121,7 @@ const usageQuery = z.object({
 });
 /** A one-time administrator recovery token from the server log (see docs/hosting.md). */
 const recoveryToken = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/));
-const linkNote = z.string().check(z.trim(), z.maxLength(LIMITS.linkNoteLength));
+const linkNote = message(LIMITS.linkNoteLength);
 /** A new link's settings; anything left out is open to anyone, with no note. */
 const linkSettings = {
   days: linkDays,
@@ -182,7 +192,7 @@ export const api = {
     code: endpoint<M.Me>()("POST", "/api/session/code", {
       auth: "public",
       csrf: false,
-      body: z.object({ code: text(1, 32), ...deviceHint, deviceName: name }),
+      body: z.object({ code: text(1, 32), ...deviceHint, deviceName: labelName }),
     }),
     deviceLinkCheck: endpoint<{ expires: number }>()("GET", "/api/session/device-link/:token", {
       auth: "public",
@@ -191,7 +201,7 @@ export const api = {
     deviceLink: endpoint<M.Me>()("POST", "/api/session/device-link", {
       auth: "public",
       csrf: false,
-      body: z.object({ token: text(1, 128), ...deviceHint, deviceName: name }),
+      body: z.object({ token: text(1, 128), ...deviceHint, deviceName: labelName }),
     }),
     /** Whether an invitation link can still be used, before the form is shown. */
     invitation: endpoint<M.InvitationCheck>()("GET", "/api/invitations/:token", { auth: "public" }),
@@ -302,7 +312,7 @@ export const api = {
     }),
     addPasskey: endpoint<M.Passkey>()("POST", "/api/account/passkeys", {
       auth: "member",
-      body: z.object({ challenge, name, response: passkeyResponse }),
+      body: z.object({ challenge, name: labelName, response: passkeyResponse }),
     }),
     removePasskey: ok("DELETE", "/api/account/passkeys/:id", { auth: "member" }),
   },
@@ -319,7 +329,7 @@ export const api = {
     /** Updates the name and, when supplied, the kind its icon shows. */
     update: ok("PATCH", "/api/devices/:id", {
       auth: "member",
-      body: z.object({ name, kind: z.optional(deviceKind) }),
+      body: z.object({ name: labelName, kind: z.optional(deviceKind) }),
     }),
     signOut: ok("DELETE", "/api/devices/:id", { auth: "member" }),
     signOutOthers: endpoint<{ removed: number }>()("POST", "/api/devices/sign-out-others", { auth: "member" }),
@@ -519,7 +529,7 @@ export const api = {
     list: endpoint<M.UploadRequest[]>()("GET", "/api/requests", { auth: "member" }),
     create: endpoint<M.UploadRequest>()("POST", "/api/requests", {
       auth: "member",
-      body: z.object({ id, name, description: requestMessage, days, maxBytes: requestBytes }),
+      body: z.object({ id, name: labelName, description: requestMessage, days, maxBytes: requestBytes }),
     }),
     /**
      * Replaces an open, unexpired request's settings; its link, code and received files stay. `days`
@@ -529,8 +539,8 @@ export const api = {
     update: endpoint<M.UploadRequest>()("PATCH", "/api/requests/:id", {
       auth: "member",
       body: z.object({
-        name,
-        description: text(0, LIMITS.requestMessageLength),
+        name: labelName,
+        description: message(LIMITS.requestMessageLength),
         days: z.nullable(days),
         maxBytes: requestBytes,
       }),
@@ -543,8 +553,8 @@ export const api = {
     transfer: endpoint<M.TransferCreated>()("POST", "/api/r/:token/transfers", {
       auth: "any",
       body: z.extend(z.omit(transferInput, { retentionDays: true, name: true, item: true }), {
-        /** The guest's name, optional and trimmed; blank means none. The submission keeps the first one given. */
-        sender: z.optional(z.string().check(z.trim(), z.maxLength(LIMITS.senderLength))),
+        /** The guest's name, optional and on one line; blank means none. The submission keeps the first one given. */
+        sender: z.optional(label(0, LIMITS.senderLength)),
       }),
     }),
   },
@@ -582,7 +592,7 @@ export const api = {
       auth: "public",
       csrf: false,
       body: z.object({
-        name: z.string().check(z.trim(), z.minLength(1), z.maxLength(NEARBY.guestNameLength)),
+        name: label(1, NEARBY.guestNameLength),
         kind: deviceKind,
       }),
     }),
