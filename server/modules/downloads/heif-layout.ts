@@ -200,6 +200,8 @@ function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined) {
       if (end > source.end || start > end) extents = null;
       else extents.push({ start, end });
     }
+    // Decoders differ in which of two entries for one item they use, so a file can't have two.
+    if (items.has(id)) throw new RangeError("an item is located twice");
     items.set(id, extents);
   }
   return items;
@@ -229,11 +231,12 @@ function* obus(data: Buffer) {
 }
 
 /**
- * Whether an AV1 sequence header (AV1 5.5) describes 8-bit 4:2:0 or greyscale pictures: Main
- * profile without high bit depth, and not the 4:4:4 sRGB form. Fields are skipped up to the
- * colour configuration, as aom reads them.
+ * What an AV1 sequence header (AV1 5.5) says of its pictures: the largest frame its stream may
+ * code, which aom checks every frame against, and whether they are 8-bit 4:2:0 or greyscale (Main
+ * profile without high bit depth, and not the 4:4:4 sRGB form). Fields are read up to the colour
+ * configuration, as aom reads them.
  */
-function av1EightBit(payload: Buffer) {
+function av1SequenceHeader(payload: Buffer): { width: number; height: number; eightBit: boolean } {
   const bits = new Bits([...payload.subarray(0, 512)]);
   const profile = bits.read(3);
   bits.skip(1); // still_picture
@@ -268,7 +271,9 @@ function av1EightBit(payload: Buffer) {
   } else bits.skip(5); // seq_level_idx
   const widthBits = bits.read(4) + 1;
   const heightBits = bits.read(4) + 1;
-  bits.skip(widthBits + heightBits); // max_frame_width_minus_1, max_frame_height_minus_1
+  const width = bits.read(widthBits) + 1; // max_frame_width_minus_1
+  const height = bits.read(heightBits) + 1; // max_frame_height_minus_1
+  const size = { width, height };
   if (!reduced && bits.bit()) bits.skip(4 + 3); // frame_id_numbers_present_flag and their lengths
   bits.skip(3); // use_128x128_superblock, enable_filter_intra, enable_intra_edge_filter
   if (!reduced) {
@@ -282,14 +287,15 @@ function av1EightBit(payload: Buffer) {
   }
   bits.skip(3); // enable_superres, enable_cdef, enable_restoration
   // color_config
-  if (profile !== 0 || bits.bit()) return false; // 4:4:4 or 4:2:2 profiles, or high_bitdepth
-  if (bits.bit()) return true; // mono_chrome
+  // 4:4:4 or 4:2:2 profiles, or high_bitdepth
+  if (profile !== 0 || bits.bit()) return { ...size, eightBit: false };
+  if (bits.bit()) return { ...size, eightBit: true }; // mono_chrome
   if (bits.bit()) {
     // color_primaries, transfer_characteristics, matrix_coefficients: BT.709, sRGB and identity is 4:4:4.
     const [primaries, transfer, matrix] = [bits.read(8), bits.read(8), bits.read(8)];
-    if (primaries === 1 && transfer === 13 && matrix === 0) return false;
+    if (primaries === 1 && transfer === 13 && matrix === 0) return { ...size, eightBit: false };
   }
-  return true;
+  return { ...size, eightBit: true };
 }
 
 const DERIVED_ITEMS = new Set(["grid", "iovl", "iden"]);
@@ -324,6 +330,7 @@ export function heifLayout(data: Buffer): HeifLayout | null {
         const r = new Reader(data, entry.body + 4, entry.end);
         const id = r.uint(version === 2 ? 2 : 4);
         r.uint(2); // item_protection_index
+        if (types.has(id)) throw new RangeError("an item is described twice");
         types.set(id, data.toString("latin1", r.at, r.at + 4));
       }
     }
@@ -343,13 +350,19 @@ export function heifLayout(data: Buffer): HeifLayout | null {
     let eightBitAv1 = all.has("av01") && !all.has("hvc1");
     let av1Headers = 0;
     let units = 0;
+    /** Declares what each sequence header in an AV1 stream allows; the number of them. */
     const av1Stream = (stream: Buffer) => {
+      let headers = 0;
       for (const obu of obus(stream)) {
         if (++units > MAX_UNITS) throw new RangeError("too many units");
         if (obu.type !== AV1_SEQUENCE_HEADER) continue;
-        av1Headers++;
-        if (!av1EightBit(obu.payload)) eightBitAv1 = false;
+        headers++;
+        const header = av1SequenceHeader(obu.payload);
+        declare(header.width, header.height);
+        if (!header.eightBit) eightBitAv1 = false;
       }
+      av1Headers += headers;
+      return headers;
     };
 
     const ipco = found.iprp && [...boxes(data, found.iprp.body, found.iprp.end)].find((box) => box.type === "ipco");
@@ -360,39 +373,37 @@ export function heifLayout(data: Buffer): HeifLayout | null {
         else if (property.type === "hvcC") for (const nal of configurationUnits(data, property)) declareSps(nal);
         // Transparency, depth and the like are images of their own, with their own costs.
         else if (property.type === "auxC") eightBitAv1 = false;
-        else if (property.type === "av1C" && eightBitAv1) {
-          // configOBUs, ahead of the item's own data.
-          try {
-            av1Stream(data.subarray(property.body + 4, property.end));
-          } catch {
-            eightBitAv1 = false;
-          }
-        }
+        // configOBUs, which libheif hands to aom ahead of the item's own data.
+        else if (property.type === "av1C") av1Stream(data.subarray(property.body + 4, property.end));
       }
     }
 
-    const needsData = [...types].filter(([, type]) => type === "grid" || type === "hvc1");
-    const av1Items = eightBitAv1 ? [...types].filter(([, type]) => type === "av01") : [];
-    if (needsData.length || av1Items.length) {
+    const needsData = [...types].filter(([, type]) => type === "grid" || type === "hvc1" || type === "av01");
+    if (needsData.length) {
       const locations = found.iloc ? itemLocations(data, found.iloc, found.idat) : new Map<number, null>();
-      // Items sharing the same bytes are read once; beyond that, a file's items can't hold more
-      // than the file does.
-      const read = new Set<string>();
+      // A file's items can't hold more than the file does: bytes that several items share count
+      // once. Items of one type that share bytes say the same, so they are read once; items of
+      // different types that share them are each read as their own type.
+      const counted = new Set<string>();
+      const parsed = new Set<string>();
       let budget = data.length;
-      const itemData = (id: number) => {
+      const itemData = (id: number, type: string) => {
         const extents = locations.get(id);
         if (!extents) return null;
         const key = extents.map((e) => `${e.start}-${e.end}`).join(",");
-        if (read.has(key)) return Buffer.alloc(0);
-        read.add(key);
-        for (const e of extents) budget -= e.end - e.start;
-        if (budget < 0) return null;
+        if (parsed.has(`${type} ${key}`)) return Buffer.alloc(0);
+        parsed.add(`${type} ${key}`);
+        if (!counted.has(key)) {
+          counted.add(key);
+          for (const e of extents) budget -= e.end - e.start;
+          if (budget < 0) return null;
+        }
         return extents.length === 1
           ? data.subarray(extents[0].start, extents[0].end)
           : Buffer.concat(extents.map((e) => data.subarray(e.start, e.end)));
       };
       for (const [id, type] of needsData) {
-        const item = itemData(id);
+        const item = itemData(id, type);
         if (!item) return null;
         if (!item.length) continue;
         if (type === "grid") {
@@ -402,20 +413,14 @@ export function heifLayout(data: Buffer): HeifLayout | null {
           const wide = r.uint(1) & 1 ? 4 : 2;
           r.uint(2);
           declare(r.uint(wide), r.uint(wide));
-        } else {
+        } else if (type === "hvc1") {
           for (const nal of nalUnits(item)) {
             if (++units > MAX_UNITS) return null;
             declareSps(nal);
           }
-        }
-      }
-      for (const [id] of av1Items) {
-        try {
-          const item = itemData(id);
-          if (item) av1Stream(item);
-          else eightBitAv1 = false;
-        } catch {
-          eightBitAv1 = false;
+        } else if (!av1Stream(item)) {
+          // Each AV1 image starts with a sequence header; without one, the frame size is unknown.
+          return null;
         }
       }
     }

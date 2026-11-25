@@ -638,6 +638,20 @@ test("thumbnails: a 12 MP phone AVIF previews, judged by its AV1 stream rather t
   relabelled[av1C + 2] &= 0b1011_1111; // high_bitdepth
   assert.equal((await sharp(relabelled).metadata()).depth, "uchar");
   assert.match((await refusal(relabelled))!, /too large/);
+  // aom decodes frames up to the size the stream's sequence header allows, whatever `ispe` says.
+  const ispe = deep.indexOf("ispe", 0, "latin1");
+  const understated = Buffer.from(deep);
+  understated.writeUInt32BE(64, ispe + 8);
+  understated.writeUInt32BE(64, ispe + 12);
+  assert.equal((await sharp(understated).metadata()).width, 64);
+  assert.match((await refusal(understated))!, /too large/);
+  // Without its sequence header (temporal delimiter, then the header, as libavif writes them),
+  // an image's size can't be known.
+  const headless = Buffer.from(phone);
+  const mdat = headless.indexOf("mdat", 0, "latin1") + 4;
+  assert.equal(headless[mdat + 2], 0x0a);
+  headless[mdat + 2] = (6 << 3) | 2; // a frame instead
+  assert.match((await refusal(headless))!, /damaged/);
 });
 
 test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the crop it reports", async () => {
@@ -657,6 +671,14 @@ test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the
   assert.match(refusal({ ispe: [64, 64], inband: [hevcSps(8192, 8192)] })!, /too large/);
   assert.match(refusal({ ispe: [64, 64], sps: hevcSps(70_000, 3) })!, /too large/, "however thin");
   assert.match(refusal({ overlay: true })!, /layers/);
+  // Tiles whose data is the grid's own bytes don't hide the grid's canvas.
+  assert.match(
+    refusal({ grid: { columns: 1, rows: 1, canvas: huge, ispe: [64, 64] }, tilesShareGrid: true })!,
+    /too large/,
+  );
+  // Decoders differ in which of two entries for one item they read.
+  assert.match(refusal({ twice: "iloc" })!, /damaged/);
+  assert.match(refusal({ twice: "iinf" })!, /damaged/);
   assert.match(heicRefusal(heifLayout(heic().subarray(0, 200)))!, /damaged/);
 
   const instance = await start();

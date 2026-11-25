@@ -86,6 +86,10 @@ export type HeicOptions = {
   inband?: Buffer[];
   /** An overlay item as well. */
   overlay?: boolean;
+  /** Tiles listed ahead of the grid, with their data where the grid's is. */
+  tilesShareGrid?: boolean;
+  /** The first item located, or described, a second time. */
+  twice?: "iloc" | "iinf";
 };
 
 export function heic(options: HeicOptions = {}) {
@@ -136,15 +140,21 @@ export function heic(options: HeicOptions = {}) {
       u32(length),
     ];
     const tileOffset = mdat + (grid && !idat ? gridData.length : 0);
+    const gridLocation = (id: number) => location(id, idat ? 1 : 0, idat ? 0 : mdat, gridData.length);
     const items = [
-      ...(grid ? [location(1, idat ? 1 : 0, idat ? 0 : mdat, gridData.length)] : []),
-      ...tileIds.map((id) => location(id, 0, tileOffset, tileData.length)),
+      ...(grid ? [gridLocation(1)] : []),
+      ...tileIds.map((id) =>
+        options.tilesShareGrid ? gridLocation(id) : location(id, 0, tileOffset, tileData.length),
+      ),
     ];
+    if (options.twice === "iloc") items.push(items[0]);
     const infe = (id: number, type: string) => full("infe", 2, 0, u16(id), u16(0), Buffer.from(type, "latin1"), u8(0));
     const entries = [
       ...(grid ? [infe(1, "grid")] : []),
       ...(grid ? tileIds.map((id) => infe(id, "hvc1")) : [infe(1, "hvc1")]),
     ];
+    if (options.tilesShareGrid) entries.push(entries.shift()!);
+    if (options.twice === "iinf") entries.push(entries[0]);
     if (options.overlay) entries.push(infe(1000, "iovl"));
     const association = (id: number, list: number[]) => [u16(id), u8(list.length), ...list.map((p) => u8(0x80 | p))];
     return full(
