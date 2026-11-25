@@ -17,7 +17,7 @@ export function registerCodes(app: FastifyInstance, ctx: Context) {
     return current ? { code: current.code, expires: current.expires } : { code: null, expires: null };
   });
 
-  route(app, ctx, api.pickup.resolve, ({ body, req }) => {
+  route(app, ctx, api.pickup.resolve, ({ body, member, req }) => {
     const now = Date.now();
     // Every code that doesn't open something gets the same answer, whether it never existed or
     // its share, request or invitation has ended: the answer shouldn't tell a guesser which codes
@@ -26,7 +26,7 @@ export function registerCodes(app: FastifyInstance, ctx: Context) {
       recordCodeFailure(ctx, req.ip, now);
       return fail(404, CODE_GONE);
     };
-    checkCodeAttempt(ctx, req.ip, now);
+    checkCodeAttempt(ctx, req.ip, now, { signedIn: !!member });
     const code = normalizeCode(body.code);
     const codeHash = code ? ctx.secrets.pickupCodeHash(code) : "";
     const registered = code ? findPickupCode(ctx.db, codeHash, now) : undefined;

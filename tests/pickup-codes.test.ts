@@ -471,3 +471,55 @@ test("one account can't make sign-in codes without end", async () => {
     await instance.close();
   }
 });
+
+test("however many networks guess, all of them together get a fixed number of wrong codes a day", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "budget-owner");
+    const { result } = await send(owner, [{ path: "budget.txt", data: "content" }]);
+    const link = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    const { ctx } = instance;
+    const t0 = Date.now() - 60_000;
+    // 300 wrong codes from 300 different IPv6 /48s, each well inside its own limits.
+    for (let i = 0; i < 300; i++) recordCodeFailure(ctx, `2001:db8:${i.toString(16)}::1`, t0);
+
+    // A brand-new network is refused even a right code…
+    const fresh = await resolve(instance, link.code, "2001:db8:ffff::1");
+    assert.equal(fresh.statusCode, 429);
+    assert.match(errorOf(fresh), /Codes are paused for now.*The link or QR code you were sent still works/);
+    // …a signed-in member isn't…
+    assert.deepEqual(await owner.call(api.pickup.resolve, { body: { code: link.code } }), {
+      kind: "share",
+      path: `/s/${link.token}`,
+    });
+    // …and a day after the oldest of them, codes work again.
+    checkCodeAttempt(ctx, "2001:db8:ffff::1", t0 + 24 * 3_600_000 + 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("listing links doesn't issue new codes; the share screen asks for one when it shows it", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "lazy-owner");
+    const { result } = await send(owner, [{ path: "lazy.txt", data: "content" }]);
+    const link = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    age(instance, "share", link.id, CODE_LIFE_MS + 1);
+    const issued = () =>
+      instance.ctx.db.value<number>("SELECT count(*) FROM pickup_codes WHERE target_id = ?", link.id);
+    const before = issued();
+    const [listed] = await owner.call(api.links.list);
+    assert.equal(listed.code, link.code, "the list shows the last code, which the screen asks about");
+    assert.equal(issued(), before, "no new code until the owner looks at this link");
+    const current = await owner.call(api.pickup.current, { body: { code: listed.code } });
+    assert.ok(current.code && current.code !== link.code);
+    assert.equal(issued(), before + 1);
+  } finally {
+    await instance.close();
+  }
+});
