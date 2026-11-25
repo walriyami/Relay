@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { api } from "../shared/api.ts";
 import { deviceKind, deviceLabel } from "../shared/devices.ts";
 import { DEFAULTS, LIMITS, type DeviceKind, type Me } from "../shared/model.ts";
+import { sweepAuth } from "../server/modules/auth/index.ts";
 import { addressKey } from "../server/modules/auth/limits.ts";
+import { CODES_PER_DAY } from "../server/modules/auth/login-codes.ts";
 import { checkPassword } from "../server/modules/auth/passwords.ts";
 import { hashPassword, verifyPassword } from "../server/lib/secrets.ts";
 import { admin, ApiError, Client, member, start, type Instance } from "./support/harness.ts";
@@ -416,6 +418,35 @@ test("login code creation is rate limited", async () => {
     // The limit is per account, so someone else on the same address can still add a device.
     const other = await member(instance, "iris");
     assert.equal(await status(other.call(api.loginCodes.create)), 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+// Each code's digits stay held back for a month, so the daily cap counts every code made, including
+// ones replaced, used or expired since, whose rows are cleared away long before then.
+test("the daily cap on sign-in codes counts every code made, even ones cleared away", async () => {
+  const instance = await start();
+  try {
+    const { phone } = await codeFlow(instance);
+    for (let i = 1; i < 5; i++) await phone.call(api.loginCodes.create);
+    await sweepAuth(instance.ctx, Date.now());
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM login_codes"), 1, "replaced codes are cleared away");
+    // The rest of a day's worth, made before this test began.
+    const user = instance.ctx.db.value<string>("SELECT id FROM users WHERE username = 'hana'")!;
+    for (let i = 5; i < CODES_PER_DAY; i++)
+      instance.ctx.db.run(
+        "INSERT INTO failures(kind, key, time) VALUES('new-device-code', ?, ?)",
+        user,
+        Date.now() - 3_600_000,
+      );
+    const refused = await phone.raw({ method: "POST", url: api.loginCodes.create.path });
+    assert.equal(refused.statusCode, 429);
+    assert.equal(refused.json<{ error: string }>().error.includes("today"), true);
+    // Not the per-minute limit: the app doesn't count down to a minute from now.
+    assert.equal(refused.headers["retry-after"], undefined);
+    // Another member's codes are their own.
+    assert.equal(await status((await member(instance, "iris")).call(api.loginCodes.create)), 200);
   } finally {
     await instance.close();
   }
