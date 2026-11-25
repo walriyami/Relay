@@ -184,7 +184,7 @@ export function registerPush(app: FastifyInstance, ctx: Context) {
         held.user_id !== member.userId &&
         !(sameText(held.p256dh, body.keys.p256dh) && sameText(held.auth, body.keys.auth))
       )
-        fail(409, "These notifications belong to another account. Turn notifications off and on again to use them.");
+        fail(409, "This browser’s notification address belongs to another account.");
       ctx.db.run(
         "DELETE FROM push_subscriptions WHERE endpoint = ? AND device_id != ?",
         body.endpoint,

@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { api, call } from "../api";
+import { api, ApiError, call } from "../api";
 import { isIOS, isInstalled, serviceWorker } from "./pwa";
 
 // Push notifications for this device (server/modules/push): turned on here, in Settings or from the
@@ -70,6 +70,24 @@ async function register(sub: PushSubscription) {
   await call(api.push.subscribe, { body: { endpoint: json.endpoint, keys: json.keys } });
 }
 
+/**
+ * Registers this browser's subscription. If the server says its address belongs to another account
+ * (someone else claimed it while this browser had none on file), a new subscription gets a new address.
+ */
+async function registerOrRenew(sub: PushSubscription, key: string) {
+  try {
+    await register(sub);
+    return sub;
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 409)) throw error;
+    await sub.unsubscribe().catch(() => {});
+    const fresh = await subscription(key, true);
+    if (!fresh) throw error;
+    await register(fresh);
+    return fresh;
+  }
+}
+
 let checking: Promise<void> | null = null;
 /**
  * Works out whether notifications are on, and repairs what can be repaired without asking: a browser
@@ -112,7 +130,7 @@ export async function enablePush() {
     const status = await call(api.push.status);
     const sub = await subscription(status.key, true);
     if (!sub) throw new Error("This browser couldn’t turn on notifications.");
-    await register(sub);
+    await registerOrRenew(sub, status.key);
     set({ on: true });
   } finally {
     set({ busy: false, checked: true });
