@@ -7,6 +7,7 @@ import { DocumentArt } from "./DocumentArt";
 import { Thumbnail } from "./Thumbnail";
 import { Button, IconButton, toast } from "./ui";
 import { UserText } from "./UserText";
+import { shownText } from "../../shared/text";
 
 // Collapsed selections show a few rows; more on request.
 const PREVIEW = 6;
@@ -328,7 +329,7 @@ export function SelectionRow({ item, onRemove }: { item: DraftItem; onRemove: ()
         <Thumbnail compact file={item.file} entry={{ path: item.path, mime: item.file.type, size: item.size }} />
       )}
       <div className="selection-text">
-        <span className="selection-name" title={item.name}>
+        <span className="selection-name" title={shownText(item.name)}>
           <UserText>{item.name}</UserText>
         </span>
         <span className="muted">

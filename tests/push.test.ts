@@ -258,6 +258,8 @@ test("files sent to a request notify its owner, unless they turned request activ
         body: { destination: { kind: "save" } },
       });
     };
+    // A name saved before direction overrides were dropped doesn't reorder the message.
+    instance.ctx.db.run("UPDATE requests SET name = ? WHERE id = ?", "Tax‮ papers‬", request.id);
     await upload("Dana");
     await eventually(() => service.received.length === 1);
     assert.deepEqual(browser.decrypt(service.received[0].body), {

@@ -39,7 +39,7 @@ import {
 } from "../../lib/transfers";
 import { useLive } from "../../lib/live";
 import { useConnection } from "../../lib/connection";
-import { LIMITS, api, type Delivery, type Device } from "../../api";
+import { LIMITS, api, cleanFileName, type Delivery, type Device } from "../../api";
 import { Button, LoadFailed, Popover, dismissToastKey } from "../../components/ui";
 import { CollectionModal } from "../library/CollectionModal";
 import { AddDevice } from "../settings/AddDevice";
@@ -221,7 +221,8 @@ export function Composer({ children }: { children?: React.ReactNode }) {
       files,
       folders,
       text: draft.text,
-      name: name.trim() || null,
+      // Cleaned as a rename is, so a name the server would refuse doesn't fail the whole send.
+      name: cleanFileName(name) || null,
       destination,
     });
     reset();

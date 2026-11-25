@@ -46,7 +46,9 @@ export function StatusRow({
       >
         <strong className="status-row-title">
           {marker}
-          <UserText>{title}</UserText>
+          <span>
+            <UserText>{title}</UserText>
+          </span>
         </strong>
         <span className="chips">{chips}</span>
       </button>

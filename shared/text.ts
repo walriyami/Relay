@@ -48,11 +48,12 @@ export function shownText(value: string): string {
 /**
  * Characters that show as blank space or as nothing, yet aren't ordinary spaces or the joiners real
  * writing needs: Hangul fillers, the blank braille pattern, the zero-width space, word joiners and
- * other invisible operators, the byte-order mark, Mongolian and Khmer invisibles, and interlinear
- * annotation marks. Zero-width joiners and non-joiners (emoji, Indic scripts, Persian) and variation
- * selectors stay.
+ * other invisible operators, the byte-order mark, Khmer invisible vowels, and interlinear annotation
+ * marks. What real writing needs stays: zero-width joiners and non-joiners (emoji, Indic scripts,
+ * Persian), variation selectors, and the Mongolian vowel separator. Other characters that show as
+ * nothing (a soft hyphen, emoji tags) can't make a gap, so they stay too.
  */
-const HIDDEN = /[\u115f\u180e\u200b\u2060-\u206f\u2800\u3164\ufeff\uffa0\ufff9-\ufffb]|\u1160|\u17b4|\u17b5/g;
+const HIDDEN = /[\u115f\u200b\u2060-\u206f\u2800\u3164\ufeff\uffa0\ufff9-\ufffb]|\u1160|\u17b4|\u17b5/g;
 /** The most spaces a name may have in a row. Characters that show nothing don't break a run. */
 export const MAX_SPACES = 3;
 const SPACE_RUN = new RegExp(`(?:\\s\\p{Default_Ignorable_Code_Point}*){${MAX_SPACES + 1},}`, "gu");

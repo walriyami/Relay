@@ -43,6 +43,8 @@ import { LinkPanel } from "../../components/LinkPanel";
 import { addFilesTo } from "../library/actions";
 import { Button, IconButton, ProgressBar, confirmDialog } from "../../components/ui";
 import { UserText } from "../../components/UserText";
+import { shown } from "../../components/UserText";
+import { shownText } from "../../../shared/text";
 
 export function useTransfers() {
   useSyncExternalStore(subscribe, snapshot);
@@ -129,10 +131,10 @@ export function TransferStrip({
       ) : (
         <CircleAlert className="transfer-x" size={16} aria-hidden />
       )}
-      <strong className="transfer-name" title={t.name}>
+      <strong className="transfer-name" title={shownText(t.name)}>
         <UserText>{t.name}</UserText>
       </strong>
-      <span className="transfer-line muted">{status}</span>
+      <span className="transfer-line muted">{shown(status)}</span>
       <Announce t={t} answer={answer} />
       <Button size="sm" variant="ghost" onClick={onShow}>
         Show
@@ -472,11 +474,11 @@ export function TransferCard({
         ) : (
           <X className="transfer-x" size={18} aria-hidden />
         )}
-        <strong className="transfer-name" title={t.name}>
+        <strong className="transfer-name" title={shownText(t.name)}>
           <UserText>{t.name}</UserText>
         </strong>
         <span className="transfer-line muted">
-          {status}
+          {shown(status)}
           {files > 0 && t.status === "done" ? ` · ${plural(t.doneFiles, "file")} · ${bytes(t.totalBytes)}` : ""}
         </span>
         <Announce t={t} answer={answer} />
@@ -502,7 +504,7 @@ export function TransferCard({
       {showProgress && <ProgressBar value={t.sentBytes} max={t.totalBytes} label={`Progress for ${t.name}`} />}
       <Announce t={t} answer={answer} />
       <div className="transfer-status">
-        <span>{status}</span>
+        <span>{shown(status)}</span>
         {showProgress && files > 1 && (
           <span className="muted">
             {t.doneFiles.toLocaleString()} of {plural(files, "file")}
@@ -621,7 +623,7 @@ function TransferHero({
         </div>
       )}
       <Announce t={t} answer={answer} />
-      <strong className="transfer-hero-name" title={t.name}>
+      <strong className="transfer-hero-name" title={shownText(t.name)}>
         <UserText>{t.name}</UserText>
       </strong>
       {showProgress ? (

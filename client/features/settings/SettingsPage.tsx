@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../components/icons";
-import { ApiError, api, call, shownText, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
+import { ApiError, api, call, type ActivityPrefs, type Device, type Me, type Prefs } from "../../api";
 import { LIMITS, USERNAME, displayName } from "../../../shared/model";
 import { useSession } from "../../app/session";
 import { DeviceIcon, useEditDevice } from "../../app/devices";
@@ -710,7 +710,13 @@ function DevicesSection() {
                 title: "Sign out all other devices?",
                 body: (
                   <>
-                    <UserText>{others.map((d) => shownText(d.name)).join(", ")}</UserText> will need to sign in again.
+                    {others.map((d, i) => (
+                      <span key={d.id}>
+                        {i > 0 && ", "}
+                        <UserText>{d.name}</UserText>
+                      </span>
+                    ))}{" "}
+                    will need to sign in again.
                   </>
                 ),
                 confirm: "Sign out others",

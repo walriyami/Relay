@@ -125,13 +125,21 @@ test("names stored before the rule still list, download under a clean name, and 
   try {
     const sara = await member(instance, "sara");
     const { result } = await send(sara, [{ path: "invoice.pdf", data: "pdf" }]);
-    const padded = `invoice.pdf${" ".repeat(30)}ㅤ.exe`;
+    const padded = `invoice.pdf‮${" ".repeat(30)}ㅤ.exe`;
     instance.ctx.db.run("UPDATE nodes SET name = ? WHERE item = ?", padded, result.itemId);
+    instance.ctx.db.run("UPDATE items SET name = ? WHERE id = ?", padded, result.itemId);
     const item = await sara.call(api.items.get, { params: { id: result.itemId } });
     assert.equal(item.nodes[0].name, padded);
     const res = await sara.raw({ method: "GET", url: urls.nodeContent(item.nodes[0].id) });
     assert.equal(res.statusCode, 200);
     assert.equal(res.headers["content-disposition"], "attachment; filename*=UTF-8''invoice.pdf%20.exe");
+    // Adding files keeps the item's name, which the web app sends along unchanged.
+    await send(sara, [{ path: "more.txt", data: "x" }], { item: result.itemId, name: padded });
+    // A name taken already gets " (2)" without making a longer run of spaces.
+    await send(sara, [{ path: "notes   .txt", data: "x" }], { item: result.itemId });
+    await send(sara, [{ path: "notes   .txt", data: "y" }], { item: result.itemId });
+    const names = (await sara.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => n.name);
+    assert.deepEqual(names.slice(1).sort(), ["more.txt", "notes   .txt", "notes (2).txt"]);
     await sara.call(api.items.trash, { params: { id: result.itemId } });
     await sara.call(api.items.remove, { params: { id: result.itemId } });
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM nodes WHERE item = ?", result.itemId), 0);

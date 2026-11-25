@@ -9,6 +9,7 @@ import { download } from "../../lib/download";
 import { timeZone } from "../../lib/source";
 import { StorageMeter } from "../../components/StorageMeter";
 import { Button, LoadFailed, PageLink, confirmDialog, toast } from "../../components/ui";
+import { UserText } from "../../components/UserText";
 
 export function StorageSummary({ me }: { me: Me }) {
   // Every upload, deletion and Trash change moves these numbers.
@@ -96,7 +97,9 @@ export function StorageSummary({ me }: { me: Me }) {
                 {data.largest.map((item) => (
                   <li key={item.id}>
                     <PageLink to={`/files/${item.id}`} className="storage-largest-link">
-                      <span className="storage-largest-name">{item.name}</span>
+                      <span className="storage-largest-name">
+                        <UserText>{item.name}</UserText>
+                      </span>
                       <span className="storage-largest-size">
                         {bytes(item.bytes)} · {percent(item.bytes, total)}
                       </span>

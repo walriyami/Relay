@@ -5,6 +5,7 @@ import { addShare, discardShare, leaveShare, readShare, type Incoming } from "..
 import { Thumbnail } from "../../components/Thumbnail";
 import { Button, toast } from "../../components/ui";
 import { UserText } from "../../components/UserText";
+import { shownText } from "../../../shared/text";
 
 // Relay opened from the share sheet (/share). What arrived is shown first, with Add and Discard:
 // an outside website can open this address or submit the same form, so nothing reaches the Send
@@ -104,7 +105,7 @@ export function ShareIntake() {
               <li className="selection-row" key={index}>
                 <Thumbnail compact file={file} entry={{ path: file.name, mime: file.type, size: file.size }} />
                 <div className="selection-text">
-                  <span className="selection-name" title={file.name}>
+                  <span className="selection-name" title={shownText(file.name)}>
                     <UserText>{file.name || "Unnamed file"}</UserText>
                   </span>
                   <span className="muted">{bytes(file.size)}</span>

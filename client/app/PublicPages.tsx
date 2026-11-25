@@ -169,7 +169,7 @@ const foldCase = (value: string) => value.replace(/[A-Z]/g, (c) => c.toLowerCase
 function freeName(name: string, taken: Set<string>, file: boolean) {
   if (!taken.has(foldCase(name))) return name;
   const dot = file ? name.lastIndexOf(".") : -1;
-  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const stem = (dot > 0 ? name.slice(0, dot) : name).trimEnd();
   const extension = dot > 0 ? name.slice(dot) : "";
   for (let n = 2; ; n++) {
     const candidate = `${stem} (${n})${extension}`;
