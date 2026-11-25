@@ -191,6 +191,68 @@ test("zipLayout: names stored before the name rules are written as they'd downlo
   ]);
 });
 
+test("zipLayout: names that would land on one file, or that Windows can't hold, are written so each unzips apart", async () => {
+  const entry = (path: string, kind: "folder" | "text" = "text") => ({
+    path,
+    created: Date.UTC(2026, 0, 1),
+    kind,
+    size: 0,
+    crc32: null,
+  });
+  const long = `${"\u00e9".repeat(126)}.txt`; // 256 bytes; Relay keeps names to 255 characters, not bytes
+  const longest = `${"a".repeat(251)}.txt`; // exactly 255 bytes, so it fits as stored
+  const entries = [
+    // One name composed and decomposed, and in another case: they're one file on macOS and Windows.
+    entry("\u00c9t\u00e9.txt"),
+    entry("E\u0301te\u0301.txt"),
+    entry("\u00e9T\u00c9.TXT"),
+    entry(longest),
+    entry(longest.toUpperCase()),
+    entry(long),
+    // Names Windows keeps for devices, or can't hold.
+    entry("CON"),
+    entry("nul.tar.gz"),
+    entry("Com1 .txt"),
+    entry("a:b*c?.txt"),
+    entry('say "hi" <now> |.txt'),
+    entry("ends with dots..."),
+    entry("Folder. ", "folder"),
+    entry("Folder. /in.txt"),
+    // Names that only look like them stay as they are.
+    entry("CONSOLE.txt"),
+    entry("nullable"),
+  ];
+  const result = inspect(
+    await read(
+      zipLayout(entries, () => ({ data: Buffer.from("x") })),
+      0,
+    ),
+  );
+  assert.equal(result.bad, null);
+  if (result.unzip !== null) assert.equal(result.unzip, 0);
+  const trimmed = `${"A".repeat(247)} (2).TXT`;
+  const fittedLong = `${"\u00e9".repeat(125)}.txt`;
+  assert.deepEqual(result.names, [
+    "\u00c9t\u00e9.txt",
+    "\u00c9t\u00e9 (2).txt",
+    "\u00e9T\u00c9 (3).TXT",
+    longest,
+    trimmed,
+    fittedLong,
+    "CON_",
+    "nul_.tar.gz",
+    "Com1_ .txt",
+    "a-b-c-.txt",
+    "say -hi- -now- -.txt",
+    "ends with dots",
+    "Folder/",
+    "Folder/in.txt",
+    "CONSOLE.txt",
+    "nullable",
+  ]);
+  for (const name of result.names) assert.ok(Buffer.byteLength(name.replace(/\/$/, "").split("/").at(-1)!) <= 255);
+});
+
 test("zipLayout: any range of an archive with a large directory is the same slice of the whole", async () => {
   const texts = Array.from({ length: 50 }, (_, i) => Buffer.from(`text ${i} `.repeat(i)));
   const entries = Array.from({ length: 3000 }, (_, i) => ({

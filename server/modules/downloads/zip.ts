@@ -139,47 +139,90 @@ function partAt(starts: Float64Array, count: number, at: number) {
  */
 const OUTSIDE = /^\/|\/$|\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\\/;
 
-/** "photo.jpg" → "photo (2).jpg"; folders and names without an extension get the number at the end. */
-function numbered(name: string, n: number, folder: boolean) {
-  const dot = folder ? -1 : name.lastIndexOf(".");
-  return dot > 0 ? `${name.slice(0, dot)} (${n})${name.slice(dot)}` : `${name} (${n})`;
-}
-
-/** One stored name as written: cleaned as a downloaded file's is, and never "", ".", ".." or a slash. */
-const writtenName = (name: string) => cleanFileName(name).replace(/[/\\]/g, "-") || "Untitled";
+/** The most bytes a name may have on the file systems people unzip onto. */
+const MAX_NAME_BYTES = 255;
+/** Characters Windows can't hold in a name. */
+const WINDOWS_CHARACTERS = /[<>:"|?*]/g;
+/** Names Windows keeps for devices, whatever follows a dot: "CON", "nul.txt", "COM1.tar.gz". */
+const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?=\s*(?:\.|$))/i;
 
 /**
- * The paths that must be written differently, by entry: names stored before Relay's name rules may
+ * `name` with `suffix` before its extension (folders have none), shortened before the suffix and
+ * extension, never within a character, to fit MAX_NAME_BYTES.
+ */
+function fitted(name: string, suffix: string, folder: boolean) {
+  if (!suffix && name.length <= MAX_NAME_BYTES / 3) return name;
+  const dot = folder ? -1 : name.lastIndexOf(".");
+  // An "extension" longer than any real one is part of the name, so it can be shortened too.
+  const split = dot > 0 && Buffer.byteLength(name.slice(dot)) <= 32;
+  const extension = split ? name.slice(dot) : "";
+  let stem = split ? name.slice(0, dot) : name;
+  const room = MAX_NAME_BYTES - Buffer.byteLength(suffix + extension);
+  let bytes = Buffer.byteLength(stem);
+  if (bytes > room) {
+    const characters = [...stem];
+    while (bytes > room) bytes -= Buffer.byteLength(characters.pop()!);
+    // Windows drops dots and spaces at the end of a name.
+    stem = characters.join("").replace(/[. ]+$/, "");
+  }
+  return stem + suffix + extension;
+}
+
+/**
+ * How a name in a ZIP is compared with the others in its folder: as macOS and Windows do, ignoring
+ * case (in every script, not only ASCII) and how accented letters are put together.
+ */
+const folded = (path: string) =>
+  /^[\x20-\x7e]*$/.test(path) ? path.toLowerCase() : path.toUpperCase().toLowerCase().normalize("NFC");
+
+/**
+ * One stored name as written: cleaned as a downloaded file's is; never "", ".", ".." or a slash;
+ * holding nothing Windows can't (a reserved device name, `< > : " | ? *`, a dot or space at the
+ * end); and at most MAX_NAME_BYTES long. These rewrites are only inside ZIPs: the files keep their names.
+ */
+function writtenName(name: string) {
+  const clean = cleanFileName(name)
+    .replace(/[/\\]/g, "-")
+    .replace(WINDOWS_CHARACTERS, "-")
+    .replace(/[. ]+$/, "")
+    .replace(WINDOWS_DEVICE, "$&_");
+  return fitted(clean || "Untitled", "", false);
+}
+
+/**
+ * The paths that must be written differently, by entry. Names stored before Relay's name rules may
  * hide what they are (a direction override showing "…gpj.exe" as "…exe.jpg", 50 spaces before
- * ".exe"), and an unzip tool shows them as they are. Each name in a path is cleaned as a downloaded
- * file's is, so a folder's new name carries over to everything inside it. A cleaned name that
- * matches another in its folder, ignoring case as macOS and Windows do, gets a number; paths that
- * needed no cleaning keep theirs. Nothing may put an entry outside its folder when unzipped: a name
- * that is, or cleans to, "." or ".." or nothing is written "Untitled", and a slash or backslash "-".
- * Null when nothing needs it, as for nearly every archive.
+ * ".exe"), and an unzip tool shows them as they are; others are fine here but can't be unzipped on
+ * Windows; and two names Relay keeps apart ("É.txt" and "é.txt") can land on one file on macOS or
+ * Windows. Each name in a path is written as `writtenName` says, so a folder's new name carries over
+ * to everything inside it. Paths that need no change keep their place first, in the archive's
+ * order; a path that would land on one before it in its folder, ignoring case and how its letters
+ * are put together, gets a number, kept within MAX_NAME_BYTES. Nothing may put an entry outside its
+ * folder when unzipped: a name that is, or cleans to, "." or ".." or nothing is written "Untitled",
+ * and a slash or backslash "-". Null when nothing needs it, as for nearly every archive.
  */
 function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null {
   const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
   const leafOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+  // Folded paths already written, whether as stored or changed.
+  const taken = new Set<string>();
   // Whether a path, and every folder above it, is written as stored.
   const asStored = new Map<string, boolean>();
   const stored = (path: string): boolean => {
     let known = asStored.get(path);
     if (known === undefined) {
-      // The folders above are judged first, so each one written as stored is known, and claims its
-      // place, even when a name inside it is cleaned.
+      // The folders above are judged first, so each one written as stored claims its place first.
       const above = !path.includes("/") || stored(parentOf(path));
-      known = above && writtenName(leafOf(path)) === leafOf(path);
+      const key = folded(path);
+      known = above && writtenName(leafOf(path)) === leafOf(path) && !taken.has(key);
+      if (known) taken.add(key);
       asStored.set(path, known);
     }
     return known;
   };
   const changed = entries.flatMap((entry, i) => (stored(entry.path) ? [] : [i]));
   if (!changed.length) return null;
-  // Every path written as stored, with the folders above it, claims its place first.
-  const taken = new Set<string>();
-  for (const [path, same] of asStored) if (same) taken.add(path.toLowerCase());
-  // Each original path (a folder's, or an entry's) and what it's written as; and for each cleaned
+  // Each original path (a folder's, or an entry's) and what it's written as; and for each changed
   // path, the next number to try, so many names cleaning to one don't each count up from 2.
   const written = new Map<string, string>();
   const next = new Map<string, number>();
@@ -190,13 +233,13 @@ function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null 
     const into = path.includes("/") ? `${write(parentOf(path), true)}/` : "";
     const clean = writtenName(leafOf(path));
     result = into + clean;
-    const key = result.toLowerCase();
+    const key = folded(result);
     if (taken.has(key)) {
       let n = next.get(key) ?? 2;
-      while (taken.has((result = into + numbered(clean, n, folder)).toLowerCase())) n++;
+      while (taken.has(folded((result = into + fitted(clean, ` (${n})`, folder))))) n++;
       next.set(key, n + 1);
     }
-    taken.add(result.toLowerCase());
+    taken.add(folded(result));
     written.set(path, result);
     return result;
   };
