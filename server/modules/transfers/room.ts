@@ -97,7 +97,7 @@ export const capacityRoom = (ctx: Context, visitors: boolean) =>
 /** Free disk space beyond Relay's headroom that unfinished uploads haven't claimed. */
 export function diskRoom(ctx: Context, visitors: boolean) {
   const disk = statfsSync(ctx.config.root);
-  return disk.bavail * disk.bsize - DISK_HEADROOM - outstandingBytes(ctx, visitors);
+  return disk.bavail * disk.bsize - DISK_HEADROOM - ctx.transfers.outstandingBytes(visitors);
 }
 
 /** What the owner's storage limit still allows, every unfinished upload counted in full. */
