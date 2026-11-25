@@ -193,6 +193,9 @@ export async function buildApp(config: Config): Promise<App> {
       );
     });
     app.setErrorHandler((error, req, reply) => {
+      // Some refusals come before the hook that adds these: waiting for the proxy at startup, and
+      // the rate limiter's. Every answer carries them, and no error is kept by a cache.
+      secured(reply, config.origin).header("Cache-Control", "no-store");
       if (error instanceof zod.$ZodError) return reply.code(400).send({ error: "Please check the supplied fields." });
       if (error instanceof HttpError) return reply.code(error.status).send({ error: error.message });
       const status = (error as { statusCode?: number }).statusCode;
