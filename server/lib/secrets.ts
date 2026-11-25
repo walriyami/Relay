@@ -2,9 +2,9 @@ import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSa
 import {
   closeSync,
   constants,
-  existsSync,
   fsyncSync,
   linkSync,
+  lstatSync,
   openSync,
   readFileSync,
   unlinkSync,
@@ -99,13 +99,22 @@ const SECRET_KEY = /^[\x21-\x7e]{32,}$/;
 
 export class SecretKeyInvalid extends Error {
   readonly code = "RELAY_SECRET_KEY_INVALID";
-  constructor() {
+  /** Why the file couldn't be read, when it couldn't; for the log. */
+  readonly detail?: string;
+  constructor(detail?: string) {
     super(
-      "Relay's key file (secret.key in the data folder) is empty or damaged, so Relay has stopped rather than " +
-        "use a key anyone could guess. If you have a backup of the data folder, put its secret.key back. " +
-        "Otherwise delete secret.key and start Relay again to make a new key: every file stays, but links, " +
-        "requests, invitations and codes handed out before stop working and have to be shared again.",
+      detail
+        ? // Unreadable isn't damaged: a key that's there but locked away (say, after a change of owner)
+          // still matches every link, so deleting it would be the wrong advice.
+          "Relay couldn't read its key file (secret.key in the data folder). Check that the file is there " +
+            "and that Relay is allowed to read it, then start Relay again."
+        : "Relay's key file (secret.key in the data folder) is empty or damaged, so Relay has stopped rather " +
+            "than use a key anyone could guess. If a backup of the data folder has a secret.key that isn't " +
+            "empty, put it back. Otherwise delete secret.key and start Relay again to make a new key: every " +
+            "file stays, but links, requests, invitations, sign-in links and codes handed out before stop " +
+            "working and have to be shared again.",
     );
+    this.detail = detail;
   }
 }
 
@@ -143,8 +152,14 @@ export class Secrets {
       return;
     }
     const file = join(dataRoot, "secret.key");
-    if (!existsSync(file)) createKeyFile(dataRoot, file);
-    const key = readFileSync(file, "utf8").trim();
+    // lstat, so a link to a missing file counts as there (and unreadable), not as no key yet.
+    if (!lstatSync(file, { throwIfNoEntry: false })) createKeyFile(dataRoot, file);
+    let key: string;
+    try {
+      key = readFileSync(file, "utf8").trim();
+    } catch (error) {
+      throw new SecretKeyInvalid((error as Error).message);
+    }
     // An empty or cut-short key would let anyone work out every link and request token from its id.
     // Making a new one would silently break every link already handed out, so the owner decides.
     if (!SECRET_KEY.test(key)) throw new SecretKeyInvalid();

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Secrets } from "../server/lib/secrets.ts";
@@ -31,6 +31,10 @@ test("secret.key: an empty or short key stops startup instead of being used or r
       );
       assert.equal(readFileSync(join(root, "secret.key"), "utf8"), damaged, "the file is left for the owner");
     }
+    // A link to a key that's gone is explained the same way, not replaced or shown as a stack trace.
+    rmSync(join(root, "secret.key"));
+    symlinkSync(join(root, "gone.key"), join(root, "secret.key"));
+    assert.throws(() => new Secrets(root), { code: "RELAY_SECRET_KEY_INVALID" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

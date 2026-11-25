@@ -94,7 +94,7 @@ If recovery fails, restore the snapshot walctl took before the last deploy. That
 
 ### If the key file is damaged
 
-Relay writes `secret.key` in full before using it. If an older start was cut short and left it empty or shorter than 32 characters, Relay stops with **Relay's key file … is empty or damaged** rather than use a key anyone could guess, and it doesn't replace the file itself. Put back `secret.key` from a backup of the data, such as the snapshot walctl took before the last deploy, and start Relay. Without a backup, delete `secret.key` and start Relay: it makes a new key and every file stays, but links, requests, invitations and codes handed out before stop working and have to be shared again.
+Relay writes `secret.key` in full before using it. If an older version's first start was cut short and left it empty or shorter than 32 characters, Relay stops with **Relay's key file … is empty or damaged** rather than use a key anyone could guess, and it doesn't replace the file itself. (If it says it **couldn't read its key file**, the key is probably fine: check that the file is there and that Relay's user may read it.) If a backup of the data, such as the snapshot walctl took before the last deploy, has a `secret.key` that isn't empty, put it back and start Relay. Otherwise (a key that was empty from the first start is empty in every backup too) delete `secret.key` and start Relay: it makes a new key and every file stays, but links, requests, invitations, sign-in links and codes handed out before stop working and have to be shared again.
 
 ### Resetting content
 
