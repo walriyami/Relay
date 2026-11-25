@@ -6,7 +6,8 @@ import { uuidv7 } from "../../../shared/ids.ts";
 import { authOf, cookieOptions, visitorCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
-import { FailureLog, wideNetworkOf } from "../auth/limits.ts";
+import { wideNetworkOf } from "../auth/limits.ts";
+import { FailureCounter } from "../../lib/failures.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
@@ -111,6 +112,8 @@ type VisitRow = { id: string; unlocked: string | null; last: number };
 const UNLOCK_FAILURES = { max: 10, windowMs: 15 * 60_000 };
 /** Wrong passwords per link from everyone together in an hour: a ceiling on guessing from many networks. */
 const UNLOCK_FAILURES_PER_LINK = { max: 100, windowMs: 60 * 60_000 };
+/** Wrong passwords for a link after which a network's checks wait behind everyone else's. */
+const SUSPECT_AFTER = 3;
 
 /**
  * Who is asking for a link's content: "owner" for its owner, signed in, who is never counted or
@@ -193,8 +196,9 @@ export function createLinks(ctx: Context): Links {
     locked,
   });
   const ownerAccess = (row: LinkRow): ShareAccess => ({ ...granted(row, null), byOwner: true });
-  const failures = new FailureLog(UNLOCK_FAILURES.windowMs);
-  const linkFailures = new FailureLog(UNLOCK_FAILURES_PER_LINK.windowMs);
+  // Kept in the database, so a restart doesn't forgive anyone guessing.
+  const failures = new FailureCounter(ctx, "link-password", UNLOCK_FAILURES.windowMs);
+  const linkFailures = new FailureCounter(ctx, "link-password-link", UNLOCK_FAILURES_PER_LINK.windowMs);
 
   function open(token: string, req: FastifyRequest, reply: FastifyReply): ShareAccess {
     const row = find(token);
@@ -242,7 +246,9 @@ export function createLinks(ctx: Context): Links {
             "This link has had too many wrong passwords. Try again in an hour, or ask the person who shared it for a new link.",
           );
         try {
-          if (!(await verifyPassword(password, row.password_hash))) {
+          // A network that keeps getting it wrong waits behind everyone else for the password check.
+          const lane = failures.count(pair, now) >= SUSPECT_AFTER ? "suspect" : "fresh";
+          if (!(await verifyPassword(password, row.password_hash, { lane }))) {
             failures.add(pair, Date.now());
             linkFailures.add(row.id, Date.now());
             fail(403, "That password isn’t right.");

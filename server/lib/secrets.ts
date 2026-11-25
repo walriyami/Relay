@@ -25,22 +25,26 @@ export function useTestPasswordCost() {
   SCRYPT.N = 2 ** 10;
 }
 
-// One scrypt uses about 32 MiB. Limit active derivations and bound the wait list so a distributed
+// One scrypt uses about 32 MiB. Limit active derivations and bound the wait lists so a distributed
 // burst at public setup/join/sign-in endpoints cannot turn into unbounded native work and memory.
-// Browsers an account has signed in on before have a wait list of their own and go first, so a
-// flood of strangers' guesses can't keep the account's owner out.
+// Checks wait in three lanes, each with room of its own, served in this order:
+// - "known": a browser the account has signed in on before, or a signed-in member confirming
+//   their password, so a flood of strangers' guesses can't keep the account's owner out;
+// - "fresh": joining with an invitation, setup, and sign-ins from networks that haven't been
+//   getting passwords wrong, so new members and new devices get in during a flood;
+// - "suspect": networks that keep getting passwords wrong. A guessing flood lands here, fills
+//   this lane alone, and is the first to be turned away.
+export type ScryptLane = "known" | "fresh" | "suspect";
 const MAX_ACTIVE_SCRYPT = 2;
-const MAX_QUEUED_SCRYPT = 32;
-const MAX_QUEUED_PRIORITY = 16;
+const MAX_QUEUED: Record<ScryptLane, number> = { known: 16, fresh: 32, suspect: 32 };
+const LANES: ScryptLane[] = ["known", "fresh", "suspect"];
 let activeScrypt = 0;
-const scryptQueue: Array<() => void> = [];
-const priorityQueue: Array<() => void> = [];
+const queues: Record<ScryptLane, Array<() => void>> = { known: [], fresh: [], suspect: [] };
 
-async function withScrypt<T>(work: () => Promise<T>, priority = false): Promise<T> {
+async function withScrypt<T>(work: () => Promise<T>, lane: ScryptLane): Promise<T> {
   if (activeScrypt >= MAX_ACTIVE_SCRYPT) {
-    const queue = priority ? priorityQueue : scryptQueue;
-    if (queue.length >= (priority ? MAX_QUEUED_PRIORITY : MAX_QUEUED_SCRYPT))
-      fail(429, "Password service is busy. Try again shortly.");
+    const queue = queues[lane];
+    if (queue.length >= MAX_QUEUED[lane]) fail(429, "Password service is busy. Try again shortly.");
     await new Promise<void>((resolve) => queue.push(resolve));
   } else {
     activeScrypt++;
@@ -49,7 +53,9 @@ async function withScrypt<T>(work: () => Promise<T>, priority = false): Promise<
   try {
     return await work();
   } finally {
-    const next = priorityQueue.shift() ?? scryptQueue.shift();
+    const next = LANES.map((name) => queues[name])
+      .find((queue) => queue.length)
+      ?.shift();
     if (next) next();
     else activeScrypt--;
   }
@@ -59,13 +65,18 @@ export const sha256 = (value: string) => createHash("sha256").update(value).dige
 /** A fresh 256-bit bearer secret (session, invite, grant, CSRF). */
 export const randomToken = () => randomBytes(32).toString("base64url");
 
+/** Every caller has already shown it may set a password (an invitation, a session, a setup or recovery key). */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("base64url");
-  const key = await withScrypt(() => scrypt(password.normalize("NFKC"), salt, 32, SCRYPT));
+  const key = await withScrypt(() => scrypt(password.normalize("NFKC"), salt, 32, SCRYPT), "fresh");
   return `scrypt$${SCRYPT.N}$${salt}$${key.toString("base64url")}`;
 }
-/** `priority` is for a browser the account has signed in on before. */
-export async function verifyPassword(password: string, encoded: string, { priority = false } = {}): Promise<boolean> {
+/** `lane` says who is waiting (see `withScrypt`); a stranger's check with no history is "fresh". */
+export async function verifyPassword(
+  password: string,
+  encoded: string,
+  { lane = "fresh" }: { lane?: ScryptLane } = {},
+): Promise<boolean> {
   const [scheme, n, salt, key] = encoded.split("$");
   if (scheme !== "scrypt" || !salt || !key) return false;
   const expected = Buffer.from(key, "base64url");
@@ -75,7 +86,7 @@ export async function verifyPassword(password: string, encoded: string, { priori
         ...SCRYPT,
         N: Number(n),
       }),
-    priority,
+    lane,
   );
   return timingSafeEqual(actual, expected);
 }
