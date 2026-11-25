@@ -1,9 +1,17 @@
-// A signal Relay refuses as busy is sent again rather than ending the Nearby connection.
+// The browser's side of Nearby's candidate rule (shared/candidates.ts): every description from
+// another device is cut down to its local candidates before the browser uses it, including the
+// extra lanes', which travel over the connection itself and never pass through Relay. And a signal
+// Relay refuses as busy is sent again rather than ending the connection.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import type * as LinkModule from "../client/lib/nearby/link.ts";
+import type * as LanesModule from "../client/lib/lanes.ts";
 import type { NearbySignal } from "../shared/nearby.ts";
+
+const LOCAL = "a=candidate:1 1 udp 2122260223 192.168.1.30 50001 typ host";
+const PUBLIC = "a=candidate:2 1 udp 2122260223 198.51.100.77 40000 typ host";
+const FOREIGN = ["v=0", LOCAL, PUBLIC, ""].join("\r\n");
 
 class Peer {
   static made: Peer[] = [];
@@ -41,6 +49,43 @@ class Peer {
 }
 
 const events = { open() {}, end() {}, control() {}, stream() {} };
+const lines = (sdp: string | undefined) => (sdp ?? "").split("\r\n").filter((line) => line.startsWith("a=candidate"));
+
+test("a browser uses only the local candidates in another device's offer or answer", async (t) => {
+  // Client modules leave off the extension, as the bundler allows.
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier.startsWith(".") && !/\.[a-z]+(?:[?#].*)?$/i.test(specifier))
+        return nextResolve(`${specifier}.ts`, context);
+      return nextResolve(specifier, context);
+    },
+  });
+  t.after(() => hooks.deregister());
+  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: Peer });
+  t.after(() => Reflect.deleteProperty(globalThis, "RTCPeerConnection"));
+  const { Link }: typeof LinkModule = await import("../client/lib/nearby/link.ts");
+  const { Lanes }: typeof LanesModule = await import("../client/lib/lanes.ts");
+
+  // Answering a Nearby offer.
+  const answering = Link.answer("peer-a", "session-one", FOREIGN, events, () => Promise.resolve());
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(lines(Peer.made.at(-1)!.remote[0]), [LOCAL]);
+  answering.close();
+
+  // The answer to this side's offer.
+  const offering = Link.offer("peer-b", events, () => Promise.resolve());
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await offering.answered(FOREIGN);
+  assert.deepEqual(lines(Peer.made.at(-1)!.remote[0]), [LOCAL]);
+  offering.close();
+
+  // The extra lanes' answers, which arrive over the first lane.
+  const lane = new Peer();
+  const answered = (Lanes.prototype as unknown as { answered: (pcs: Peer[], sdps: string[]) => Promise<void> })
+    .answered;
+  await answered.call({ drop() {} }, [lane], [FOREIGN]);
+  assert.deepEqual(lines(lane.remote[0]), [LOCAL]);
+});
 
 test("a signal Relay refuses as busy is sent again, and the connection carries on", async (t) => {
   const hooks = registerHooks({

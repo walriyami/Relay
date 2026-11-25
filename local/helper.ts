@@ -319,7 +319,7 @@ function isDataOffer(sdp: string) {
  * (see isLocalAddress). Checking any other would reach beyond the local network.
  */
 export function localOffer(sdp: string) {
-  return localCandidates(sdp, { udpOnly: true });
+  return localCandidates(sdp, { loopback: true });
 }
 
 /**

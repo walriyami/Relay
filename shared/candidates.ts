@@ -37,20 +37,28 @@ export function isLocalAddress(address: string) {
   return v6 !== null && (/^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6) || v6 === "::1");
 }
 
+/** Loopback: this device itself, which no other device needs to reach. */
+const isLoopback = (address: string) => address.startsWith("127.") || ipv6(address) === "::1";
+
 /**
- * `sdp` with only its candidates on the local network (see isLocalAddress), and with `udpOnly`, only
- * those over UDP. Any line break separates lines here, as it may in a browser's own reading, so no
- * candidate can hide inside another line.
+ * `sdp` with only its UDP candidates on the local network (see isLocalAddress). Devices on a local
+ * network reach each other over UDP, so another device needs neither TCP candidates nor loopback
+ * ones, and either would let it aim this browser's connection checks at a port of its choosing on
+ * the network or on this machine. `loopback` keeps those too (Direct's helper always has). Any line
+ * break separates lines here, as it may in a browser's own reading, so no candidate can hide
+ * inside another line.
  */
-export function localCandidates(sdp: string, { udpOnly = false } = {}) {
+export function localCandidates(sdp: string, options: { loopback?: boolean } = {}) {
   return sdp
     .split(/\r\n|\r|\n/)
     .filter((line) => {
       const candidate = /^\s*a=candidate:/i.exec(line);
       if (!candidate) return true;
       // a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> …
-      const [, , transport, , address] = line.slice(candidate[0].length).split(" ");
-      return (!udpOnly || transport?.toUpperCase() === "UDP") && isLocalAddress(address ?? "");
+      const [, , transport, , address = ""] = line.slice(candidate[0].length).split(" ");
+      return (
+        transport?.toUpperCase() === "UDP" && isLocalAddress(address) && (!!options.loopback || !isLoopback(address))
+      );
     })
     .join("\r\n");
 }

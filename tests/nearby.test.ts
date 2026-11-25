@@ -298,19 +298,21 @@ test("only local candidates reach a browser, so nobody can make it contact the i
     "a=candidate:14 1 udp 2122260223 fd::1 40006 typ host",
     "a=candidate:15 1 udp 2122260223 ::ffff:198.51.100.77 40007 typ host",
     "a=candidate:16 1 udp 2122260223 relay.local.example.com 40008 typ host",
+    // Local, but aimed at this machine itself: a port of the guest's choosing on the member's computer.
+    "a=candidate:17 1 udp 2122260223 127.0.0.1 631 typ host",
+    "a=candidate:18 1 udp 2122260223 ::1 631 typ host",
     "a=end-of-candidates",
     "",
   ].join("\r\n");
   assert.deepEqual(lines(localCandidates(sdp)), [
     "a=candidate:1 1 udp 2122260223 4b1c2f3e-8a9d-4e5f-a6b7-c8d9e0f1a2b3.local 50000 typ host",
     "a=candidate:2 1 udp 2122260223 192.168.1.30 50001 typ host",
-    "a=candidate:3 1 tcp 1518280447 192.168.1.30 9 typ host tcptype active",
     "a=candidate:4 1 udp 2122260223 fd12:3456::30 50002 typ host",
     "a=candidate:5 1 udp 2122260223 fe80::1c2b:3a4d 50003 typ host",
   ]);
   assert.ok(localCandidates(sdp).includes("a=mid:0\r\n"), "the line it hid behind stays");
-  // Direct's helper takes UDP only, at the same addresses.
-  assert.equal(lines(localCandidates(sdp, { udpOnly: true })).length, 4);
+  // Direct's helper also takes loopback, as it always has.
+  assert.equal(lines(localCandidates(sdp, { loopback: true })).length, 6);
 
   // Relay passes on only the local ones too, for browsers that don't filter them.
   const instance = await start();
