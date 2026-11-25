@@ -2,6 +2,7 @@
 // memory its decoder will need has to fit well inside the server's, whatever the file's size, name
 // or shape, because decoders allocate native memory that no worker limit can stop.
 import type { Metadata } from "sharp";
+import type { HeifLayout } from "./heif-layout.ts";
 
 export const MAX_SOURCE_BYTES = 50 * 1024 ** 2;
 /** Pixels in any image. Within this, the limits below decide by shape, depth and format. */
@@ -31,9 +32,12 @@ export const MAX_JPEG_SCANS = 100;
 /**
  * Bytes per pixel that a whole-image decoder holds at its peak, measured in a 768 MB container:
  * libwebp's RGBA output, a GIF frame plus libvips' copy of it, and AVIF's YUV planes, RGB output
- * and copies (up to 12-bit 4:4:4).
+ * and copies (up to 12-bit 4:4:4 with transparency, 8.7 MP). An AVIF whose streams are 8-bit 4:2:0
+ * without transparency, as phones save them, holds far less: up to 13.1 MP, which covers 12 MP
+ * phone photos. On macOS a 13 MP one added about 200 MiB, the costliest other AVIF allowed about
+ * 300 MiB, and a 16 MP 8-bit one up to 320 MiB, which isn't allowed until it's measured in the container.
  */
-const WHOLE_IMAGE_BYTES_PER_PIXEL = { webp: 4, gif: 8, heif: 24 } as const;
+const WHOLE_IMAGE_BYTES_PER_PIXEL = { webp: 4, gif: 8, heif: 24, eightBitAv1: 16 } as const;
 
 export type JpegLayout = {
   /** Start-of-scan markers before the end of the image. */
@@ -109,87 +113,6 @@ export function jpegLayout(data: Buffer): JpegLayout {
   return { scans, wholeImage: wholeImage || scans > 1, coefficientBytes };
 }
 
-export type HeifLayout = {
-  /**
-   * The largest image the file declares (its `ispe` properties), which is what the decoder holds.
-   * sharp reports the size after any crop the file asks for, so a 64 × 64 crop of a 50 MP frame
-   * looks small while its whole frame is decoded.
-   */
-  width: number;
-  height: number;
-  /**
-   * Whether an image is put together from others: a grid of tiles, an overlay, or a derived copy.
-   * The size of the result is in item data these limits don't read.
-   */
-  derived: boolean;
-};
-
-/** The boxes inside [start, end) of an ISO media file. Throws if one doesn't fit. */
-function* boxes(data: Buffer, start: number, end: number) {
-  let i = start;
-  while (i + 8 <= end) {
-    let size = data.readUInt32BE(i);
-    let header = 8;
-    if (size === 1) {
-      if (i + 16 > end) throw new RangeError("box too short");
-      size = Number(data.readBigUInt64BE(i + 8));
-      header = 16;
-    } else if (size === 0) size = end - i;
-    if (size < header || i + size > end) throw new RangeError("box overruns its parent");
-    yield { type: data.toString("latin1", i + 4, i + 8), body: i + header, end: i + size };
-    i += size;
-  }
-}
-
-const DERIVED_ITEMS = new Set(["grid", "iovl", "iden"]);
-
-/**
- * Walks an AVIF's boxes without decoding it: the largest image size it declares, and whether any
- * image is derived from others. libheif won't decode a frame larger than its declared size, so
- * this bounds what decoding allocates. Null if the file's structure is damaged.
- */
-export function heifLayout(data: Buffer): HeifLayout | null {
-  try {
-    // Only the boxes up to meta are read: what follows is the image data.
-    let meta: { body: number; end: number } | undefined;
-    for (const box of boxes(data, 0, data.length)) {
-      if (box.type !== "meta") continue;
-      meta = box;
-      break;
-    }
-    if (!meta) return null;
-    let width = 0;
-    let height = 0;
-    let derived = false;
-    // meta, iinf, infe and ispe are full boxes: a version byte and three bytes of flags come first.
-    for (const box of boxes(data, meta.body + 4, meta.end)) {
-      if (box.type === "iinf") {
-        const first = box.body + (data[box.body] === 0 ? 6 : 8);
-        for (const entry of boxes(data, first, box.end)) {
-          const version = data[entry.body];
-          if (entry.type !== "infe" || version < 2) continue;
-          // After the item's id (two bytes in version 2, four in 3) and its protection index.
-          const type = entry.body + (version === 2 ? 8 : 10);
-          if (type + 4 <= entry.end && DERIVED_ITEMS.has(data.toString("latin1", type, type + 4))) derived = true;
-        }
-      } else if (box.type === "iprp") {
-        for (const container of boxes(data, box.body, box.end)) {
-          if (container.type !== "ipco") continue;
-          for (const property of boxes(data, container.body, container.end)) {
-            if (property.type !== "ispe" || property.body + 12 > property.end) continue;
-            const w = data.readUInt32BE(property.body + 4);
-            const h = data.readUInt32BE(property.body + 8);
-            if (w * h > width * height) [width, height] = [w, h];
-          }
-        }
-      }
-    }
-    return width && height ? { width, height, derived } : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Why an image can't be previewed within these limits, or null if it can. Judged from the header
  * only: `metadata` is what sharp reads without decoding, `jpeg` the JPEG's marker walk and `heif`
@@ -208,6 +131,7 @@ export function decodeRefusal(
     if (heif.derived) return "Images made of tiles or layers can't be previewed.";
     // The whole frame is decoded, whatever part of it is shown.
     if (heif.width * heif.height > width * height) ({ width, height } = heif);
+    if (heif.side > MAX_SIDE) return "The image is too large to preview.";
   }
   const pixels = width * height;
   if (pixels > MAX_PIXELS || Math.max(width, height) > MAX_SIDE) return "The image is too large to preview.";
@@ -228,11 +152,25 @@ export function decodeRefusal(
       return null;
     case "webp":
     case "gif":
-    case "heif":
-      if (pixels * WHOLE_IMAGE_BYTES_PER_PIXEL[metadata.format] > MAX_DECODED_BYTES)
-        return "The image is too large to preview.";
+    case "heif": {
+      const format = metadata.format === "heif" && heif?.eightBitAv1 ? "eightBitAv1" : metadata.format;
+      if (pixels * WHOLE_IMAGE_BYTES_PER_PIXEL[format] > MAX_DECODED_BYTES) return "The image is too large to preview.";
       return null;
+    }
     default:
       return "This image format cannot be previewed.";
   }
+}
+
+/**
+ * Why a HEIC photo can't be previewed, or null if it can, judged from its box walk before libheif
+ * reads it. libheif decodes the whole of the largest image the file declares or carries, whatever
+ * size it reports after a crop, so that is what's limited. A grid of tiles is how phones store
+ * their photos, and its canvas is part of the walk; an overlay's canvas isn't, so it's refused.
+ */
+export function heicRefusal(heif: HeifLayout | null): string | null {
+  if (!heif) return "The image is damaged.";
+  if (heif.overlay) return "Images made of layers can't be previewed.";
+  if (heif.width * heif.height > MAX_HEIF_PIXELS || heif.side > MAX_SIDE) return "The image is too large to preview.";
+  return null;
 }

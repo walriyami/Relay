@@ -7,12 +7,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import sharp from "sharp";
+import sharp, { type AvifOptions } from "sharp";
 import { api, urls } from "../shared/api.ts";
 import { MAX_QUEUED_PER_PERSON, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { imageSignature } from "../server/modules/downloads/image-signature.ts";
-import { decodeRefusal, heifLayout, jpegLayout } from "../server/modules/downloads/image-limits.ts";
+import { heifLayout } from "../server/modules/downloads/heif-layout.ts";
+import { decodeRefusal, heicRefusal, jpegLayout } from "../server/modules/downloads/image-limits.ts";
 import { Client, member, send, start } from "./support/harness.ts";
+import { heic, hevcSps } from "./support/heif.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 const get = (client: Client, url: string, headers: Record<string, string> = {}, method: "GET" | "HEAD" = "GET") =>
@@ -574,7 +576,14 @@ test("thumbnails: an image too costly to decode is refused from its header, and 
   );
   const croppedMetadata = await sharp(cropped).metadata();
   assert.deepEqual([croppedMetadata.width, croppedMetadata.height], [64, 64]);
-  assert.deepEqual(heifLayout(cropped), { width: 3200, height: 3200, derived: false });
+  assert.deepEqual(heifLayout(cropped), {
+    width: 3200,
+    height: 3200,
+    side: 3200,
+    derived: false,
+    overlay: false,
+    eightBitAv1: false,
+  });
   assert.match(decodeRefusal(croppedMetadata, null, heifLayout(cropped))!, /too large/);
   assert.equal(decodeRefusal(await sharp(avif).metadata(), null, heifLayout(avif)), null);
   assert.equal(heifLayout(avif.subarray(0, 40)), null, "a damaged structure isn't guessed at");
@@ -604,6 +613,70 @@ test("thumbnails: an image too costly to decode is refused from its header, and 
       const data = files[name as keyof typeof files];
       assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(data)}-image.failed`)), `${name} is never retried`);
     }
+  } finally {
+    await instance.close();
+  }
+});
+
+test("thumbnails: a 12 MP phone AVIF previews, judged by its AV1 stream rather than the boxes describing it", async () => {
+  const avif = (channels: 3 | 4, options: AvifOptions) =>
+    sharp({ create: { width: 4000, height: 3000, channels, background: { r: 9, g: 99, b: 9, alpha: 0.5 } } })
+      .avif({ quality: 1, effort: 0, ...options })
+      .toBuffer();
+  const refusal = async (data: Buffer) => decodeRefusal(await sharp(data).metadata(), null, heifLayout(data));
+  const phone = await avif(3, { chromaSubsampling: "4:2:0" });
+  assert.equal(heifLayout(phone)!.eightBitAv1, true);
+  assert.equal(await refusal(phone), null);
+  // Deeper colour, full-resolution colour and transparency each need more memory a pixel.
+  const deep = await avif(3, { chromaSubsampling: "4:2:0", bitdepth: 10 });
+  assert.match((await refusal(deep))!, /too large/);
+  assert.match((await refusal(await avif(3, { chromaSubsampling: "4:4:4" })))!, /too large/);
+  assert.match((await refusal(await avif(4, { chromaSubsampling: "4:2:0" })))!, /too large/);
+  // A 10-bit stream whose `av1C` property claims 8 bits is still decoded at 10.
+  const relabelled = Buffer.from(deep);
+  const av1C = relabelled.indexOf("av1C", 0, "latin1") + 4;
+  relabelled[av1C + 2] &= 0b1011_1111; // high_bitdepth
+  assert.equal((await sharp(relabelled).metadata()).depth, "uchar");
+  assert.match((await refusal(relabelled))!, /too large/);
+});
+
+test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the crop it reports", async () => {
+  const refusal = (options: Parameters<typeof heic>[0]) => heicRefusal(heifLayout(heic(options)));
+  // A phone photo is a grid of tiles; its canvas is in the grid's data, here in `idat` as Apple writes it.
+  const photo = heifLayout(heic({ grid: { columns: 2, rows: 2, ispe: [1024, 1024], inIdat: true } }));
+  assert.deepEqual(photo, { width: 1024, height: 1024, side: 1024, derived: true, overlay: false, eightBitAv1: false });
+  assert.equal(heicRefusal(photo), null);
+  // The reported repro: a 64 × 64 crop of a 32768 × 32768 grid, in a few hundred bytes.
+  const huge: [number, number] = [32_768, 32_768];
+  assert.match(refusal({ grid: { columns: 1, rows: 1, canvas: huge, ispe: [64, 64] }, clap: [64, 64] })!, /too large/);
+  // A grid canvas with no size property at all.
+  assert.match(refusal({ ispe: null, grid: { columns: 1, rows: 1, canvas: [6000, 6000] } })!, /too large/);
+  // libde265 allocates the frame its parameter sets describe, wherever they are.
+  assert.equal(heifLayout(heic({ ispe: [1, 1], sps: hevcSps(512, 512, 3) }))!.width, 512);
+  assert.match(refusal({ ispe: [64, 64], sps: hevcSps(8192, 8192, 2) })!, /too large/);
+  assert.match(refusal({ ispe: [64, 64], inband: [hevcSps(8192, 8192)] })!, /too large/);
+  assert.match(refusal({ ispe: [64, 64], sps: hevcSps(70_000, 3) })!, /too large/, "however thin");
+  assert.match(refusal({ overlay: true })!, /layers/);
+  assert.match(heicRefusal(heifLayout(heic().subarray(0, 200)))!, /damaged/);
+
+  const instance = await start();
+  try {
+    const client = await member(instance, "heic-owner");
+    // 26 MP of tiles shown as a 64 × 64 crop: libheif reports 64 × 64, then decodes all 26 MP.
+    const cropped = heic({ grid: { columns: 10, rows: 10, ispe: [5120, 5120] }, clap: [64, 64] });
+    const small = heic({ grid: { columns: 2, rows: 1, ispe: [1024, 512] } });
+    const { result } = await send(client, [
+      { path: "holiday.heic", data: cropped },
+      { path: "small.heic", data: small },
+    ]);
+    const nodes = new Map(
+      (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => [n.name, n]),
+    );
+    const preview = await get(client, urls.nodeThumbnail(nodes.get("small.heic")!.id));
+    assert.equal(preview.statusCode, 200);
+    assert.equal((await sharp(preview.rawPayload).metadata()).format, "webp");
+    assert.equal((await get(client, urls.nodeThumbnail(nodes.get("holiday.heic")!.id))).statusCode, 415);
+    assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(cropped)}-heif.failed`)));
   } finally {
     await instance.close();
   }
