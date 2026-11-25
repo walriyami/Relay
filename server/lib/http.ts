@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Auth as AuthKind, Body, Endpoint, Params, Query, Response, Schema } from "../../shared/api.ts";
 import type { Auth, Context, Member } from "../context.ts";
-import { authOf, requireAdmin, requireMember } from "./auth.ts";
+import { authOf, invalidateRequestAuth, requireAdmin, requireMember } from "./auth.ts";
 import { fail } from "./errors.ts";
 import { compressed } from "./compress.ts";
 
@@ -67,7 +67,7 @@ export function route<E extends Endpoint>(
       ...(compressed.has(endpoint) ? { compress: true } : {}),
     },
     handler: async (req, reply) => {
-      const member = authorize(ctx, req, endpoint.auth);
+      const member = reauthorize(ctx, req, endpoint.auth, options.admit);
       const query = (endpoint.query ? endpoint.query.parse(req.query ?? {}) : undefined) as Query<E>;
       const body = (endpoint.body ? endpoint.body.parse(req.body ?? {}) : undefined) as Body<E>;
       return handler({
@@ -128,6 +128,22 @@ function authorize(ctx: Context, req: FastifyRequest, auth: AuthKind, early = fa
       return authOf(ctx, req).member;
   }
 }
+
+/**
+ * The route's check again, read afresh, once the body has arrived: a sender may hold one back for
+ * minutes, and a session signed out, a member suspended or a role taken away meanwhile must act for
+ * no one. A request without a body had nothing to wait for, so its first check still stands.
+ */
+function reauthorize(ctx: Context, req: FastifyRequest, auth: AuthKind, admit: RouteOptions["admit"]) {
+  if (!hasBody(req)) return authorize(ctx, req, auth);
+  invalidateRequestAuth(req);
+  if (admit) admit(req);
+  return authorize(ctx, req, auth, !admit);
+}
+
+/** Whether the request declares a body, as Node reads one: a length above zero, or chunked. */
+const hasBody = (req: FastifyRequest) =>
+  req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
 
 declare module "fastify" {
   interface FastifyContextConfig {
