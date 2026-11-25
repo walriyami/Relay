@@ -84,6 +84,9 @@ export class Database {
     }
     try {
       this.initialize(schema);
+      // Never committed with a row in it (see schema.sql); if one ever were, the checks below put
+      // right whatever the triggers missed meanwhile.
+      this.run("DELETE FROM deferred_totals");
       this.checkStoredTypes();
       this.checkHeldTotals();
       this.checkLinkTotals();

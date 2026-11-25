@@ -97,6 +97,9 @@ export class Receivers {
   private readonly closing = new AbortController();
   private rebuilding = 0;
   private readonly rebuildQueue: (() => void)[] = [];
+  /** Parts of discarded uploads still to remove (see discard). */
+  private readonly unlinking: string[] = [];
+  private draining = false;
   /** Bytes committed per minute over the last hour, for the admin overview. */
   private readonly perMinute = new Map<number, number>();
 
@@ -627,6 +630,17 @@ export class Receivers {
     receiver?.cancelled.abort();
     receiver?.inflight?.stop();
     this.receivers.delete(id);
+    // An upload nothing has written to since Relay started usually has no part at all. Looking for
+    // thousands of those one after another, as cancelling a long list does, held everyone else up;
+    // they are looked for a few at a time in the background instead.
+    if (!receiver) {
+      this.unlinking.push(this.partPath(id));
+      if (!this.draining) {
+        this.draining = true;
+        void this.track(this.drainUnlinking());
+      }
+      return;
+    }
     try {
       unlinkIfPresent(this.partPath(id));
     } catch (error) {
@@ -637,6 +651,25 @@ export class Receivers {
       } catch {
         // The durable cancelled/deleted upload remains the source of truth for recovery.
       }
+    }
+  }
+
+  private async drainUnlinking() {
+    try {
+      while (this.unlinking.length) {
+        const batch = this.unlinking.splice(0, 32);
+        await Promise.all(
+          batch.map((path) =>
+            unlink(path).catch((error: NodeJS.ErrnoException) => {
+              // Startup recovery removes any part left behind.
+              if (error.code !== "ENOENT")
+                this.ctx.log.error({ err: error, path }, "Upload part removal pending; recovery will retry");
+            }),
+          ),
+        );
+      }
+    } finally {
+      this.draining = false;
     }
   }
 

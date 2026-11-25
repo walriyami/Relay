@@ -114,6 +114,62 @@ function submissionName(
 }
 
 /**
+ * New sends a request link's visitors may start in an hour, and the files and folders they may list,
+ * from one network and from everyone. Cancelled sends count: starting and cancelling long lists over
+ * and over was a way to keep the whole server busy, and only the open ones were limited. A person
+ * sending real files starts a handful of sends; even a busy link shared with a class or a team stays
+ * far below these.
+ */
+export const VISITOR_SENDS = {
+  windowMs: 3_600_000,
+  network: { sends: 60, entries: 20_000 },
+  link: { sends: 300, entries: 100_000 },
+};
+
+/** Refuses a new send that would go past VISITOR_SENDS, saying when to try again. */
+function admitVisitorSend(
+  ctx: Context,
+  requestId: string,
+  network: string,
+  entries: number,
+  retryAfter: (seconds: number) => void,
+) {
+  const since = Date.now() - VISITOR_SENDS.windowMs;
+  const sent = ctx.db.get<{
+    sends: number;
+    entries: number;
+    networkSends: number;
+    networkEntries: number;
+    oldest: number;
+    networkOldest: number;
+  }>(
+    `SELECT count(*) AS sends, ifnull(sum(entries), 0) AS entries,
+       ifnull(sum(network = ?), 0) AS networkSends, ifnull(sum(CASE WHEN network = ? THEN entries END), 0) AS networkEntries,
+       ifnull(min(created), 0) AS oldest, ifnull(min(CASE WHEN network = ? THEN created END), 0) AS networkOldest
+     FROM visitor_sends WHERE request_id = ? AND created > ?`,
+    network,
+    network,
+    network,
+    requestId,
+    since,
+  )!;
+  const own =
+    sent.networkSends + 1 > VISITOR_SENDS.network.sends ||
+    sent.networkEntries + entries > VISITOR_SENDS.network.entries;
+  const all = sent.sends + 1 > VISITOR_SENDS.link.sends || sent.entries + entries > VISITOR_SENDS.link.entries;
+  if (!own && !all) return;
+  // The oldest send counted is the soonest any room comes back; a full hour at most.
+  const oldest = own ? sent.networkOldest : sent.oldest;
+  retryAfter(Math.max(60, Math.ceil((oldest + VISITOR_SENDS.windowMs - Date.now()) / 1000)));
+  fail(
+    429,
+    own
+      ? "A lot has been sent to this request from your network in the last hour. Try again later."
+      : "A lot has been sent to this request in the last hour. Try again later.",
+  );
+}
+
+/**
  * Visits (grants) one address and one network may keep to one request. Each lasts as long as the
  * request, so without a limit every cookie-less `/start` would add a row for up to a year.
  */
@@ -215,9 +271,17 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
     app,
     ctx,
     api.requests.transfer,
-    ({ params, req, body }) => {
+    ({ params, req, reply, body }) => {
       const request = openRequest(ctx, params.token);
       const grant = grantFor(ctx, req, request.id) ?? fail(401, "Open the request link again to continue.");
+      // A retry of a send already made is answered as before; only a new one counts towards the limits.
+      const network = codeNetworkOf(req.ip);
+      const entries = body.files.length + body.folders.length + (body.text?.trim() ? 1 : 0);
+      const isNew = ctx.db.value("SELECT 1 FROM transfers WHERE id = ?", body.id) === undefined;
+      if (isNew)
+        admitVisitorSend(ctx, request.id, network, entries, (seconds) => {
+          reply.header("Retry-After", String(seconds));
+        });
       // One synchronous block: the limits read here are the ones the new uploads are admitted against.
       // Each new transfer gets an independent item; retries resolve their original item by transfer ID.
       const { sender: typed, ...input } = body;
@@ -239,6 +303,22 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
           limit: room(ctx, request),
         },
       );
+      if (isNew)
+        ctx.db.tx(() => {
+          const now = Date.now();
+          ctx.db.run(
+            "DELETE FROM visitor_sends WHERE request_id = ? AND created <= ?",
+            request.id,
+            now - VISITOR_SENDS.windowMs,
+          );
+          ctx.db.run(
+            "INSERT INTO visitor_sends(request_id, network, entries, created) VALUES(?, ?, ?, ?)",
+            request.id,
+            network,
+            entries,
+            now,
+          );
+        });
       ctx.events.publish(request.owner, "requests");
       return created;
     },
