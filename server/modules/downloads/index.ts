@@ -43,6 +43,8 @@ type Prepared = { version: number; degraded: number; made: number; rows: number;
 export const PREPARED_MS = 60_000;
 /** Entries kept across all prepared ZIPs; the least recently used go first. One full item fits. */
 const PREPARED_ROWS = 100_000;
+/** Prepared ZIPs kept, however small: each costs a few kilobytes besides its entries. */
+const PREPARED_ZIPS = 256;
 
 const NODE = "SELECT id, item, name, kind, size, mime, blob, text FROM nodes WHERE id = ? AND state = 'ready'";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -166,6 +168,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
       prepared.set(key, cached);
       return Promise.resolve(cached);
     }
+    if (cached) forget(key);
     let pending = preparing.get(key);
     if (!pending) {
       // Everyone asking while it's worked out waits for the same answer.
@@ -188,17 +191,22 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     ready.version === contentVersion(itemId) &&
     ready.degraded === degradedCopies();
 
+  function forget(key: string) {
+    const old = prepared.get(key);
+    if (!old) return;
+    prepared.delete(key);
+    preparedRows -= old.rows;
+  }
   function remember(key: string, ready: Prepared) {
     if (ready.rows > PREPARED_ROWS) return;
-    const old = prepared.get(key);
-    if (old) preparedRows -= old.rows;
-    prepared.delete(key);
+    forget(key);
     prepared.set(key, ready);
     preparedRows += ready.rows;
+    // Least recently used first: past either limit, or too old to be used again.
+    const now = Date.now();
     for (const [oldest, entry] of prepared) {
-      if (preparedRows <= PREPARED_ROWS) break;
-      prepared.delete(oldest);
-      preparedRows -= entry.rows;
+      if (preparedRows <= PREPARED_ROWS && prepared.size <= PREPARED_ZIPS && now - entry.made < PREPARED_MS) break;
+      forget(oldest);
     }
   }
 
@@ -240,6 +248,8 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
         row.size = data.length;
         row.crc32 = crc32(data);
       }
+    // A text gone while the files were checked went with its item: there's nothing to send.
+    for (const row of textRows.values()) if (row.crc32 === null) fail(404, "There is nothing here to download.");
     const entries: ZipEntry[] = rows;
     const content = (index: number): ZipContent => {
       const row = rows[index];
