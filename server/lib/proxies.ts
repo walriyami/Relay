@@ -3,6 +3,8 @@ import { BlockList, isIP } from "node:net";
 
 /** How often host names are looked up again: a proxy's container gets a new address when it's recreated. */
 const REFRESH_MS = 15_000;
+/** The soonest names are looked up again when a request suggests a proxy has moved. */
+const RETRY_MS = 1_000;
 
 type Log = { warn: (fields: object, message: string) => void; info: (fields: object, message: string) => void };
 
@@ -18,6 +20,8 @@ export class ProxyTrust {
   private timer: NodeJS.Timeout | undefined;
   private log: Log | undefined;
   private warned = false;
+  private refreshing: Promise<void> | undefined;
+  private lastRefresh = 0;
 
   constructor(entries: string[]) {
     for (const entry of entries) {
@@ -63,6 +67,20 @@ export class ProxyTrust {
     );
   }
 
+  /**
+   * Whether a request from `address` that names its visitor (in the client-address header) should
+   * wait because a proxy listed by name doesn't resolve yet, as when its container starts after
+   * Relay or is being recreated. Counted as the proxy's own address, every visitor would share one
+   * set of limits, so one stranger's wrong passwords could lock out everyone. An address Relay
+   * doesn't trust also has the names looked up again at once (at most once a second), in case the
+   * proxy has just moved to it.
+   */
+  awaitingProxy(address: string | undefined): boolean {
+    if (!this.names.length || !address || this.trusts(address)) return false;
+    if (!this.refreshing && Date.now() - this.lastRefresh >= RETRY_MS) void this.refresh();
+    return this.names.some((name) => !this.resolved.get(name)?.size);
+  }
+
   /** Looks the names up now, then keeps them current until `stop`. */
   async start(log: Log) {
     this.log = log;
@@ -76,7 +94,15 @@ export class ProxyTrust {
     clearInterval(this.timer);
   }
 
-  private async refresh() {
+  private refresh() {
+    this.refreshing ??= this.lookUp().finally(() => {
+      this.refreshing = undefined;
+      this.lastRefresh = Date.now();
+    });
+    return this.refreshing;
+  }
+
+  private async lookUp() {
     await Promise.all(
       this.names.map(async (name) => {
         const before = this.resolved.get(name);
@@ -92,7 +118,7 @@ export class ProxyTrust {
         else
           this.log?.warn(
             { proxy: name },
-            "a trusted proxy's name doesn't resolve; its requests count as its own until it does",
+            "a trusted proxy's name doesn't resolve; requests through it are asked to wait until it does",
           );
       }),
     );
