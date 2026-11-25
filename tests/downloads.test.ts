@@ -11,7 +11,7 @@ import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
 import { MAX_QUEUED_PER_PERSON, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { imageSignature } from "../server/modules/downloads/image-signature.ts";
-import { decodeRefusal, jpegLayout } from "../server/modules/downloads/image-limits.ts";
+import { decodeRefusal, heifLayout, jpegLayout } from "../server/modules/downloads/image-limits.ts";
 import { Client, member, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
@@ -555,6 +555,29 @@ test("thumbnails: an image too costly to decode is refused from its header, and 
   assert.equal(layout.scans, 130);
   assert.equal(layout.wholeImage, true);
   assert.match(decodeRefusal(await sharp(tooManyScans).metadata(), layout)!, /too many scans/);
+  // A flat 3200 × 3200 AVIF from sharp with a clean-aperture crop to 64 × 64 added to its image, as
+  // scripts/verify-thumbnails.ts makes them: sharp reports 64 × 64, but the whole frame is decoded.
+  const cropped = Buffer.from(
+    [
+      "AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAAP9tZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAA",
+      "ACJpbG9jAAAAAERAAAEAAQAAAAABIwABAAAAAAAAAYIAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABhdjAxAAAAAA5waXRt",
+      "AAAAAAABAAAAf2lwcnAAAABgaXBjbwAAAAxhdjFDgTACAAAAABRpc3BlAAAAAAAADIAAAAyAAAAAEHBpeGkAAAAAAwgICAAAAChj",
+      "bGFwAAAAQAAAAAEAAABAAAAAAQAAAAAAAAABAAAAAAAAAAEAAAAXaXBtYQAAAAAAAAABAAEEgQIDBAAAAYptZGF0EgAKCjwu8f8f",
+      "2kBDQaQy8QIaTEJi5OmmmmFjYEAATM/KKvXve1M3I/1+csTzY3v2dpf81mYykpSRtL2fLlvNfaTmwiDxCywtdxfxEIv7WmqfcFCF",
+      "4WSzeeIJlDBwltmELe5huNFUO7R2W9DxXc/KR4IPck3ZDNzUBJtdyJWwOOeZMaBVTjSKAfXgfRcQDDfWQ6oWym8Szs3SriJuBqiX",
+      "EafnV8uRd1sMLSreaD5m2EMc5rUAJ06uBYXRiW2Az+wnrFGD/qC1Jrzmm4xdz8pHgg9yTdkM3Fh+jt2y4i7WcXXtzfmE+rMkwnsu",
+      "L3hP5TBw4XnNObpMB+nS5y89/aP5JVdIpkBSnzU2KiUzsGjOIAVLBjzBsrAhfGD3rjb7ZGpFQzD08E64QgHitM/KR32zybu+t04r",
+      "fvaSaBs8PuB7LIyHSaqrV8qoMlz0RVWx3I/ff3i4eeoHJZTwOqO8kDNaJpUI4Av6dixw/ZS+pwaeCvxeLq8ZAy6JX6XnIoii+T+V",
+      "iPA=",
+    ].join(""),
+    "base64",
+  );
+  const croppedMetadata = await sharp(cropped).metadata();
+  assert.deepEqual([croppedMetadata.width, croppedMetadata.height], [64, 64]);
+  assert.deepEqual(heifLayout(cropped), { width: 3200, height: 3200, derived: false });
+  assert.match(decodeRefusal(croppedMetadata, null, heifLayout(cropped))!, /too large/);
+  assert.equal(decodeRefusal(await sharp(avif).metadata(), null, heifLayout(avif)), null);
+  assert.equal(heifLayout(avif.subarray(0, 40)), null, "a damaged structure isn't guessed at");
 
   const instance = await start();
   try {
@@ -566,6 +589,7 @@ test("thumbnails: an image too costly to decode is refused from its header, and 
       // Damaged files whose decoder errors used to look temporary, so they were retried on every look.
       "progression.jpg": await rescanned(3),
       "truncated.avif": avif.subarray(0, avif.length - 40),
+      "cropped.avif": cropped,
     };
     const { result } = await send(
       client,
@@ -575,7 +599,7 @@ test("thumbnails: an image too costly to decode is refused from its header, and 
       (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => [n.name, n]),
     );
     assert.equal((await get(client, urls.nodeThumbnail(nodes.get("widest.png")!.id))).statusCode, 200);
-    for (const name of ["wide.png", "scans.jpg", "progression.jpg", "truncated.avif"]) {
+    for (const name of ["wide.png", "scans.jpg", "progression.jpg", "truncated.avif", "cropped.avif"]) {
       assert.equal((await get(client, urls.nodeThumbnail(nodes.get(name)!.id))).statusCode, 415, name);
       const data = files[name as keyof typeof files];
       assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(data)}-image.failed`)), `${name} is never retried`);
@@ -589,11 +613,20 @@ test("thumbnails: an image that times out twice isn't tried again, so it can't h
   const instance = await start();
   const original = workerThreads.Worker;
   let posted = 0;
-  /** A worker that never answers the first two jobs, as with a decode that takes too long. */
+  /**
+   * A worker that never gets as far as decoding the first job, as when the machine is busy, then
+   * starts decoding the next two and never finishes, as with a decode that takes too long.
+   */
   class SlowWorker extends EventEmitter {
     postMessage(job: { id: number }) {
       posted++;
-      if (posted > 2) queueMicrotask(() => this.emit("message", { id: job.id, ok: false, code: "RENDER_FAILED" }));
+      if (posted === 1) return;
+      queueMicrotask(() =>
+        this.emit(
+          "message",
+          posted > 3 ? { id: job.id, ok: false, code: "RENDER_FAILED" } : { id: job.id, decoding: true },
+        ),
+      );
     }
     unref() {}
     terminate() {
@@ -617,18 +650,19 @@ test("thumbnails: an image that times out twice isn't tried again, so it can't h
     syncBuiltinESMExports();
     t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
 
-    for (const strike of ["0", "1"]) {
+    for (const strike of [null, "0", "1"]) {
       before = posted;
       const response = get(client, url);
       await asked();
       t.mock.timers.tick(15_000);
       assert.equal((await response).statusCode, 503);
-      assert.equal(readFileSync(note, "utf8"), strike, "a render cut short by the time limit keeps its note");
+      if (strike === null) assert.equal(existsSync(note), false, "a worker slow to start isn't the image's fault");
+      else assert.equal(readFileSync(note, "utf8"), strike, "a decode cut short by the time limit keeps its note");
       t.mock.timers.tick(RENDITION_RETRY_MS + 1);
     }
-    const third = await get(client, url);
-    assert.equal(third.statusCode, 415);
-    assert.equal(posted, 2, "not decoded a third time");
+    const last = await get(client, url);
+    assert.equal(last.statusCode, 415);
+    assert.equal(posted, 3, "not decoded a third time");
     assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(png)}-image.failed`)));
   } finally {
     workerThreads.Worker = original;

@@ -16,7 +16,7 @@ export const MAX_SIDE = 65_535;
 export const MAX_ROW_BYTES = 128 * 1024;
 /**
  * Memory a decoder that holds the whole image may use: interlaced PNG, progressive or multi-scan
- * JPEG, GIF, WebP and AVIF. The costliest allowed image adds about 340 MB while it renders,
+ * JPEG, GIF, WebP and AVIF. The costliest allowed image adds about 360 MB while it renders,
  * leaving room in a 768 MB server for uploads and ZIPs running at the same time.
  */
 export const MAX_DECODED_BYTES = 200 * 1024 ** 2;
@@ -109,15 +109,107 @@ export function jpegLayout(data: Buffer): JpegLayout {
   return { scans, wholeImage: wholeImage || scans > 1, coefficientBytes };
 }
 
+export type HeifLayout = {
+  /**
+   * The largest image the file declares (its `ispe` properties), which is what the decoder holds.
+   * sharp reports the size after any crop the file asks for, so a 64 × 64 crop of a 50 MP frame
+   * looks small while its whole frame is decoded.
+   */
+  width: number;
+  height: number;
+  /**
+   * Whether an image is put together from others: a grid of tiles, an overlay, or a derived copy.
+   * The size of the result is in item data these limits don't read.
+   */
+  derived: boolean;
+};
+
+/** The boxes inside [start, end) of an ISO media file. Throws if one doesn't fit. */
+function* boxes(data: Buffer, start: number, end: number) {
+  let i = start;
+  while (i + 8 <= end) {
+    let size = data.readUInt32BE(i);
+    let header = 8;
+    if (size === 1) {
+      if (i + 16 > end) throw new RangeError("box too short");
+      size = Number(data.readBigUInt64BE(i + 8));
+      header = 16;
+    } else if (size === 0) size = end - i;
+    if (size < header || i + size > end) throw new RangeError("box overruns its parent");
+    yield { type: data.toString("latin1", i + 4, i + 8), body: i + header, end: i + size };
+    i += size;
+  }
+}
+
+const DERIVED_ITEMS = new Set(["grid", "iovl", "iden"]);
+
+/**
+ * Walks an AVIF's boxes without decoding it: the largest image size it declares, and whether any
+ * image is derived from others. libheif won't decode a frame larger than its declared size, so
+ * this bounds what decoding allocates. Null if the file's structure is damaged.
+ */
+export function heifLayout(data: Buffer): HeifLayout | null {
+  try {
+    // Only the boxes up to meta are read: what follows is the image data.
+    let meta: { body: number; end: number } | undefined;
+    for (const box of boxes(data, 0, data.length)) {
+      if (box.type !== "meta") continue;
+      meta = box;
+      break;
+    }
+    if (!meta) return null;
+    let width = 0;
+    let height = 0;
+    let derived = false;
+    // meta, iinf, infe and ispe are full boxes: a version byte and three bytes of flags come first.
+    for (const box of boxes(data, meta.body + 4, meta.end)) {
+      if (box.type === "iinf") {
+        const first = box.body + (data[box.body] === 0 ? 6 : 8);
+        for (const entry of boxes(data, first, box.end)) {
+          const version = data[entry.body];
+          if (entry.type !== "infe" || version < 2) continue;
+          // After the item's id (two bytes in version 2, four in 3) and its protection index.
+          const type = entry.body + (version === 2 ? 8 : 10);
+          if (type + 4 <= entry.end && DERIVED_ITEMS.has(data.toString("latin1", type, type + 4))) derived = true;
+        }
+      } else if (box.type === "iprp") {
+        for (const container of boxes(data, box.body, box.end)) {
+          if (container.type !== "ipco") continue;
+          for (const property of boxes(data, container.body, container.end)) {
+            if (property.type !== "ispe" || property.body + 12 > property.end) continue;
+            const w = data.readUInt32BE(property.body + 4);
+            const h = data.readUInt32BE(property.body + 8);
+            if (w * h > width * height) [width, height] = [w, h];
+          }
+        }
+      }
+    }
+    return width && height ? { width, height, derived } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Why an image can't be previewed within these limits, or null if it can. Judged from the header
- * only: `metadata` is what sharp reads without decoding, and `jpeg` the JPEG's marker walk.
+ * only: `metadata` is what sharp reads without decoding, `jpeg` the JPEG's marker walk and `heif`
+ * the AVIF's box walk.
  */
-export function decodeRefusal(metadata: Metadata, jpeg: JpegLayout | null): string | null {
-  const width = metadata.width ?? 0;
-  const height = metadata.height ?? 0;
-  const pixels = width * height;
+export function decodeRefusal(
+  metadata: Metadata,
+  jpeg: JpegLayout | null,
+  heif: HeifLayout | null = null,
+): string | null {
+  let width = metadata.width ?? 0;
+  let height = metadata.height ?? 0;
   if (!width || !height) return "The image has no size.";
+  if (metadata.format === "heif") {
+    if (!heif) return "The image is damaged.";
+    if (heif.derived) return "Images made of tiles or layers can't be previewed.";
+    // The whole frame is decoded, whatever part of it is shown.
+    if (heif.width * heif.height > width * height) ({ width, height } = heif);
+  }
+  const pixels = width * height;
   if (pixels > MAX_PIXELS || Math.max(width, height) > MAX_SIDE) return "The image is too large to preview.";
   const bytesPerSample = metadata.depth === "uchar" || metadata.depth === "char" ? 1 : 2;
   const pixelBytes = (metadata.channels ?? 4) * bytesPerSample;

@@ -3,7 +3,14 @@ import { parentPort } from "node:worker_threads";
 import type HeicDecode from "heic-decode";
 import sharp from "sharp";
 import { ALLOWED_LOADERS, imageSignature } from "./image-signature.ts";
-import { MAX_HEIF_PIXELS, MAX_PIXELS, MAX_SOURCE_BYTES, decodeRefusal, jpegLayout } from "./image-limits.ts";
+import {
+  MAX_HEIF_PIXELS,
+  MAX_PIXELS,
+  MAX_SOURCE_BYTES,
+  decodeRefusal,
+  heifLayout,
+  jpegLayout,
+} from "./image-limits.ts";
 
 /** One rendition to make. A worker renders many, one at a time. */
 type Job = { id: number; source: string; target: string; format: "heif" | "image"; width: number };
@@ -32,7 +39,11 @@ async function rendition(buffer: Buffer, job: Job, decodeHeic: HeicDecoder | nul
     const image = sharp(buffer, { limitInputPixels: MAX_PIXELS, failOn: "none", animated: false });
     // Read from the header alone; nothing is decoded until the image is known to fit.
     const metadata = await image.metadata();
-    const refusal = decodeRefusal(metadata, metadata.format === "jpeg" ? jpegLayout(buffer) : null);
+    const refusal = decodeRefusal(
+      metadata,
+      metadata.format === "jpeg" ? jpegLayout(buffer) : null,
+      metadata.format === "heif" ? heifLayout(buffer) : null,
+    );
     if (refusal) throw invalid(refusal, "IMAGE_TOO_COSTLY");
     return image
       .rotate()
@@ -71,12 +82,15 @@ async function render(job: Job) {
   // Loaded only for HEIF: most images aren't, and a worker retires after a HEIF render. A failure
   // to load it is Relay's, not the image's.
   const decodeHeic = job.format === "heif" ? (await import("heic-decode")).default : null;
+  // The time limit that counts against the image starts here, once the worker and decoder are ready.
+  parentPort?.postMessage({ id: job.id, decoding: true });
   const output = await rendition(buffer, job, decodeHeic).catch((error: unknown) => {
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && code) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    // Running short of memory says nothing about the image, so that alone is tried again later.
-    if (/out of memory|cannot allocate|allocation failed/i.test(message))
+    // Running short of memory or threads says nothing about the image, so that alone is tried again
+    // later. ("Insufficient memory" is libjpeg's wording.)
+    if (/out of memory|insufficient memory|cannot allocate|allocation failed|unable to create thread/i.test(message))
       throw Object.assign(new Error(message), { code: "RENDER_FAILED" });
     throw invalid(message);
   });

@@ -27,7 +27,7 @@ type Size = keyof typeof DIMENSIONS;
 const INTERRUPTED_RENDERS = 2;
 /**
  * Images rendered at once: one. Decoders' memory is native and outside the workers' limits, and the
- * limits in image-limits.ts still let one image take about 350 MB, so two at once could exceed the
+ * limits in image-limits.ts still let one image take about 360 MB, so two at once could exceed the
  * whole server's memory. With one, a render that brings Relay down is the only one in progress, so
  * its interrupted-render note blames that image and never one that happened to run beside it.
  * Renditions are kept once made, so this slows only the first look at new photos.
@@ -140,12 +140,18 @@ function createRenderers() {
         } else retire(renderer);
         outcome();
       };
-      const timer = setTimeout(
-        () => finish(false, () => reject(new WorkerRenderError("WORKER_TIMEOUT", "thumbnail rendering timed out"))),
-        WORKER_TIMEOUT_MS,
-      );
-      const answered = (message: { id: number; ok: boolean; code?: string; message?: string }) => {
+      // Starting a worker and loading a decoder has its own time limit. A slow start is Relay's, so
+      // only a decode that runs out of time is held against the image.
+      const timeout = (code: string) => () =>
+        finish(false, () => reject(new WorkerRenderError(code, "thumbnail rendering timed out")));
+      let timer = setTimeout(timeout("WORKER_SLOW_START"), WORKER_TIMEOUT_MS);
+      const answered = (message: { id: number; ok?: boolean; decoding?: true; code?: string; message?: string }) => {
         if (message.id !== id) return;
+        if (message.decoding) {
+          clearTimeout(timer);
+          timer = setTimeout(timeout("WORKER_TIMEOUT"), WORKER_TIMEOUT_MS);
+          return;
+        }
         finish(true, () =>
           message.ok
             ? resolve()
@@ -215,10 +221,8 @@ export function createThumbnails(ctx: Context) {
       } catch {
         // No note: the last render of this image finished.
       }
-      if (stops >= INTERRUPTED_RENDERS) {
-        unlinkIfPresent(note);
-        return null;
-      }
+      // The caller removes the note once the image is marked failed.
+      if (stops >= INTERRUPTED_RENDERS) return null;
       writeFileSync(note, String(stops));
     }
     attempts.set(note, running + 1);
@@ -396,6 +400,7 @@ export function createThumbnails(ctx: Context) {
           "previewing this image was cut short twice (Relay stopped, or it took too long); it won't be tried again",
         );
         await cacheRejection();
+        unlinkIfPresent(thumbnailAttempt(ctx.config.root, sha256, format));
         fail(415, "This image cannot be previewed.");
       }
       let interrupted = false;
@@ -413,7 +418,8 @@ export function createThumbnails(ctx: Context) {
           await cacheRejection();
           return fail(415, "This image cannot be previewed.");
         }
-        // Too slow to finish: likely every time, so it counts towards no longer trying this image.
+        // A decode too slow to finish is likely slow every time, so it counts towards no longer
+        // trying this image. A worker slow to start doesn't.
         interrupted = error instanceof WorkerRenderError && error.code === "WORKER_TIMEOUT";
         ctx.log.error({ err: error, blob: sha256 }, "thumbnail render unavailable; retry required");
         if (retryAfter.size >= 256) retryAfter.delete(retryAfter.keys().next().value!);

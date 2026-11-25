@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { crc32 } from "node:zlib";
 import { api } from "../shared/api.ts";
-import { thumbnailPath } from "../server/storage/blobs.ts";
+import { thumbnailAttempt, thumbnailPath } from "../server/storage/blobs.ts";
 import { member, send, start, stop, type Instance } from "./support/harness.ts";
 
 const hash = (data: string) => createHash("sha256").update(data).digest("hex");
@@ -79,6 +79,9 @@ test("thumbnail unlink failure preserves cleanup intent after the payload is gon
     const entry = seed(instance, "partial cleanup");
     const thumbnail = thumbnailPath(instance.root, entry.sha256, "s");
     writeFileSync(thumbnail, "rendition");
+    // The note that a render of this image was cut short goes with the image, and only then.
+    const note = thumbnailAttempt(instance.root, entry.sha256, "image");
+    writeFileSync(note, "1");
     fs.unlinkSync = (file) => {
       if (file === thumbnail) throw ioError();
       return unlink(file);
@@ -91,6 +94,7 @@ test("thumbnail unlink failure preserves cleanup intent after the payload is gon
     syncBuiltinESMExports();
     storage(instance).sweep();
     assert.equal(existsSync(thumbnail), false);
+    assert.equal(existsSync(note), false);
     assert.equal(recorded(instance, entry.sha256), 0);
     instance.ctx.blobs.collect([entry.sha256]);
   } finally {
