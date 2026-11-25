@@ -243,6 +243,12 @@ test("a member's change stamp counts their own changes, never another member's",
     await olga.call(api.account.update, { body: { name: "Olga O" } });
     assert.ok(count(await stamp(olga)) > count(before));
     assert.equal(missed(await stamp(pia), await stamp(olga)), true);
+
+    // Shared free space is told to everyone, so it moves every member's stamp: someone not
+    // listening then still reloads it. It shows no more than the free space itself, which all see.
+    const shared = await stamp(olga);
+    instance.ctx.events.broadcast("account");
+    assert.equal(count(await stamp(olga)), count(shared) + 1);
   } finally {
     await instance.close();
   }
