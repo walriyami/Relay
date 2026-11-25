@@ -18,6 +18,8 @@ import {
   wideNetworkOf,
 } from "../server/lib/pickup-code-guard.ts";
 import { normalizeCode, Secrets, sha256 } from "../server/lib/secrets.ts";
+import { sweepAuth } from "../server/modules/auth/index.ts";
+import { CODES_PER_DAY } from "../server/modules/auth/login-codes.ts";
 import { rm } from "node:fs/promises";
 import type { HttpError } from "../server/lib/errors.ts";
 import { admin, Client, member, send, start, stop, type Instance } from "./support/harness.ts";
@@ -457,25 +459,33 @@ test("slow guessing from everywhere raises the alarm within a day", async () => 
   }
 });
 
-test("one account can't make sign-in codes without end", async () => {
+// Each code's digits stay held back for a month, so the daily cap counts every code made, including
+// ones replaced, used or expired since, whose rows are cleared away long before then.
+test("one account can't make sign-in codes without end, even as old ones are cleared away", async () => {
   const instance = await start();
   try {
     const owner = await member(instance, "many-codes");
-    const first = await owner.call(api.loginCodes.create);
-    for (let i = 0; i < 99; i++)
+    for (let i = 0; i < 5; i++) await owner.call(api.loginCodes.create);
+    await sweepAuth(instance.ctx, Date.now());
+    assert.equal(instance.ctx.db.value("SELECT count(*) FROM login_codes"), 1, "replaced codes are cleared away");
+    // The rest of a day's worth, made before this test began.
+    const user = instance.ctx.db.value<string>("SELECT id FROM users WHERE username = 'many-codes'")!;
+    for (let i = 5; i < CODES_PER_DAY; i++)
       instance.ctx.db.run(
-        `INSERT INTO login_codes(id, user_id, session_hash, code_hash, device_token_hash, created, expires, revoked)
-         SELECT ?, user_id, session_hash, ?, ?, created, expires, created FROM login_codes WHERE id = ?`,
-        `filler-${i}`,
-        `filler-code-${i}`,
-        `filler-token-${i}`,
-        first.id,
+        "INSERT INTO failures(kind, key, time) VALUES('new-device-code', ?, ?)",
+        user,
+        Date.now() - 3_600_000,
       );
-    await assert.rejects(owner.call(api.loginCodes.create), (error: HttpError) => {
-      assert.equal(error.status, 429);
-      assert.match(error.message, /sign-in link/);
-      return true;
-    });
+    const refused = await owner.raw({ method: "POST", url: api.loginCodes.create.path });
+    assert.equal(refused.statusCode, 429);
+    assert.match(errorOf(refused), /sign-in codes today/);
+    // Not the per-minute limit, so the app doesn't count down to a minute from now.
+    assert.equal(refused.headers["retry-after"], undefined);
+    // Another member's codes are their own.
+    assert.equal(
+      (await (await member(instance, "few-codes")).raw({ method: "POST", url: api.loginCodes.create.path })).statusCode,
+      200,
+    );
   } finally {
     await instance.close();
   }

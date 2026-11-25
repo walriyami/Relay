@@ -309,6 +309,64 @@ test("a link notifies its owner on its first download only", async () => {
   }
 });
 
+// A link's visitors decide when a first download is recorded, so telling the owner must cost a few
+// lookups by key: not a pass over everything the owner's Activity holds, with notifications on or off.
+test("telling an owner about a link's first download costs the same however much Activity holds", async () => {
+  const service = await pushService();
+  const instance = await start({ pushServices: [service.origin] });
+  try {
+    const owner = await member(instance, "ivy");
+    const { result } = await send(owner, [{ path: "a.txt", data: "alpha", mime: "text/plain" }], { name: "Notes" });
+    const link = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    const db = instance.ctx.db as unknown as { prepare(sql: string): unknown };
+    const prepare = db.prepare.bind(db);
+    const seen = new Set<string>();
+    db.prepare = (sql: string) => (seen.add(sql), prepare(sql));
+    const download = async () => {
+      const visitor = new Client(instance);
+      const share = await openShare(visitor, link.token);
+      const file = share.nodes.find((n) => n.kind === "file")!.id;
+      assert.equal((await visitor.raw({ method: "GET", url: urls.shareContent(link.token, file) })).statusCode, 200);
+    };
+    const plans = () =>
+      [...seen].flatMap((sql) =>
+        instance.ctx.db.sqlite
+          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          .all(...Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => null))
+          .map((row) => `${String(row.detail)}  <-  ${sql.replace(/\s+/g, " ")}`),
+      );
+    // Reading the entry just recorded, by its id, is the one way in that costs the same for every owner.
+    const readsActivity = (plan: string[]) =>
+      plan.filter((step) => /^(SCAN|SEARCH) activity\b/.test(step) && !/\(id=\?\) {2}<-/.test(step));
+
+    // Without notifications, a first download reads no more than its own entry.
+    await download();
+    assert.deepEqual(readsActivity(plans()), []);
+
+    // With them, the owner hears of the first download only, found through the link's own visitors.
+    const browser = await subscribe(owner, `${service.origin}/ivy`);
+    const second = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    seen.clear();
+    const visitor = new Client(instance);
+    const share = await openShare(visitor, second.token);
+    const file = share.nodes.find((n) => n.kind === "file")!.id;
+    await visitor.raw({ method: "GET", url: urls.shareContent(second.token, file) });
+    await eventually(() => service.received.length === 1);
+    assert.equal(browser.decrypt(service.received[0].body).title, "“Notes” was downloaded");
+    const plan = plans();
+    assert.deepEqual(readsActivity(plan), []);
+    assert.ok(plan.some((step) => /SEARCH link_visits USING (COVERING )?INDEX link_visits_downloaded/.test(step)));
+    db.prepare = prepare;
+  } finally {
+    await instance.close();
+    await service.close();
+  }
+});
+
 test("a subscription is forgotten when the browser drops it, the device signs out, or another account takes the browser", async () => {
   const service = await pushService();
   const instance = await start({ pushServices: [service.origin] });
