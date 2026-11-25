@@ -200,6 +200,8 @@ export type ShareAccess = {
   /** The link's owner, signed in: never counted as a visitor, and not sharing with anyone. */
   byOwner: boolean;
   locked: boolean;
+  /** The link's password (hashed) when this access was given, so a download stops if it changes. */
+  passwordHash: string | null;
 };
 
 /** Public links: who may open them, and what they did. */
@@ -215,6 +217,12 @@ export interface Links {
   content(token: string, req: FastifyRequest): ShareAccess;
   /** Checks the password and lets this browser in. Wrong guesses per link are limited. */
   unlock(token: string, password: string, req: FastifyRequest, reply: FastifyReply): Promise<ShareAccess>;
+  /**
+   * Asks again, for a download already running, whether `access` still holds: the link is on and
+   * unexpired, its content isn't in Trash, its owner isn't suspended and its password is as it was.
+   * One row read, recording nothing, so it can run every megabyte.
+   */
+  still(access: ShareAccess): void;
   /** Counts a download by the person `access` was let in as. */
   downloaded(access: ShareAccess): void;
   /** Idempotent by input.id. Synchronous. */

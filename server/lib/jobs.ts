@@ -5,24 +5,33 @@ import type { FastifyReply } from "fastify";
 import type { Context } from "../context.ts";
 import { fail } from "./errors.ts";
 
-/** One member's archives being prepared at once. */
+/** One member's archives being prepared at once (or one member's share links' archives). */
 export const JOBS_PER_MEMBER = 2;
 /** Archives being prepared at once on the whole server. */
 export const JOBS_TOTAL = 4;
 export const MEMBER_BUSY = "Your other downloads are still being prepared. Try again once they start.";
 export const SERVER_BUSY = "Relay is busy preparing other downloads. Try again in a moment.";
+export const SHARED_BUSY = "Other downloads from this person's links are being prepared. Try again in a moment.";
 
 const running = new WeakMap<Context, Map<string, number>>();
 
 /**
- * Runs `work` holding one of `member`'s places and one of the server's, or refuses with 503 and
+ * Whose places a job takes: a member's own (their id), or those of everyone downloading from one
+ * member's share links. People opening a member's links never take that member's own places.
+ */
+export type Holder = string | { sharedBy: string };
+
+/**
+ * Runs `work` holding one of the holder's places and one of the server's, or refuses with 503 and
  * Retry-After when either is taken. The places are given back when `work` ends, however it ends.
  */
-export async function preparing<T>(ctx: Context, reply: FastifyReply, member: string, work: () => Promise<T>) {
+export async function preparing<T>(ctx: Context, reply: FastifyReply, holder: Holder, work: () => Promise<T>) {
   let held = running.get(ctx);
   if (!held) running.set(ctx, (held = new Map<string, number>()));
   const places = [
-    { key: `member:${member}`, max: JOBS_PER_MEMBER, message: MEMBER_BUSY },
+    typeof holder === "string"
+      ? { key: `member:${holder}`, max: JOBS_PER_MEMBER, message: MEMBER_BUSY }
+      : { key: `shared:${holder.sharedBy}`, max: JOBS_PER_MEMBER, message: SHARED_BUSY },
     { key: "all", max: JOBS_TOTAL, message: SERVER_BUSY },
   ];
   const taken = places.find((place) => (held.get(place.key) ?? 0) >= place.max);

@@ -7,6 +7,7 @@ import { LIMITS } from "../../../shared/model.ts";
 import type { Context, ShareAccess } from "../../context.ts";
 import { currentMember, requireMember } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
+import { preparing as takingPlace, type Holder } from "../../lib/jobs.ts";
 import { ownedReadable } from "../library/items.ts";
 import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send, whileAllowed } from "./serve.ts";
 import { createThumbnails } from "./thumbnails.ts";
@@ -66,21 +67,37 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
   };
   const sharedNode = (access: ShareAccess, id: string) =>
     ctx.db.get<NodeRow>(`${NODE} AND item = ?`, id, access.itemId) ?? notFound("That file");
+  const given = new WeakMap<FastifyRequest, ShareAccess>();
   const shareAccess = (req: FastifyRequest<{ Params: Params }>) => {
     const access = ctx.links.content(req.params.token, req);
     // authOf caches the initial member. Its password bypass must not survive session revocation.
+    if (access.byOwner) signedIn(req);
+    given.set(req, access);
+    return access;
+  };
+  /**
+   * A running share download asks again with the access it started with, which reads one row and
+   * records nothing: letting the visitor in again would count them and write to the database every
+   * megabyte. The owner downloading through their own link must still be signed in.
+   */
+  const shareStill = (req: FastifyRequest<{ Params: Params }>) => {
+    const access = given.get(req) ?? shareAccess(req);
+    ctx.links.still(access);
     if (access.byOwner) signedIn(req);
     return access;
   };
   /**
    * A download is a GET for a whole file saved rather than previewed, or a ZIP. Resuming one (a Range
    * past the start) is the same download and HEAD fetches nothing. A browser saving a file asks for
-   * all of it or for `bytes=0-`; a range with an end is a page reading part of a file (the share
-   * page's text excerpt reads the first 4 KiB), not someone downloading it.
+   * all of it, for `bytes=0-`, or for `bytes=0-` and the last byte's position; a range ending sooner
+   * is a page reading part of a file (the share page's text excerpt reads the first 4 KiB), not
+   * someone downloading it.
    */
-  const counted = (req: FastifyRequest, access: ShareAccess, attachment: boolean) => {
+  const counted = (req: FastifyRequest, access: ShareAccess, attachment: boolean, length: number) => {
     const range = req.headers.range?.trim();
-    if (req.method === "GET" && attachment && (!range || range === "bytes=0-")) ctx.links.downloaded(access);
+    const whole = /^bytes=0-(\d*)$/.exec(range ?? "bytes=0-");
+    if (req.method === "GET" && attachment && whole && (!whole[1] || Number(whole[1]) >= length - 1))
+      ctx.links.downloaded(access);
   };
 
   /** Bytes a member took from their own Files, or that a link delivered on their behalf. */
@@ -117,7 +134,14 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
   }
 
   /** The whole item, or one folder's subtree rooted at the folder's name. Only ready nodes. */
-  async function zip(req: FastifyRequest, reply: FastifyReply, itemId: string, onSent: Meter) {
+  async function zip(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    itemId: string,
+    onSent: Meter,
+    holder: Holder,
+    count?: (length: number) => void,
+  ) {
     // A repeated parameter arrives as a list, which isn't one folder.
     const asked = (req.query as Record<string, unknown>).folder;
     const folderId = asked === undefined || typeof asked === "string" ? asked : notFound("That folder");
@@ -128,7 +152,9 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
           itemId,
         ) ?? notFound("That folder"))
       : null;
-    const ready = await preparedZip(itemId, folderId ?? null);
+    // Working an archive out checks every file on disk, so it takes one of the few places for that;
+    // one already worked out, or being worked out for someone else, doesn't need one.
+    const ready = await preparedZip(itemId, folderId ?? null, (work) => takingPlace(ctx, reply, holder, work));
     const name =
       folder?.name ??
       ctx.library.summaries([itemId]).get(itemId)?.name ??
@@ -137,7 +163,9 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     const timeZone = validTimeZone((req.query as Query).tz);
     const etag = hash(`${ready.digest}\n${timeZone ?? ""}`);
     reply.type("application/zip").header("Content-Disposition", contentDisposition("attachment", `${name}.zip`));
-    return send(req, reply, { ...ready.plan.body(timeZone), etag }, onSent);
+    const body = ready.plan.body(timeZone);
+    count?.(body.length);
+    return send(req, reply, { ...body, etag }, onSent);
   }
 
   const prepared = new Map<string, Prepared>();
@@ -160,7 +188,11 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
   }
 
   /** The item's (or folder's) ZIP, worked out again only when something it depends on changed. */
-  function preparedZip(itemId: string, folderId: string | null): Promise<Prepared> {
+  function preparedZip(
+    itemId: string,
+    folderId: string | null,
+    gate: (work: () => Promise<Prepared>) => Promise<Prepared>,
+  ): Promise<Prepared> {
     const key = `${itemId}/${folderId ?? ""}`;
     const cached = prepared.get(key);
     if (cached && fresh(itemId, cached)) {
@@ -172,7 +204,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     let pending = preparing.get(key);
     if (!pending) {
       // Everyone asking while it's worked out waits for the same answer.
-      pending = oneAtATime(itemId, () => prepareZip(itemId, folderId)).finally(() => preparing.delete(key));
+      pending = gate(() => oneAtATime(itemId, () => prepareZip(itemId, folderId))).finally(() => preparing.delete(key));
       preparing.set(key, pending);
       void pending.then(
         (ready) => remember(key, ready),
@@ -277,6 +309,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     url: string,
     authorize: (req: FastifyRequest<{ Params: Params }>) => unknown,
     handler: (req: FastifyRequest<{ Params: Params }>, reply: FastifyReply) => unknown,
+    recheck = authorize,
   ) =>
     app.route<{ Params: Params }>({
       method: ["GET", "HEAD"],
@@ -307,7 +340,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
         // Taking access away also stops a download already running, within a megabyte or a second.
         done(
           null,
-          whileAllowed(payload, () => authorize(req)),
+          whileAllowed(payload, () => recheck(req)),
         );
       },
     });
@@ -327,7 +360,7 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     (req) => ownedItem(req, req.params.id),
     (req, reply) => {
       ownedItem(req, req.params.id);
-      return zip(req, reply, req.params.id, ownDownload(req));
+      return zip(req, reply, req.params.id, ownDownload(req), signedIn(req).userId);
     },
   );
   // Every share route asks the link first: its password, and who it lets in.
@@ -337,9 +370,11 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
     (req, reply) => {
       const access = shareAccess(req);
       const node = sharedNode(access, req.params.node);
-      counted(req, access, (req.query as Query).inline !== "1" && node.kind !== "folder");
+      const length = node.kind === "text" ? Buffer.byteLength(node.text ?? "") : node.size;
+      counted(req, access, (req.query as Query).inline !== "1" && node.kind !== "folder", length);
       return content(req, reply, node, sharedDownload(access));
     },
+    (req) => sharedNode(shareStill(req), req.params.node),
   );
   stream(
     "/api/s/:token/nodes/:node/thumbnail",
@@ -349,9 +384,17 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
       return thumbnail(req, reply, sharedNode(access, req.params.node));
     },
   );
-  stream("/api/s/:token/zip", shareAccess, (req, reply) => {
-    const access = shareAccess(req);
-    counted(req, access, true);
-    return zip(req, reply, access.itemId, sharedDownload(access));
-  });
+  stream(
+    "/api/s/:token/zip",
+    shareAccess,
+    (req, reply) => {
+      const access = shareAccess(req);
+      // The owner downloading through their own link uses their own places.
+      const holder: Holder = access.byOwner ? access.owner : { sharedBy: access.owner };
+      return zip(req, reply, access.itemId, sharedDownload(access), holder, (length) =>
+        counted(req, access, true, length),
+      );
+    },
+    shareStill,
+  );
 }

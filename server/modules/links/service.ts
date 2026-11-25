@@ -66,7 +66,10 @@ const usedUp = (row: Pick<LinkRow, "visitor_limit" | "visitors">) =>
 export const isAvailable = (row: LinkRow, now: number) => !row.revoked && !expired(row, now) && !!row.item_live;
 
 /** Unknown, revoked, expired or disabled-owner links are 404; a valid link to removed content is 410. */
-export function checkAvailable(row: LinkRow | undefined, now: number): LinkRow {
+export function checkAvailable<T extends Pick<LinkRow, "owner_disabled" | "item_live" | "revoked" | "expires">>(
+  row: T | undefined,
+  now: number,
+): T {
   if (!row || row.owner_disabled) return notFound("This link");
   if (!row.item_live) fail(410, "This content isn't available right now. Ask the person who shared it.");
   if (row.revoked || expired(row, now)) notFound("This link");
@@ -241,6 +244,7 @@ export function createLinks(ctx: Context): Links {
     visit,
     byOwner: false,
     locked,
+    passwordHash: row.password_hash,
   });
   const ownerAccess = (row: LinkRow): ShareAccess => ({ ...granted(row, null), byOwner: true });
   // Kept in the database, so a restart doesn't forgive anyone guessing.
@@ -322,6 +326,22 @@ export function createLinks(ctx: Context): Links {
       } finally {
         failures.release(pair);
       }
+    },
+
+    still(access) {
+      const now = Date.now();
+      const row = checkAvailable(
+        ctx.db.get<Pick<LinkRow, "owner_disabled" | "item_live" | "revoked" | "expires" | "password_hash">>(
+          `SELECT l.revoked, l.expires, l.password_hash, u.disabled AS owner_disabled,
+             (i.trashed IS NULL AND (i.expires IS NULL OR i.expires > ?)) AS item_live
+           FROM links l JOIN items i ON i.id = l.item JOIN users u ON u.id = l.owner WHERE l.id = ?`,
+          now,
+          access.linkId,
+        ),
+        now,
+      );
+      // A password added or changed since locks out everyone who hasn't entered it; one taken away doesn't.
+      if (!access.byOwner && row.password_hash !== null && row.password_hash !== access.passwordHash) fail(401, LOCKED);
     },
 
     downloaded(access) {

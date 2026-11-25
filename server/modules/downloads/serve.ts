@@ -129,13 +129,14 @@ async function* metered(chunks: AsyncIterable<Buffer>, onSent: (bytes: number) =
 }
 
 /**
- * A running download asks again whether it may go on once it has sent RECHECK_BYTES or RECHECK_MS
- * has passed, and never more often than RECHECK_GAP_MS: a fast download costs a handful of checks a
- * second, however fast it goes.
+ * A running download asks again whether it may go on right after its first chunk, then each time it
+ * has sent another RECHECK_BYTES or RECHECK_MS has passed. Each check is a row or two read (a share
+ * link's is the light `links.still`), so even a download moving hundreds of megabytes a second costs
+ * a small share of its own work; with any longer wait, a fast connection could take a whole file
+ * after access was taken away.
  */
 export const RECHECK_BYTES = 1024 * 1024;
 export const RECHECK_MS = 1000;
-export const RECHECK_GAP_MS = 100;
 
 /**
  * Passes a response's bytes through, asking `allowed` again as RECHECK_* say. When access has gone
@@ -145,18 +146,17 @@ export const RECHECK_GAP_MS = 100;
  * and the cut can't turn into an error page under the download's headers.
  */
 export async function* rechecked(source: AsyncIterable<Buffer>, allowed: () => unknown) {
-  let started = false;
+  let chunks = 0;
   let bytes = 0;
   let checked = Date.now();
   for await (const chunk of source) {
-    const waited = Date.now() - checked;
-    if (started && waited >= RECHECK_GAP_MS && (bytes >= RECHECK_BYTES || waited >= RECHECK_MS)) {
+    if (chunks === 1 || (chunks > 1 && (bytes >= RECHECK_BYTES || Date.now() - checked >= RECHECK_MS))) {
       allowed();
       bytes = 0;
       checked = Date.now();
     }
     yield chunk;
-    started = true;
+    chunks++;
     bytes += chunk.length;
   }
 }
