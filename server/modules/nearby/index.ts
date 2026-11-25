@@ -36,8 +36,9 @@ const SIGNALS = perAddress(600, "1 minute");
 const PAIR_BURST = 20;
 const PAIR_REFILL_MS = 2000;
 /**
- * A signal goes on only while the receiving stream holds less than this not yet read. A device
- * reading slowly then misses signals, and the sender tries again, rather than losing its stream.
+ * A signal goes on only while the receiving stream holds less than this not yet read. Past it the
+ * signal is refused as busy and the sender's browser sends it again shortly (client/lib/nearby/
+ * link.ts), so a device reading slowly gets its signals late rather than losing its stream.
  */
 const SIGNAL_BACKLOG_BYTES = 64 * 1024;
 
@@ -238,10 +239,11 @@ export function registerNearby(app: FastifyInstance, ctx: Context) {
     if (!from) fail(409, "Open Nearby again to continue.");
     const target = hub.get(to);
     if (!target || !hub.related(from, target)) fail(404, "That device isn’t in Nearby any more.");
-    if (!budgets.spend(from.id, target.id))
-      fail(429, "That device has had too many requests from this one. Try again in a moment.");
+    // Checked first, so a signal refused as busy doesn't use up the sender's allowance.
     if (target.channel.backlog() > SIGNAL_BACKLOG_BYTES)
       fail(503, "That device isn’t keeping up right now. Try again in a moment.");
+    if (!budgets.spend(from.id, target.id))
+      fail(429, "That device has had too many requests from this one. Try again in a moment.");
     // Only local candidates go on (see shared/candidates.ts), for browsers that don't filter them themselves.
     const passed = signal.kind === "bye" ? signal : { ...signal, sdp: localCandidates(signal.sdp) };
     hub.send(target, { type: "signal", from: from.id, signal: passed });
