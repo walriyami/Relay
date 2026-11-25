@@ -524,7 +524,12 @@ CREATE TABLE links (
   revoked INTEGER,
   password_hash TEXT,
   visitor_limit INTEGER CHECK (visitor_limit IS NULL OR visitor_limit >= 1),
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  -- Kept by the link_visits triggers: the people let in, their downloads, and the last time one was
+  -- here. They count everyone ever let in, so forgetting old visits (see link_visits) keeps them.
+  visitors INTEGER NOT NULL DEFAULT 0,
+  downloads INTEGER NOT NULL DEFAULT 0,
+  last_visit INTEGER
 ) STRICT;
 CREATE INDEX links_owner ON links(owner, created);
 CREATE INDEX links_item ON links(item);
@@ -533,7 +538,9 @@ CREATE INDEX links_item ON links(item);
 -- cookie and the link id, so rows can't be matched across links. Nothing identifying is stored:
 -- `device` is a coarse label such as "Safari on iPhone". `unlocked` holds the password hash the
 -- visitor last unlocked with; changing or removing the password makes it stale. The owner's own
--- views are never recorded.
+-- views are never recorded. `network` is an HMAC of the visitor's network (IPv4 /24, IPv6 /48) and
+-- the link id, to count new people per network; visits before 2026-11 have none. A link without a
+-- limit keeps its most recently active visits only (see VISITS_KEPT in links/service.ts).
 CREATE TABLE link_visits (
   id TEXT PRIMARY KEY,
   link TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
@@ -544,8 +551,23 @@ CREATE TABLE link_visits (
   downloads INTEGER NOT NULL DEFAULT 0,
   last_download INTEGER,
   unlocked TEXT,
+  network TEXT,
   UNIQUE (link, visitor)
 ) STRICT;
+CREATE INDEX link_visits_last ON link_visits(link, last);
+CREATE INDEX link_visits_network ON link_visits(link, network, first);
+
+-- links.visitors, downloads and last_visit. Deleting a visit leaves them: they count everyone ever let in.
+CREATE TRIGGER link_visits_insert AFTER INSERT ON link_visits BEGIN
+  UPDATE links SET visitors = visitors + 1, downloads = downloads + NEW.downloads,
+      last_visit = max(ifnull(last_visit, 0), NEW.last)
+    WHERE id = NEW.link;
+END;
+CREATE TRIGGER link_visits_update AFTER UPDATE OF downloads, last ON link_visits BEGIN
+  UPDATE links SET downloads = downloads + NEW.downloads - OLD.downloads,
+      last_visit = max(ifnull(last_visit, 0), NEW.last)
+    WHERE id = NEW.link;
+END;
 
 -- An item sent to one of the owner's devices. The device needn't have Relay open: the delivery waits
 -- until it does (see delivery_receipts). The receiving device answers it: accepted (downloaded there)
@@ -578,6 +600,7 @@ CREATE TABLE activity (
   data TEXT NOT NULL
 ) STRICT;
 CREATE INDEX activity_owner ON activity(owner, created);
+CREATE INDEX activity_owner_kind ON activity(owner, kind, created);
 CREATE INDEX activity_created ON activity(created);
 
 -- Hourly usage per member, for their Usage page and for Admin. `hour` counts whole hours since the

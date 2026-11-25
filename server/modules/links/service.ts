@@ -16,6 +16,7 @@ import { DAY_MS } from "../../lib/time.ts";
 const VISITOR_MS = 365 * DAY_MS;
 /** Repeated requests from one visitor (thumbnails, previews) move `last` at most this often. */
 const TOUCH_MS = 60_000;
+const HOUR_MS = 3_600_000;
 
 export const LOCKED = "Enter this link’s password to open it.";
 
@@ -40,10 +41,20 @@ export type LinkRow = {
 export const LINK_SELECT = `SELECT l.id, l.owner, l.item, l.created, l.expires, l.revoked, l.password_hash,
     l.visitor_limit, l.note, u.disabled AS owner_disabled,
     (i.trashed IS NULL AND (i.expires IS NULL OR i.expires > ?)) AS item_live,
-    (SELECT count(*) FROM link_visits v WHERE v.link = l.id) AS visitors,
-    (SELECT coalesce(sum(downloads), 0) FROM link_visits v WHERE v.link = l.id) AS downloads,
-    (SELECT max(last) FROM link_visits v WHERE v.link = l.id) AS last_visit
+    l.visitors, l.downloads, l.last_visit
   FROM links l JOIN items i ON i.id = l.item JOIN users u ON u.id = l.owner`;
+
+/**
+ * New people one network (an IPv4 /24 or IPv6 /48) can add to a link's visits in an hour. Past it,
+ * a link without a limit or password still opens for them, uncounted, so nobody can churn out the
+ * visits of the people the link was shared with. A limit already bounds a link's visits.
+ */
+export const NEW_VISITORS_PER_NETWORK = 30;
+/** A link without a limit keeps this many of its most recently active visits; links.visitors keeps the total. */
+export const VISITS_KEPT = 1_000;
+/** What a browser that doesn't keep the visitor cookie is told by a link that counts people. */
+export const NEEDS_COOKIES =
+  "This link counts the people who open it, which needs cookies. Allow cookies for this site, then reload.";
 
 /** SQL for "this link has not expired"; `?` is the current time. */
 export const LINK_UNEXPIRED = "(l.expires IS NULL OR l.expires > ?)";
@@ -124,18 +135,22 @@ const SUSPECT_AFTER = 3;
  * Who is asking for a link's content: "owner" for its owner, signed in, who is never counted or
  * locked out. Anyone else is told apart by a random cookie, and their visit is keyed by an HMAC of
  * it and the link id. Without a reply to set a new cookie on, a browser that has none is anonymous.
+ * `returning` says the browser sent its cookie: one given a new cookie here isn't counted until it
+ * comes back with it, so a script that keeps no cookies opens nothing up and adds nobody.
  */
 function visitorOf(ctx: Context, req: FastifyRequest, reply: FastifyReply | null, row: LinkRow) {
   if (authOf(ctx, req).member?.userId === row.owner) return "owner" as const;
   const name = visitorCookie(ctx, req);
   let secret = req.cookies[name];
+  let returning = true;
   if (!secret || !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
     if (!reply) return null;
     secret = randomToken();
+    returning = false;
   }
   // Refreshed on every open, so a browser that keeps coming back stays the same person.
   reply?.setCookie(name, secret, cookieOptions(ctx, req, VISITOR_MS));
-  return sha256(`${secret}:${row.id}`);
+  return { key: sha256(`${secret}:${row.id}`), returning };
 }
 
 const visitOf = (ctx: Context, linkId: string, visitor: string) =>
@@ -144,10 +159,11 @@ const visitOf = (ctx: Context, linkId: string, visitor: string) =>
 /**
  * Lets a visitor in: records them the first time (which counts toward a limit, and tells the owner),
  * and afterwards notes when they were last here. `unlocked` is the password hash they just entered.
+ * Null when a link without a limit or password lets them in uncounted (NEW_VISITORS_PER_NETWORK).
  */
 function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string, unlocked: string | null) {
   const now = Date.now();
-  return ctx.db.tx(() => {
+  return ctx.db.tx((): string | null => {
     const visit = visitOf(ctx, row.id, visitor);
     if (visit) {
       if (unlocked !== null && visit.unlocked !== unlocked)
@@ -155,12 +171,26 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
       else if (now - visit.last >= TOUCH_MS) ctx.db.run("UPDATE link_visits SET last = ? WHERE id = ?", now, visit.id);
       return visit.id;
     }
-    const current = ctx.db.value<number>("SELECT count(*) FROM link_visits WHERE link = ?", row.id)!;
+    const current = ctx.db.value<number>("SELECT visitors FROM links WHERE id = ?", row.id)!;
     if (row.visitor_limit !== null && current >= row.visitor_limit) fail(410, LINK_USED_UP);
+    const network = ctx.secrets.linkVisitNetwork(row.id, wideNetworkOf(req.ip));
+    // A visit someone needs to stay let in (a limited link's, or one past a password) is always kept.
+    const open = row.visitor_limit === null && row.password_hash === null;
+    if (
+      open &&
+      ctx.db.value<number>(
+        "SELECT count(*) FROM (SELECT 1 FROM link_visits WHERE link = ? AND network = ? AND first > ? LIMIT ?)",
+        row.id,
+        network,
+        now - HOUR_MS,
+        NEW_VISITORS_PER_NETWORK,
+      )! >= NEW_VISITORS_PER_NETWORK
+    )
+      return null;
     const id = uuidv7();
     const device = deviceLabel(String(req.headers["user-agent"] ?? ""));
     ctx.db.run(
-      "INSERT INTO link_visits(id, link, visitor, device, first, last, unlocked) VALUES(?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO link_visits(id, link, visitor, device, first, last, unlocked, network) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       id,
       row.id,
       visitor,
@@ -168,7 +198,16 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
       now,
       now,
       unlocked,
+      network,
     );
+    // Rows a link without a limit keeps are bounded; the counts in links keep everyone.
+    if (row.visitor_limit === null)
+      ctx.db.run(
+        `DELETE FROM link_visits WHERE id IN
+           (SELECT id FROM link_visits WHERE link = ? ORDER BY last DESC, id DESC LIMIT -1 OFFSET ?)`,
+        row.id,
+        VISITS_KEPT,
+      );
     ctx.activity.record(row.owner, {
       kind: "link",
       linkId: row.id,
@@ -205,18 +244,25 @@ export function createLinks(ctx: Context): Links {
   const failures = new FailureCounter(ctx, "link-password", UNLOCK_FAILURES.windowMs);
   const linkFailures = new FailureCounter(ctx, "link-password-link", UNLOCK_FAILURES_PER_LINK.windowMs);
 
-  function open(token: string, req: FastifyRequest, reply: FastifyReply): ShareAccess {
+  function open(token: string, req: FastifyRequest, reply: FastifyReply, again: boolean): ShareAccess | "again" {
     const row = find(token);
-    const visitor = visitorOf(ctx, req, reply, row);
-    if (visitor === "owner") return ownerAccess(row);
     // A new cookie can always be set here, so there is a visitor.
-    const visit = visitOf(ctx, row.id, visitor!);
+    const visitor = visitorOf(ctx, req, reply, row)!;
+    if (visitor === "owner") return ownerAccess(row);
+    const visit = visitor.returning ? visitOf(ctx, row.id, visitor.key) : undefined;
     if (row.password_hash !== null && visit?.unlocked !== row.password_hash) {
       // Nobody new gets as far as the password once the link is used up.
       if (!visit && usedUp(row)) fail(410, LINK_USED_UP);
       return granted(row, null, true);
     }
-    return granted(row, admit(ctx, req, row, visitor!, null));
+    if (!visitor.returning) {
+      // The browser is asked to come straight back with its new cookie, which is when it counts.
+      if (!again) return "again";
+      // It came back without one: it keeps no cookies. A link that counts people can't tell it apart.
+      if (row.visitor_limit !== null) fail(403, NEEDS_COOKIES);
+      return granted(row, null);
+    }
+    return granted(row, admit(ctx, req, row, visitor.key, null));
   }
 
   return {
@@ -226,20 +272,25 @@ export function createLinks(ctx: Context): Links {
       const row = find(token);
       const visitor = visitorOf(ctx, req, null, row);
       if (visitor === "owner") return ownerAccess(row);
-      const visit = visitor === null ? undefined : visitOf(ctx, row.id, visitor);
+      const visit = visitor === null ? undefined : visitOf(ctx, row.id, visitor.key);
       if (row.password_hash !== null && visit?.unlocked !== row.password_hash) fail(401, LOCKED);
-      if (visit) return granted(row, admit(ctx, req, row, visitor!, null));
+      if (visit) return granted(row, admit(ctx, req, row, visitor!.key, null));
       // Someone the link hasn't let in yet. A limited link only serves the people it counted; an
       // open one serves anyone, counting them when their browser can be told apart.
       if (row.visitor_limit !== null)
         fail(usedUp(row) ? 410 : 401, usedUp(row) ? LINK_USED_UP : "Open the link first.");
-      return granted(row, visitor === null ? null : admit(ctx, req, row, visitor, null));
+      return granted(row, visitor === null ? null : admit(ctx, req, row, visitor.key, null));
     },
 
     async unlock(token, password, req, reply) {
       const row = find(token);
-      const visitor = visitorOf(ctx, req, reply, row);
-      if (visitor === "owner" || row.password_hash === null) return open(token, req, reply);
+      const visitor = visitorOf(ctx, req, reply, row)!;
+      if (visitor === "owner" || row.password_hash === null) {
+        const access = open(token, req, reply, true);
+        return access === "again" ? fail(403, NEEDS_COOKIES) : access;
+      }
+      // Knowing the password is what lets someone in here, so a browser is counted even without its
+      // cookie yet; how many visits such a link keeps is bounded like any other's.
       const now = Date.now();
       const pair = `${row.id}\n${wideNetworkOf(req.ip)}`;
       if (!failures.reserve(pair, now, UNLOCK_FAILURES.max))
@@ -261,7 +312,7 @@ export function createLinks(ctx: Context): Links {
           // The owner may have changed the link while the password was being checked.
           const current = find(token);
           if (current.password_hash !== row.password_hash) fail(409, "This link’s password just changed. Try again.");
-          return granted(current, admit(ctx, req, current, visitor!, current.password_hash));
+          return granted(current, admit(ctx, req, current, visitor.key, current.password_hash));
         } finally {
           linkFailures.release(row.id);
         }

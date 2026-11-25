@@ -63,15 +63,16 @@ export function describeEntry(e: ActivityEntry): Described {
         title: `${e.sender || "Someone"} sent ${!e.files && e.text ? "text" : "files"} to “${e.request}”`,
         detail: contents(e.files, e.bytes, e.text),
       };
-    case "link":
-      // One entry per person: when they first open the link, and when they first download from it.
+    case "link": {
+      // When people first open the link, and when they first download from it. Several within an
+      // hour of each other share one entry.
+      const browsers = e.browsers ?? 1;
+      const by = browsers > 1 ? ` by ${plural(browsers, "browser")}` : "";
+      const detail = browsers > 1 ? `Latest on ${e.device}` : `On ${e.device}`;
       return e.action === "opened"
-        ? { icon: <Eye size={16} />, title: `Your link to “${e.item}” was opened`, detail: `On ${e.device}` }
-        : {
-            icon: <Download size={16} />,
-            title: `“${e.item}” was downloaded with your link`,
-            detail: `On ${e.device}`,
-          };
+        ? { icon: <Eye size={16} />, title: `Your link to “${e.item}” was opened${by}`, detail }
+        : { icon: <Download size={16} />, title: `“${e.item}” was downloaded${by} with your link`, detail };
+    }
     case "joined":
       return {
         icon: <UserPlus size={16} />,

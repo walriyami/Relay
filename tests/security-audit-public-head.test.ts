@@ -5,7 +5,7 @@ import { request, type IncomingHttpHeaders } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import sharp from "sharp";
 import { api } from "../shared/api.ts";
-import { Client, admin, member, send, start, type Instance } from "./support/harness.ts";
+import { Client, admin, member, openShare, send, start, type Instance } from "./support/harness.ts";
 
 type Observed = { status: number; headers: IncomingHttpHeaders; body: string };
 type Evidence = {
@@ -46,15 +46,14 @@ after(() => {
 });
 const pathOf = (route: string, values: Record<string, string>) =>
   Object.entries(values).reduce((path, [key, value]) => path.replace(`:${key}`, encodeURIComponent(value)), route);
+const baseOf = async (instance: Instance) => {
+  const address = instance.app.server.address();
+  return address && typeof address === "object"
+    ? `http://127.0.0.1:${address.port}`
+    : await instance.app.listen({ port: 0, host: "127.0.0.1" });
+};
 const raw = async (client: Client, method: "GET" | "HEAD", path: string): Promise<Observed> => {
-  if (method === "HEAD") {
-    const address = client.instance.app.server.address();
-    const base =
-      address && typeof address === "object"
-        ? `http://127.0.0.1:${address.port}`
-        : await client.instance.app.listen({ port: 0, host: "127.0.0.1" });
-    return network(base, client, method, path);
-  }
+  if (method === "HEAD") return network(await baseOf(client.instance), client, method, path);
   const response = await client.raw({ method, url: path });
   return { status: response.statusCode, headers: response.headers as IncomingHttpHeaders, body: response.body };
 };
@@ -190,8 +189,22 @@ test("public HEAD: share metadata/content/thumbnail/zip retain bearer and resour
       "/api/s/:token/nodes/:node/thumbnail",
       "/api/s/:token/zip",
     ];
+    // The share itself sends a browser with no cookie yet back for one, for HEAD as for GET; these
+    // network requests keep no cookie, so both are that first visit.
+    const dance = await check(visitor, routes[0], { token }, 307, "no cookie yet", undefined, await baseOf(instance));
+    assert.equal(dance.head.headers.location, dance.get.headers.location);
+    // Content needs no cookie, so it stays a no-cookie holder's; the share is opened with one.
+    const cookied = new Client(instance);
+    await openShare(cookied, token);
     for (const route of routes) {
-      await check(visitor, route, { token, node }, 200, "valid resource");
+      await check(
+        route === routes[0] ? cookied : visitor,
+        route,
+        { token, node },
+        200,
+        "valid resource",
+        route === routes[0] ? "visitor-cookie holder" : undefined,
+      );
       await check(visitor, route, { token: invalid, node }, 404, "invalid bearer");
     }
     for (const route of routes.slice(1, 3))
@@ -225,7 +238,7 @@ test("public HEAD: share metadata/content/thumbnail/zip retain bearer and resour
     instance.ctx.db.run("UPDATE links SET expires = ? WHERE id = ?", Date.now() - 1, first.result.link!.id);
     for (const route of routes)
       await check(
-        visitor,
+        cookied,
         route,
         { token, node },
         404,

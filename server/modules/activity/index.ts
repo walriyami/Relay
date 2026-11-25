@@ -17,12 +17,41 @@ import { readPrefs } from "../auth/sessions.ts";
 
 /** Entries older than this are deleted by the sweep. */
 export const ACTIVITY_DAYS = 90;
-/** The feed shows at most this many entries. */
+/** The feed shows at most this many entries, and also the newest SECURITY_KEPT security entries. */
 export const ACTIVITY_LIMIT = 100;
+/**
+ * Sign-ins and password and passkey changes the feed always shows, however many newer entries others
+ * (anyone opening a link, sending to a request) made.
+ */
+export const SECURITY_KEPT = 30;
+/** People opening, or downloading from, one link within this long of the last share one entry. */
+export const LINK_ENTRY_MS = 60 * 60_000;
+const SECURITY_KINDS = (Object.keys(ACTIVITY_GROUPS) as ActivityKind[]).filter(
+  (kind) => ACTIVITY_GROUPS[kind] === "security",
+);
 
 export function createActivity(ctx: Context): Activity {
   return {
     record(owner, event, by = null) {
+      const now = Date.now();
+      if (event.kind === "link") {
+        // Another person within the hour joins the link's entry, which moves up to now, rather than
+        // adding one: a link handed around (or opened by a script) can't bury the rest of the feed.
+        const joined = ctx.db.run(
+          `UPDATE activity SET created = ?,
+             data = json_set(data, '$.browsers', ifnull(json_extract(data, '$.browsers'), 1) + 1, '$.device', ?)
+           WHERE id = (SELECT id FROM activity WHERE owner = ? AND kind = 'link' AND created > ?
+             AND json_extract(data, '$.linkId') = ? AND json_extract(data, '$.action') = ?
+             ORDER BY created DESC LIMIT 1)`,
+          now,
+          event.device,
+          owner,
+          now - LINK_ENTRY_MS,
+          event.linkId,
+          event.action,
+        ).changes;
+        if (joined) return ctx.events.publish(owner, "activity");
+      }
       const id = uuidv7();
       if (event.kind === "signin") event = { ...event, familiar: familiarDevice(ctx, owner, event.deviceId) };
       ctx.db.run(
@@ -31,7 +60,7 @@ export function createActivity(ctx: Context): Activity {
         owner,
         event.kind,
         by,
-        Date.now(),
+        now,
         JSON.stringify(event),
       );
       ctx.events.publish(owner, "activity");
@@ -88,21 +117,30 @@ export function registerActivity(app: FastifyInstance, ctx: Context) {
     )!;
     const wanted = readPrefs(user.prefs).activity;
     const kinds = (Object.keys(ACTIVITY_GROUPS) as ActivityKind[]).filter((kind) => wanted[ACTIVITY_GROUPS[kind]]);
-    const entries = kinds.length
-      ? ctx.db
-          .all<{ id: string; created: number; by_device: string | null; data: string }>(
-            `SELECT id, created, by_device, data FROM activity WHERE owner = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+    type Row = { id: string; created: number; by_device: string | null; data: string };
+    const newest = (of: ActivityKind[], limit: number) =>
+      of.length
+        ? ctx.db.all<Row>(
+            `SELECT id, created, by_device, data FROM activity WHERE owner = ? AND kind IN (${of.map(() => "?").join(", ")})
              ORDER BY created DESC, id DESC LIMIT ?`,
             member.userId,
-            ...kinds,
-            ACTIVITY_LIMIT,
+            ...of,
+            limit,
           )
-          .map((row): ActivityEntry => {
-            const event = JSON.parse(row.data) as ActivityEvent;
-            const self = row.by_device === member.deviceId;
-            return { ...event, id: row.id, created: row.created, self, news: !self && isNews(event) };
-          })
-      : [];
+        : [];
+    const rows = new Map(newest(kinds, ACTIVITY_LIMIT).map((row) => [row.id, row]));
+    for (const row of newest(
+      SECURITY_KINDS.filter((kind) => kinds.includes(kind)),
+      SECURITY_KEPT,
+    ))
+      rows.set(row.id, row);
+    const entries = [...rows.values()]
+      .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      .map((row): ActivityEntry => {
+        const event = JSON.parse(row.data) as ActivityEvent;
+        const self = row.by_device === member.deviceId;
+        return { ...event, id: row.id, created: row.created, self, news: !self && isNews(event) };
+      });
     return { entries, seen: user.activity_seen };
   });
 

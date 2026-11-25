@@ -190,8 +190,7 @@ class Streams {
       : undefined;
     if (lease && (lease.closed !== null || lease.principal !== principalKey(spec.lease!.principal)))
       fail(409, TAB_CLOSED);
-    const renewTab =
-      tab && (lease ? lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs : start);
+    const renewTab = tab && (lease ? lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs : start);
     const renewDevice =
       spec.deviceId &&
       (this.ctx.db.value<number>("SELECT seen FROM devices WHERE id = ?", spec.deviceId) ?? 0) <= now - this.durableMs;

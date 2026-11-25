@@ -100,8 +100,15 @@ export function registerLinks(app: FastifyInstance, ctx: Context) {
     };
   };
 
-  route(app, ctx, api.links.open, ({ req, reply, params }): ShareOpen => {
-    const access = ctx.links.open(params.token, req, reply);
+  route(app, ctx, api.links.open, ({ req, reply, params, query }): ShareOpen => {
+    const access = ctx.links.open(params.token, req, reply, query.again === "1");
+    // A browser without a visitor cookie comes straight back with the one just set, which fetch
+    // does by itself; one that keeps no cookies comes back without it, and is told apart by `again`.
+    if (access === "again")
+      return reply
+        .code(307)
+        .header("location", `/api/s/${encodeURIComponent(params.token)}?again=1`)
+        .send() as never;
     return access.locked ? { locked: true, from: publicName(ctx, access.owner) } : share(access);
   });
 

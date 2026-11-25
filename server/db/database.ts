@@ -86,6 +86,7 @@ export class Database {
       this.initialize(schema);
       this.checkStoredTypes();
       this.checkHeldTotals();
+      this.checkLinkTotals();
     } catch (error) {
       this.sqlite.close();
       if (isDamage(error)) throw new DatabaseDamaged(String((error as Error).message));
@@ -190,6 +191,22 @@ export class Database {
       }
     });
     this.correctedHeldTotals = wrong.length + requests.length;
+  }
+
+  /**
+   * links.visitors, downloads and last_visit (kept by the link_visits triggers) count everyone a link
+   * ever let in, so they never fall below what its visits add up to. Any that do, as when the columns
+   * are new to this database, are raised to it.
+   */
+  private checkLinkTotals() {
+    this.run(
+      `UPDATE links SET visitors = max(links.visitors, v.visitors), downloads = max(links.downloads, v.downloads),
+         last_visit = max(ifnull(links.last_visit, 0), v.last)
+       FROM (SELECT link, count(*) AS visitors, sum(downloads) AS downloads, max(last) AS last
+             FROM link_visits GROUP BY link) AS v
+       WHERE links.id = v.link
+         AND (links.visitors < v.visitors OR links.downloads < v.downloads OR ifnull(links.last_visit, 0) < v.last)`,
+    );
   }
 
   /** Notes storage failures so health can report them; every statement passes through here. */

@@ -55,7 +55,9 @@ test("opens and downloads are traced per person, never for the owner", async () 
 
     const phone = new Client(instance);
     const opened = await phone.raw({ method: "GET", url: `/api/s/${link.token}`, headers: { "user-agent": IPHONE } });
-    assert.equal(opened.statusCode, 200);
+    assert.equal(opened.statusCode, 307, "a browser without the visitor cookie is sent straight back with it");
+    const url = opened.headers.location as string;
+    assert.equal((await phone.raw({ method: "GET", url, headers: { "user-agent": IPHONE } })).statusCode, 200);
     const share = await openShare(phone, link.token);
     const file = share.nodes[0].id;
 
@@ -101,8 +103,15 @@ test("opens and downloads are traced per person, never for the owner", async () 
     assert.equal(iphone.downloads, 2);
 
     const { entries } = await owner.call(api.activity.list);
-    const events = entries.filter((e) => e.kind === "link").map((e) => e.kind === "link" && e.action);
-    assert.deepEqual(events.sort(), ["downloaded", "opened", "opened"], "one entry per person, not per request");
+    const events = entries.filter((e) => e.kind === "link").map((e) => e.kind === "link" && [e.action, e.browsers]);
+    assert.deepEqual(
+      events.sort(),
+      [
+        ["downloaded", undefined],
+        ["opened", 2],
+      ],
+      "people, not requests, and those within the hour share an entry",
+    );
 
     // Nothing that tells people apart is kept: the visitor key differs from the cookie.
     const cookie = [...phone.cookies.values()].join();
