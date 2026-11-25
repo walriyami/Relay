@@ -102,17 +102,17 @@ export function createPush(ctx: Context): Push {
       );
     },
     recorded(owner, entryId, event) {
-      const message = messageFor(ctx, owner, entryId, event);
-      if (!message || !wants(owner, message.group)) return;
+      // Visitors cause these, so each costs a few lookups by key, and nothing without a device to tell.
       const rows = subscribers(owner);
-      if (rows.length) notify(rows, message.message);
+      if (!rows.length) return;
+      const message = messageFor(ctx, entryId, event);
+      if (message && wants(owner, message.group)) notify(rows, message.message);
     },
   };
 }
 
 function messageFor(
   ctx: Context,
-  owner: string,
   entryId: string,
   event: ActivityEvent,
 ): { group: "requests" | "links"; message: Message } | null {
@@ -132,14 +132,13 @@ function messageFor(
     };
   }
   if (event.kind === "link" && event.action === "downloaded") {
-    // Only the link's first download: later ones are in Activity and on the link.
-    const downloads = ctx.db.value<number>(
-      `SELECT count(*) FROM activity WHERE owner = ? AND kind = 'link'
-       AND json_extract(data, '$.linkId') = ? AND json_extract(data, '$.action') = 'downloaded'`,
-      owner,
+    // Only the link's first download: later ones are in Activity and on the link. Its visitors who
+    // downloaded, counted no further than two, so a link with many costs no more than a new one.
+    const downloaders = ctx.db.value<number>(
+      "SELECT count(*) FROM (SELECT 1 FROM link_visits WHERE link = ? AND downloads > 0 LIMIT 2)",
       event.linkId,
     );
-    if (downloads !== 1) return null;
+    if (downloaders !== 1) return null;
     return {
       group: "links",
       message: {

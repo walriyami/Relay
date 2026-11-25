@@ -386,6 +386,8 @@ CREATE TABLE link_visits (
   unlocked TEXT,
   UNIQUE (link, visitor)
 ) STRICT;
+-- Whether a link has been downloaded before, however many people only opened it.
+CREATE INDEX link_visits_downloaded ON link_visits(link) WHERE downloads > 0;
 
 -- An item sent to one of the owner's devices. The device needn't have Relay open: the delivery waits
 -- until it does (see delivery_receipts). The receiving device answers it: accepted (downloaded there)
