@@ -8,7 +8,7 @@ import type { Context, ShareAccess } from "../../context.ts";
 import { currentMember, requireMember } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { ownedReadable } from "../library/items.ts";
-import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send } from "./serve.ts";
+import { bodyOf, contentDisposition, inlineHeaders, safePreviewMime, send, whileAllowed } from "./serve.ts";
 import { createThumbnails } from "./thumbnails.ts";
 import { crc32 } from "node:zlib";
 import { validTimeZone, zipPlan, type ZipContent, type ZipEntry, type ZipPlan } from "./zip.ts";
@@ -294,7 +294,11 @@ export function registerDownloads(app: FastifyInstance, ctx: Context) {
             return;
           }
         }
-        done(null, payload);
+        // Taking access away also stops a download already running, within a megabyte or a second.
+        done(
+          null,
+          whileAllowed(payload, () => authorize(req)),
+        );
       },
     });
 

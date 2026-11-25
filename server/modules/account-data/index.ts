@@ -11,7 +11,7 @@ import { fail, HttpError } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { usageOf } from "../auth/sessions.ts";
 import { MAX_ZIP_TEXT_BYTES } from "../downloads/index.ts";
-import { contentDisposition, send } from "../downloads/serve.ts";
+import { contentDisposition, send, whileAllowed } from "../downloads/serve.ts";
 import { validTimeZone, zipLayout, type ZipContent, type ZipEntry } from "../downloads/zip.ts";
 
 type Row = {
@@ -196,7 +196,11 @@ export function registerAccountData(app: FastifyInstance, ctx: Context) {
         done(new HttpError(401, "Sign in to continue."));
         return;
       }
-      done(null, payload);
+      // Signing out or suspending also stops an export already running, as for any download.
+      done(
+        null,
+        whileAllowed(payload, () => signedIn(req)),
+      );
     },
   });
 }
