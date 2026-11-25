@@ -153,6 +153,15 @@ test("zipLayout: names stored before the name rules are written as they'd downlo
     entry(".\u200b./x.txt"),
     entry("Reports/\u202e."),
     entry("..\\evil.txt"),
+    // Names that clean to the same name in a folder that's cleaned too.
+    entry("x    /y"),
+    entry("x    /y\u200b"),
+    // Spaces at the ends are taken off a folder's name and its contents' alike.
+    entry("Docs ", "folder"),
+    entry("Docs /a.txt"),
+    // Control characters and a byte-order mark at the ends are cleaned too.
+    entry("\tnotes.txt\t"),
+    entry("\ufeffreport.pdf"),
   ];
   const zip = await read(
     zipLayout(entries, () => ({ data: text })),
@@ -173,6 +182,12 @@ test("zipLayout: names stored before the name rules are written as they'd downlo
     "Untitled (2)/x.txt",
     "Reports/Untitled",
     "..-evil.txt",
+    "x/y",
+    "x/y (2)",
+    "Docs/",
+    "Docs/a.txt",
+    "notes.txt",
+    "report.pdf",
   ]);
 });
 

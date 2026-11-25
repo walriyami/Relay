@@ -145,52 +145,58 @@ function numbered(name: string, n: number, folder: boolean) {
   return dot > 0 ? `${name.slice(0, dot)} (${n})${name.slice(dot)}` : `${name} (${n})`;
 }
 
+/** One stored name as written: cleaned as a downloaded file's is, and never "", ".", ".." or a slash. */
+const writtenName = (name: string) => cleanFileName(name).replace(/[/\\]/g, "-") || "Untitled";
+
 /**
  * The paths that must be written differently, by entry: names stored before Relay's name rules may
  * hide what they are (a direction override showing "…gpj.exe" as "…exe.jpg", 50 spaces before
- * ".exe"), and an unzip tool shows them as they are. Each such name is cleaned as a downloaded
- * file's is, and a folder's new name carries over to everything inside it. A cleaned name that
- * now matches another in its folder, ignoring case as macOS and Windows do, gets a number; names
- * that needed no cleaning keep theirs. Nothing may put an entry outside its folder when unzipped:
- * a name that is, or cleans to, "." or ".." is written "Untitled", and a slash or backslash "-".
+ * ".exe"), and an unzip tool shows them as they are. Each name in a path is cleaned as a downloaded
+ * file's is, so a folder's new name carries over to everything inside it. A cleaned name that
+ * matches another in its folder, ignoring case as macOS and Windows do, gets a number; paths that
+ * needed no cleaning keep theirs. Nothing may put an entry outside its folder when unzipped: a name
+ * that is, or cleans to, "." or ".." or nothing is written "Untitled", and a slash or backslash "-".
  * Null when nothing needs it, as for nearly every archive.
  */
 function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null {
-  const changed: number[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const path = entries[i].path;
-    if (cleanFileName(path) !== path || OUTSIDE.test(path)) changed.push(i);
-  }
+  const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
+  const leafOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+  // Whether a path, and every folder above it, is written as stored.
+  const asStored = new Map<string, boolean>();
+  const stored = (path: string): boolean => {
+    let known = asStored.get(path);
+    if (known === undefined) {
+      // The folders above are judged first, so each one written as stored is known, and claims its
+      // place, even when a name inside it is cleaned.
+      const above = !path.includes("/") || stored(parentOf(path));
+      known = above && writtenName(leafOf(path)) === leafOf(path);
+      asStored.set(path, known);
+    }
+    return known;
+  };
+  const changed = entries.flatMap((entry, i) => (stored(entry.path) ? [] : [i]));
   if (!changed.length) return null;
-  // Every name already in use, with the folders above it, claims its place first.
+  // Every path written as stored, with the folders above it, claims its place first.
   const taken = new Set<string>();
-  const isChanged = new Set(changed);
-  for (let i = 0; i < entries.length; i++) {
-    if (isChanged.has(i)) continue;
-    let path = entries[i].path;
-    while (path && !taken.has(path.toLowerCase())) {
-      taken.add(path.toLowerCase());
-      path = path.slice(0, Math.max(path.lastIndexOf("/"), 0));
-    }
-  }
-  // Each original path (a folder's, or an entry's) and what it's written as.
+  for (const [path, same] of asStored) if (same) taken.add(path.toLowerCase());
+  // Each original path (a folder's, or an entry's) and what it's written as; and for each cleaned
+  // path, the next number to try, so many names cleaning to one don't each count up from 2.
   const written = new Map<string, string>();
+  const next = new Map<string, number>();
   const write = (path: string, folder: boolean): string => {
-    const known = written.get(path);
-    if (known !== undefined) return known;
-    const slash = path.lastIndexOf("/");
-    const parent = slash < 0 ? "" : path.slice(0, slash);
-    const name = slash < 0 ? path : path.slice(slash + 1);
-    const into = parent ? `${write(parent, true)}/` : "";
-    // Spaces at either end hide nothing, so a folder isn't split from its contents over them.
-    let clean = cleanFileName(name).replace(/[/\\]/g, "-");
-    if (!clean) clean = "Untitled";
-    else if (clean === name.trim()) clean = name;
-    let result = into + clean;
-    if (result !== path) {
-      for (let n = 2; taken.has(result.toLowerCase()); n++) result = into + numbered(clean, n, folder);
-      taken.add(result.toLowerCase());
+    if (stored(path)) return path;
+    let result = written.get(path);
+    if (result !== undefined) return result;
+    const into = path.includes("/") ? `${write(parentOf(path), true)}/` : "";
+    const clean = writtenName(leafOf(path));
+    result = into + clean;
+    const key = result.toLowerCase();
+    if (taken.has(key)) {
+      let n = next.get(key) ?? 2;
+      while (taken.has((result = into + numbered(clean, n, folder)).toLowerCase())) n++;
+      next.set(key, n + 1);
     }
+    taken.add(result.toLowerCase());
     written.set(path, result);
     return result;
   };
