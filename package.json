@@ -39,7 +39,7 @@
     "@walriyami/auth": "file:vendor/walriyami-auth-0.1.4.tgz",
     "fastify": "^5.12.8",
     "heic-decode": "^2.1.0",
-    "node-datachannel": "^0.33.4",
+    "node-datachannel": "^0.33.6",
     "sharp": "^0.35.5",
     "zod": "^4.6.6"
   },
