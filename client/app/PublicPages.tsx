@@ -232,10 +232,13 @@ function renames(items: Pick[], earlier: Transfer[]) {
  */
 function limitProblem(info: PublicRequest, size: number) {
   if (size <= info.remainingBytes) return null;
+  const who = info.owner || "The person who asked";
   return `${
-    info.remainingBytes < info.maxBytes
-      ? `This request has room for ${bytes(info.remainingBytes)} more`
-      : `This request accepts up to ${bytes(info.maxBytes)}`
+    info.storageLimited
+      ? `${who} has room for ${bytes(info.remainingBytes)} more right now`
+      : info.remainingBytes < info.maxBytes
+        ? `This request has room for ${bytes(info.remainingBytes)} more`
+        : `This request accepts up to ${bytes(info.maxBytes)}`
   }. Remove ${bytes(size - info.remainingBytes)} to continue.`;
 }
 
@@ -243,7 +246,7 @@ function limitProblem(info: PublicRequest, size: number) {
 function fullMessage(info: PublicRequest) {
   if (!info.full) return null;
   const who = info.owner || "The person who asked";
-  return info.remainingBytes === 0
+  return info.remainingBytes === 0 && !info.storageLimited
     ? `This request is full. ${who} has received the ${bytes(info.maxBytes)} it allows.`
     : `This request is full. ${who} can’t receive more with it.`;
 }
@@ -322,7 +325,16 @@ export function GuestUpload({ token }: { token: string }) {
   const size = items.reduce((n, i) => n + i.size, 0);
   const hasText = text.trim().length > 0;
   const ready = items.length > 0 || hasText;
-  const limitMessage = info && limitProblem(info, payloadBytes(size, text));
+  // The server counts a visitor's text in bytes, and how many files and folders one send may list:
+  // say so here rather than let Send be refused.
+  const entries = items.reduce((n, i) => n + (i.kind === "file" ? 1 : i.files.length + i.folders.length), 0);
+  const sendProblem =
+    entries > LIMITS.visitorEntriesPerTransfer
+      ? `Send up to ${LIMITS.visitorEntriesPerTransfer.toLocaleString("en-US")} files and folders at a time. Remove some to continue.`
+      : hasText && new TextEncoder().encode(text).length > LIMITS.textBytes
+        ? "This text is too long to send. Shorten it to continue."
+        : null;
+  const limitMessage = sendProblem ?? (info && limitProblem(info, payloadBytes(size, text)));
   const busy = transfers.some(isBusy);
   const done = transfers.filter((t) => t.status === "done");
   const full = info && !busy ? fullMessage(info) : null;

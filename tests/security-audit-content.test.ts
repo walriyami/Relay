@@ -597,7 +597,12 @@ test("content audit: active MIME declarations are delivered as inert text or att
       assert.equal(response.headers["x-content-type-options"], "nosniff");
       assert.equal(response.headers["x-evil"], undefined);
       if (node.name === "polyglot.jpg") assert.equal(response.headers["content-type"], "image/jpeg");
-      else assert.match(String(response.headers["content-type"]), /^text\/plain/);
+      else if (node.name === "unknown.bin") {
+        // A type with control characters isn't stored at all, so the file is a plain download.
+        assert.equal(response.headers["content-type"], "application/octet-stream");
+        assert.match(String(response.headers["content-disposition"]), /^attachment/);
+        continue;
+      } else assert.match(String(response.headers["content-type"]), /^text\/plain/);
       assert.match(String(response.headers["content-security-policy"]), /^sandbox;/);
     }
     const raster = nodes.find((n) => n.name === "polyglot.jpg")!;

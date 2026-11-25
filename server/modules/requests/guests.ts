@@ -7,10 +7,10 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { cleanLabel } from "../../lib/names.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
-import { perAddress } from "../auth/limits.ts";
+import { addressKey, perAddress } from "../auth/limits.ts";
 import { autoName } from "../library/summary.ts";
-import { planNodes } from "../transfers/plan.ts";
 import { ensureTransferAvailability } from "../transfers/availability.ts";
+import { visitorStorageRoom } from "../transfers/room.ts";
 
 type OpenRow = {
   id: string;
@@ -72,40 +72,46 @@ export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes
 function submissionName(
   request: string,
   sender: string | null,
-  input: Parameters<typeof planNodes>[0] & { text?: string },
+  text: string | undefined,
+  plan: { name: string; parentKey: string | null }[],
 ) {
-  const top = planNodes(input).filter((node) => node.parentKey === null);
-  const text = input.text?.trim() ? [...input.text].length : null;
-  const label = sender ?? autoName(top[0]?.name ?? null, top.length, text) ?? "submission";
+  const top = plan.filter((node) => node.parentKey === null);
+  const chars = text?.trim() ? [...text].length : null;
+  const label = sender ?? autoName(top[0]?.name ?? null, top.length, chars) ?? "submission";
   // The guest and the owner chose these words freely, so make them a valid item name (`cleanName`)
   // rather than refuse the files: no slashes, control or direction marks, within the name limit
   // and a file name's 255 bytes.
-  const chars = [
+  const name = [
     ...cleanLabel(`${request} · ${label}`, Number.MAX_SAFE_INTEGER)!
       .replace(/[/\\]/g, "-")
       // A lone half of a surrogate pair isn't a character a name can hold.
       .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"),
   ];
   const fits = () => {
-    const name = chars.join("");
-    return name.length <= LIMITS.nameLength && Buffer.byteLength(name) <= 255;
+    const joined = name.join("");
+    return joined.length <= LIMITS.nameLength && Buffer.byteLength(joined) <= 255;
   };
-  while (!fits()) chars.pop();
-  return chars.join("").trim();
+  while (!fits()) name.pop();
+  return name.join("").trim();
 }
 
 export function registerGuests(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.requests.open, ({ params }): PublicRequest => {
     const request = openRequest(ctx, params.token);
     const left = remaining(ctx, request);
+    // The request's own room is only part of it: the server and the owner's storage must take the
+    // bytes too, or a visitor is told there is room and then refused at the first byte.
+    const storage = visitorStorageRoom(ctx, request.owner);
+    const bytes = Math.min(left.bytes, storage);
     return {
       name: request.name,
       description: request.description,
       expires: request.expires,
       owner: request.owner_name,
       maxBytes: request.max_bytes,
-      remainingBytes: left.bytes,
-      full: left.bytes === 0 || left.entries === 0,
+      remainingBytes: bytes,
+      full: bytes === 0 || left.entries === 0,
+      storageLimited: storage < left.bytes,
     };
   });
 
@@ -127,12 +133,13 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       const token = randomToken();
       const csrf = randomToken();
       ctx.db.run(
-        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires) VALUES(?, ?, ?, ?, ?)",
+        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address) VALUES(?, ?, ?, ?, ?, ?)",
         sha256(token),
         request.id,
         csrf,
         Date.now(),
         request.expires,
+        addressKey(req.ip),
       );
       reply.setCookie(cookie, token, options);
       return { csrf };
@@ -162,7 +169,8 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
           owner: request.owner,
           principal: grant,
           requestId: request.id,
-          itemName: submissionName(request.name, sender, input),
+          // Worked out from the plan the create makes anyway, so a long list is planned once.
+          itemName: (plan) => submissionName(request.name, sender, input.text, plan),
           sender,
           limit: remaining(ctx, request),
         },

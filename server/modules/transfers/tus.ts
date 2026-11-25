@@ -8,8 +8,9 @@ import type { Context } from "../../context.ts";
 import type { Auth } from "../../context.ts";
 import { currentAuth, currentPrincipalFor } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
-import { CANCELLED, MOVED, TAB_CLOSED, ensureVisitorRoom } from "./create.ts";
+import { CANCELLED, MOVED, TAB_CLOSED } from "./create.ts";
 import { uploadRow, type Receivers } from "./receivers.ts";
+import { ensureVisitorRoom } from "./room.ts";
 
 const TUS_VERSION = "1.0.0";
 const TUS_TYPE = "application/offset+octet-stream";
@@ -19,6 +20,24 @@ const principalIn = (auth: Auth, key: string) =>
   auth.member && key === `user:${auth.member.userId}`
     ? auth.member
     : (auth.grants.find((g) => key === `grant:${g.tokenHash}`) ?? null);
+
+/**
+ * A PATCH refused part-way leaves the rest of its chunk unread. Reading and dropping it lets the
+ * answer reach the client (and a proxy) instead of a cut connection; past one chunk's worth, or a
+ * client that stalls, the connection is closed after all.
+ */
+function drain(req: FastifyRequest) {
+  const body = req.raw;
+  if (body.complete || body.destroyed) return;
+  let left = LIMITS.chunkBytes;
+  const timer = setTimeout(() => body.destroy(), 30_000).unref();
+  body.on("data", (chunk: Buffer) => {
+    left -= chunk.length;
+    if (left < 0) body.destroy();
+  });
+  body.once("close", () => clearTimeout(timer));
+  body.resume();
+}
 
 export function registerTus(app: FastifyInstance, ctx: Context, receivers: Receivers) {
   // Leave the body unread: PATCH streams it straight to disk.
@@ -112,14 +131,22 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
           : conflict(upload.size);
       if (length !== null && offset + length > upload.size)
         fail(413, "This request carries more bytes than the file's size.");
-      if (upload.principal.startsWith("grant:")) ensureVisitorRoom(ctx, upload.size - offset);
-      const received = await receivers.receive(
-        upload.id,
-        offset,
-        req.raw,
-        () => req.raw.destroy(),
-        recheck(req, upload.principal),
-      );
+      const visitor = upload.principal.startsWith("grant:");
+      const guard = visitor ? () => ensureVisitorRoom(ctx, uploadRow(ctx, upload.id) ?? upload) : undefined;
+      let received;
+      try {
+        received = await receivers.receive(
+          upload.id,
+          offset,
+          req.raw,
+          () => req.raw.destroy(),
+          recheck(req, upload.principal),
+          guard,
+        );
+      } catch (error) {
+        drain(req);
+        throw error;
+      }
       if ("conflict" in received) return conflict(received.conflict);
       return reply.code(204).header("Upload-Offset", String(received.offset)).send();
     },

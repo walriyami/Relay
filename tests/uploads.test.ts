@@ -425,7 +425,8 @@ for (const cancellation of ["discard", "close", "supersede"] as const) {
         cancellation === "supersede"
           ? receivers.receive(upload, offset, Readable.from([data.subarray(offset)]), () => {})
           : receivers.settle(upload);
-      const rejected = assert.rejects(work, /aborted/i);
+      // A superseded request is answered as such, not as a server error.
+      const rejected = assert.rejects(work, cancellation === "supersede" ? { status: 409 } : /aborted/i);
       await copyingStarted;
       let yielded = false;
       await new Promise<void>((resolve) =>
@@ -508,7 +509,7 @@ for (const mutation of ["replacement", "source", "shorter"] as const) {
         const first = receivers.receive(upload, 4, Readable.from([data.subarray(4)]), superseded);
         const rejected = assert.rejects(
           first,
-          retry === "later" ? { status: 503, message: /storage changed/ } : /aborted/i,
+          retry === "later" ? { status: 503, message: /storage changed/ } : { status: 409, message: /newer request/ },
         );
         await copyingStarted;
         if (mutation !== "source") {
@@ -559,6 +560,56 @@ for (const mutation of ["replacement", "source", "shorter"] as const) {
     });
   }
 }
+
+test("a PATCH stopped while it opens the part doesn't make the next one re-read every byte", async (t) => {
+  const instance = await start();
+  const receivers = new Receivers(instance.ctx);
+  const originalOpen = fsPromises.open;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let opening!: () => void;
+  const opened = new Promise<void>((resolve) => (opening = resolve));
+  let superseded!: () => void;
+  const stopped = new Promise<void>((resolve) => (superseded = resolve));
+  try {
+    const client = await member(instance, "stopped-opening-owner");
+    const data = Buffer.from("abcdefgh");
+    const { upload, created } = await createOne(client, data);
+    assert.deepEqual(await receivers.receive(upload, 0, Readable.from([data.subarray(0, 4)]), () => {}), {
+      offset: 4,
+    });
+    const part = receivers.partPath(upload);
+    let hold = true;
+    fsPromises.open = async (...args) => {
+      const file = await originalOpen(...args);
+      if (args[0] === part && hold) {
+        hold = false;
+        opening();
+        await held;
+      }
+      return file;
+    };
+    syncBuiltinESMExports();
+    const rebuild = t.mock.method(receivers as unknown as { rebuild: () => Promise<void> }, "rebuild");
+    const first = receivers.receive(upload, 4, Readable.from([data.subarray(4)]), superseded);
+    const rejected = assert.rejects(first, { status: 409, message: /newer request/ });
+    await opened;
+    const second = receivers.receive(upload, 4, Readable.from([data.subarray(4)]), () => {});
+    await stopped;
+    release();
+    await rejected;
+    assert.deepEqual(await second, { offset: data.length });
+    assert.equal(rebuild.mock.callCount(), 0, "the committed bytes were not read again");
+    assert.deepEqual(await download(client, created.itemId), data);
+    assert.equal(instance.ctx.db.value("SELECT sha256 FROM blobs"), sha(data));
+  } finally {
+    release();
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+    await receivers.close();
+    await instance.close();
+  }
+});
 
 test("a completed part replaced after recovery hashed it is rehashed, never published under the old hash", async () => {
   const instance = await start();

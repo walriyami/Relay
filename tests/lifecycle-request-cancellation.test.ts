@@ -5,7 +5,7 @@ import { mock, test } from "node:test";
 import { api } from "../shared/api.ts";
 import { DEFAULTS, type TransferCreated } from "../shared/model.ts";
 import { Client, admin, member, patchUpload, start, type ApiError, type Instance } from "./support/harness.ts";
-import { STALLED_GUEST_MS, STALLED_MEMBER_MS } from "../server/modules/transfers/lifecycle.ts";
+import { STALLED_MEMBER_MS, UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
 import { DAY_MS } from "../server/lib/time.ts";
 
 const state = (instance: Instance, id: string) =>
@@ -275,9 +275,9 @@ test("an upload that never sends its bytes gives its reserved room back", async 
     });
     instance.ctx.db.run("UPDATE tabs SET lease_expires = ?", Date.now() + 2 * DAY_MS);
 
-    await instance.ctx.transfers.sweep(Date.now() + STALLED_GUEST_MS - 60_000);
-    assert.equal(state(instance, hog.id), "open", "half an hour to start sending");
-    await instance.ctx.transfers.sweep(Date.now() + STALLED_GUEST_MS + 60_000);
+    await instance.ctx.transfers.sweep(Date.now() + UNSTARTED_GUEST_MS - 60_000);
+    assert.equal(state(instance, hog.id), "open", "ten minutes to start sending");
+    await instance.ctx.transfers.sweep(Date.now() + UNSTARTED_GUEST_MS + 60_000);
     assert.notEqual(state(instance, hog.id), "open", "given up, and its empty submission removed");
     assert.equal(state(instance, mine.id), "open", "a member's paused upload waits longer");
     assert.ok(await declare(10), "everyone else can use the request again");

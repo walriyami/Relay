@@ -227,7 +227,8 @@ test("outer cancellation rollback preserves a streaming PATCH; committed cancell
         release.resolve();
       }
       const finished = await outcome;
-      assert.equal(destroyed, !rollback);
+      // A committed cancellation lets the PATCH reach its next chunk and answer 410 rather than cut it.
+      assert.equal(destroyed, false);
       assert.equal(db.value("SELECT state FROM transfers WHERE id = ?", transfer.id), rollback ? "open" : "cancelled");
       if (rollback) {
         assert.equal(finished.error, null);
@@ -239,7 +240,7 @@ test("outer cancellation rollback preserves a streaming PATCH; committed cancell
         );
         assert.equal(fs.readFileSync(instance.ctx.blobs.path(hash), "utf8"), "abcd");
       } else {
-        assert.ok(finished.error);
+        assert.equal((finished.error as { status?: number }).status, 410);
         assert.equal(db.value("SELECT offset FROM uploads WHERE id = ?", upload.id), 2);
         assert.equal(db.value("SELECT node FROM uploads WHERE id = ?", upload.id), null);
       }

@@ -7,9 +7,10 @@ import { open, stat, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { crc32 } from "node:zlib";
+import { transferErrors } from "../../../shared/api.ts";
 import { LIMITS } from "../../../shared/model.ts";
 import type { Context } from "../../context.ts";
-import { fail } from "../../lib/errors.ts";
+import { fail, HttpError } from "../../lib/errors.ts";
 import { fsyncDirectory, unlinkIfPresent } from "../../storage/files.ts";
 import { sameBytes, sameFile } from "../../storage/blobs.ts";
 import { publishItemChange } from "./publish.ts";
@@ -19,6 +20,17 @@ import { assertTransferAvailability, ensureTransferAvailability } from "./availa
 const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 /** How much of a file must arrive to count as progress that keeps its transfer from going stale. */
 export const PROGRESS_STEP = 4 * 1024 ** 2;
+/** How often, in bytes received, a request-link visitor's upload checks it still has room. */
+export const GUARD_STEP = 1024 ** 2;
+/**
+ * How long a PATCH stopped by a cancellation may take to reach its next chunk and answer 410 before
+ * its connection is simply cut.
+ */
+const STOP_GRACE_MS = 2_000;
+
+const registry = new WeakMap<Context, Receivers>();
+/** The receivers of an app, once its transfers module made them. */
+export const receiversOf = (ctx: Context) => registry.get(ctx);
 
 export type UploadRow = {
   id: string;
@@ -43,7 +55,13 @@ export const uploadRow = (ctx: Context, id: string) =>
 /** Still expecting bytes: not finished, not skipped, and its transfer is open. */
 export const isActive = (u: UploadRow) => u.completed === null && u.node !== null && u.state === "open";
 
-type Inflight = { destroy: () => void; settled: Promise<void> };
+type Inflight = {
+  /** Cuts the request at once: a newer PATCH replaced it, or the server is shutting down. */
+  destroy: () => void;
+  /** Stops it at its next chunk so it can still be answered (410), cutting it after a grace period. */
+  stop: () => void;
+  settled: Promise<void>;
+};
 type Receiver = {
   /** Hash and CRC of the committed bytes. */
   hash: Hash;
@@ -60,6 +78,11 @@ type Receiver = {
   /** Resolves once the hash state matches the committed offset (rebuilt after a restart). */
   ready: Promise<void>;
   inflight: Inflight | null;
+  /**
+   * Bytes of the PATCH in flight that have arrived but whose offset is not committed yet. Room is
+   * counted from them too (see room.ts), so bytes streaming in never go uncounted.
+   */
+  arrived: number;
   publishing: Promise<void> | null;
   cancelled: AbortController;
 };
@@ -79,6 +102,14 @@ export class Receivers {
 
   constructor(ctx: Context) {
     this.ctx = ctx;
+    registry.set(ctx, this);
+  }
+
+  /** Uncommitted bytes of each PATCH streaming in right now, by upload. */
+  arriving() {
+    const result = new Map<string, number>();
+    for (const [id, receiver] of this.receivers) if (receiver.arrived > 0) result.set(id, receiver.arrived);
+    return result;
   }
 
   /** Whether bytes for this upload are arriving right now. */
@@ -111,6 +142,7 @@ export class Receivers {
         unsyncedEntry: false,
         ready: Promise.resolve(),
         inflight: null,
+        arrived: 0,
         publishing: null,
         cancelled: new AbortController(),
       };
@@ -219,6 +251,8 @@ export class Receivers {
   /**
    * Streams one PATCH body into the upload at `offset`. A newer PATCH for the same upload destroys
    * an older one still in flight (a dead retry) and waits for it to settle before starting.
+   * `guard` runs at the start and again every GUARD_STEP bytes and before the file is saved; it
+   * throws to refuse the rest (a visitor's upload that no longer has room).
    */
   async receive(
     id: string,
@@ -226,6 +260,7 @@ export class Receivers {
     body: Readable,
     destroy: () => void,
     authorize: () => void = () => {},
+    guard: () => void = () => {},
   ): Promise<Received> {
     const initial = uploadRow(this.ctx, id);
     if (!initial || !isActive(initial)) fail(410, "This upload is no longer accepting data.");
@@ -245,10 +280,19 @@ export class Receivers {
     };
     body.once("close", disconnected);
     if (body.destroyed) disconnected();
+    let superseded = false;
+    let cut: NodeJS.Timeout | undefined;
     const inflight: Inflight = {
       destroy: () => {
+        superseded = !this.closing.signal.aborted;
         abort.abort();
         destroy();
+      },
+      stop: () => {
+        // The cancellation's own signal ends the write at its next chunk; a client that sends
+        // nothing more is cut off instead of keeping the request open.
+        cut ??= setTimeout(destroy, STOP_GRACE_MS);
+        cut.unref();
       },
       settled: new Promise((resolve) => (settle = resolve)),
     };
@@ -271,11 +315,27 @@ export class Receivers {
       ensureTransferAvailability(this.ctx, upload);
       if (upload.offset !== offset) return { conflict: upload.offset };
       authorize();
+      guard();
       // Bytes that arrived before the connection dropped (or a retry replaced it) are kept.
       const keepPartial = () =>
         abort.signal.aborted && !this.closing.signal.aborted && !receiver.cancelled.signal.aborted;
-      return { offset: await this.write(upload, receiver, body, signal, authorize, keepPartial) };
+      return { offset: await this.write(upload, receiver, body, signal, authorize, keepPartial, guard) };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      // Stopping a request on purpose is not a server failure: say what happened instead of letting
+      // the stream's own error reach the log and the admin's History as something unexpected.
+      if (this.closing.signal.aborted) fail(503, "The server is restarting. Retry shortly.");
+      if (receiver.cancelled.signal.aborted) {
+        const current = uploadRow(this.ctx, id);
+        if (current) ensureTransferAvailability(this.ctx, current);
+        fail(410, transferErrors.cancelled);
+      }
+      if (superseded) fail(409, "A newer request continued this upload.");
+      if (abort.signal.aborted) fail(400, "The upload's connection closed before its data arrived.");
+      throw error;
     } finally {
+      clearTimeout(cut);
+      receiver.arrived = 0;
       body.off("close", disconnected);
       if (receiver.inflight === inflight) receiver.inflight = null;
       settle();
@@ -291,15 +351,21 @@ export class Receivers {
     signal: AbortSignal,
     authorize: () => void,
     keepPartial: () => boolean = () => false,
+    guard: () => void = () => {},
   ): Promise<number> {
     const hash = receiver.hash.copy();
     let crc = receiver.crc;
     let position = upload.offset;
     let source: Stats;
-    const file = await this.detach(upload, receiver, signal, receiver.source).catch((error) => {
+    const detaching = { copying: false };
+    const file = await this.detach(upload, receiver, signal, receiver.source, detaching).catch((error) => {
       // A superseding PATCH can interrupt copying before the identity check detects a replaced
       // or modified source. Never let the next PATCH reuse this potentially stale prefix hash.
-      receiver.rebuildRequired = upload.offset > 0;
+      // Stopped before it began copying, it has read and changed nothing, and the next PATCH makes
+      // the same checks itself; re-reading every committed byte then only let anyone with an upload
+      // make the server do so again and again by sending two PATCHes at once.
+      const stopped = (error as Error | undefined)?.name === "AbortError";
+      receiver.rebuildRequired = upload.offset > 0 && (detaching.copying || !stopped);
       throw error;
     });
     try {
@@ -309,12 +375,18 @@ export class Receivers {
       const { size } = await file.stat();
       if (size < position) throw new Error("Upload file is shorter than its committed offset.");
       if (size > position) await file.truncate(position);
-      for await (const chunk of body as AsyncIterable<Buffer>) {
+      let guarded = position;
+      // A refused request is left undestroyed, so its answer can still reach the client.
+      for await (const chunk of body.iterator({ destroyOnReturn: false }) as AsyncIterable<Buffer>) {
         this.checkCurrent(upload.id, receiver, signal);
         authorize();
         if (position + chunk.length > upload.size) fail(413, "This request carries more bytes than the file's size.");
         if (position + chunk.length - upload.offset > LIMITS.chunkBytes)
           fail(413, "This request carries more than one chunk of data.");
+        if (position - guarded >= GUARD_STEP) {
+          guard();
+          guarded = position;
+        }
         for (let written = 0; written < chunk.length;) {
           const { bytesWritten } = await file.write(chunk, written, chunk.length - written, position + written);
           written += bytesWritten;
@@ -322,11 +394,13 @@ export class Receivers {
         hash.update(chunk);
         crc = crc32(chunk, crc);
         position += chunk.length;
+        receiver.arrived = position - upload.offset;
       }
       await file.sync();
       source = await file.stat();
       this.checkCurrent(upload.id, receiver, signal);
       authorize();
+      guard();
     } catch (error) {
       // A phone that lost its connection mid-request resends only what never arrived: the bytes
       // already written are synced and committed as if the request had ended there.
@@ -347,6 +421,7 @@ export class Receivers {
           });
         throw error;
       }
+      receiver.arrived = 0;
       await file.truncate(upload.offset).catch(() => {});
       await file.close();
       throw error;
@@ -429,6 +504,7 @@ export class Receivers {
       Date.now(),
       upload.id,
     );
+    receiver.arrived = 0;
     receiver.hash = hash;
     receiver.crc = crc;
     receiver.source = source;
@@ -549,7 +625,7 @@ export class Receivers {
   discard(id: string) {
     const receiver = this.receivers.get(id);
     receiver?.cancelled.abort();
-    receiver?.inflight?.destroy();
+    receiver?.inflight?.stop();
     this.receivers.delete(id);
     try {
       unlinkIfPresent(this.partPath(id));
@@ -585,6 +661,8 @@ export class Receivers {
     receiver: Receiver,
     signal: AbortSignal,
     expected: Stats | null,
+    /** Set once it starts copying the committed prefix to a private file. */
+    progress: { copying: boolean } = { copying: false },
   ): Promise<FileHandle> {
     const file = this.partPath(upload.id);
     const temporary = `${file}.${randomUUID()}.detached`;
@@ -611,6 +689,7 @@ export class Receivers {
         return result;
       }
       if (before && before.size < upload.offset) throw new Error("Upload file is shorter than its committed offset.");
+      progress.copying = true;
       fresh = await open(temporary, "wx+", 0o600);
       // Copy only the committed prefix, with bounded memory and an abort check between async I/O.
       // New uploads also use this private file, so an in-flight open cannot recreate a discarded part.

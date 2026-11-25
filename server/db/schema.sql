@@ -290,7 +290,9 @@ CREATE TABLE guest_grants (
   -- Created with the grant's first transfer; every later transfer adds to the same submission.
   item TEXT REFERENCES items(id) ON DELETE SET NULL,
   created INTEGER NOT NULL,
-  expires INTEGER NOT NULL
+  expires INTEGER NOT NULL,
+  -- The visitor's address group (see addressKey), so starting a new visit can't reset per-visitor limits.
+  address TEXT
 ) STRICT;
 CREATE INDEX guest_grants_request ON guest_grants(request_id);
 CREATE INDEX guest_grants_item ON guest_grants(item) WHERE item IS NOT NULL;

@@ -31,7 +31,12 @@ export const LIMITS = {
    * Abuse guard, not a setting: entries (files, texts and folders) one request can hold, so a public
    * link cannot fill the database with empty files. Requests are otherwise bounded by size alone.
    */
-  requestEntries: 100_000,
+  requestEntries: 20_000,
+  /**
+   * Abuse guard: entries one request-link visitor's send can hold (members keep `filesPerTransfer`).
+   * Creating a send is one synchronous step for the whole server, so a stranger's must stay small.
+   */
+  visitorEntriesPerTransfer: 5_000,
   /** The name a member shows other people (share pages, requests, invitations). */
   displayNameLength: 60,
   /** A note shown to whoever opens a link. */
@@ -304,9 +309,12 @@ export type PublicRequest = {
   expires: Time;
   owner: string;
   maxBytes: number;
+  /** The smaller of the request's own room and what the server and the owner's storage can still take. */
   remainingBytes: number;
-  /** The request can take nothing more: its size limit is used up. */
+  /** The request can take nothing more: its size limit is used up, or there is no room for it. */
   full: boolean;
+  /** The room is limited by the server or the owner's storage rather than by the request's size limit. */
+  storageLimited: boolean;
 };
 export type GuestGrant = { csrf: string };
 
