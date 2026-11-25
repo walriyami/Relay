@@ -1,10 +1,12 @@
 // Nearby: who is present, who may reach whom, signals passed along, and guests with a Nearby code.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { request, type IncomingMessage } from "node:http";
 import { api, urls } from "../shared/api.ts";
 import { localCandidates } from "../shared/candidates.ts";
-import type { NearbyEvent, NearbySignal } from "../shared/nearby.ts";
-import { networkOf } from "../server/modules/nearby/hub.ts";
+import { NEARBY, type NearbyEvent, type NearbySignal } from "../shared/nearby.ts";
+import { hubOf, networkOf } from "../server/modules/nearby/hub.ts";
 import { ApiError, Client, member, start, type Instance } from "./support/harness.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
@@ -323,6 +325,65 @@ test("only local candidates reach a browser, so nobody can make it contact the i
     assert.ok(got?.type === "signal" && got.signal.kind === "offer");
     assert.equal(got.signal.sdp, localCandidates(sdp));
     await Promise.all([olgaStream.close(), stream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a flood of signals can't push a slowly reading device out of Nearby", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const olgaId = (await olga.call(api.session.get)).device.id;
+    // A tab whose reader has stalled for a moment, as a phone's on a weak link does.
+    const cookie = [...olga.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(`${base}${urls.events(olga.tab)}&browser=${olga.tab}`, {
+        agent: false,
+        headers: { host: "relay.test", cookie },
+      });
+      req.on("response", resolve).on("error", reject).end();
+    });
+    res.once("data", () => res.pause());
+    await eventually(() => res.isPaused());
+    await olga.call(api.nearby.present, { body: { tab: olga.tab } });
+    const hub = hubOf(instance.ctx);
+
+    // A guest sending as fast as it can gets a few signals through; the device stays.
+    const { stream, signal } = await guestOf(instance, base, olga);
+    const sdp = "v=0\r\n" + "a=x:".padEnd(NEARBY.sdpBytes - 8, "A");
+    const refused: number[] = [];
+    for (let i = 0; i < 80; i++)
+      await signal(olgaId, { kind: "offer", session: `flood-session-${i}`, sdp }).catch((error: ApiError) =>
+        refused.push(error.status),
+      );
+    assert.ok(refused.length >= 55 && refused.every((status) => status === 429 || status === 503), refused.join(", "));
+    assert.ok(hub.get(olgaId), "the device is still in Nearby");
+
+    // Its stream may fall a little behind before it's cut...
+    const channel = hub.get(olgaId)!.channel;
+    const filler = "x".repeat(16 * 1024);
+    for (let i = 0; i < 1000 && channel.backlog() <= 160 * 1024; i++) channel.send("beat", filler);
+    assert.ok(channel.backlog() > 64 * 1024 && hub.get(olgaId), "behind, and still open");
+    // ...but one that has stopped reading altogether is let go, rather than held in memory.
+    for (let i = 0; i < 100 && hub.get(olgaId); i++) channel.send("beat", filler);
+    assert.equal(hub.get(olgaId), undefined);
+    res.destroy();
+
+    // Signals to a device whose stream is behind wait: the sender tries again, and the device stays.
+    const phone = await signIn(instance, "olga", "Phone");
+    const phoneStream = await present(base, phone.client);
+    const behind = {
+      send: () => assert.fail("nothing more goes to a stream that's behind"),
+      backlog: () => 100 * 1024,
+      onEnd: () => () => {},
+    };
+    const userId = (await olga.call(api.session.get)).user.id;
+    const tablet = randomUUID();
+    hub.attach({ id: tablet, kind: "device", userId, network: "local", channel: behind });
+    await rejects(phone.client.call(api.nearby.signal, { body: { to: tablet, signal: offer() } }), 503);
+    await Promise.all([stream.close(), phoneStream.close()]);
   } finally {
     await instance.close();
   }
