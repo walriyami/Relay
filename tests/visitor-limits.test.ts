@@ -176,14 +176,23 @@ test("a visitor's large send must really get going within ten minutes; a byte do
     const queued = await begin(other, "later.bin", 8 * MiB, "");
     const busy = await sendTo(other, request.token, [{ path: "now.bin", size: 8 * MiB }]);
     assert.equal((await patchUpload(other, busy.uploads[0].id, 0, Buffer.alloc(4 * MiB))).statusCode, 204);
+    const third = await visit(instance, request.token);
+    const stalled = await begin(third, "stalled.bin", 8 * MiB, "");
+    const empty = await sendTo(third, request.token, [
+      { path: "empty.txt", size: 0 },
+      { path: "pending.bin", size: 8 * MiB },
+    ]);
     const later = Date.now() + UNSTARTED_GUEST_MS + 60_000;
     // The other visitor is still sending now.bin when the sweep runs.
     instance.ctx.db.run("UPDATE uploads SET touched = ? WHERE id = ?", later, busy.uploads[0].id);
+    // An empty file is finished the moment it is listed; that isn't progress.
+    instance.ctx.db.run("UPDATE uploads SET touched = ? WHERE transfer = ?", later, empty.id);
     await instance.ctx.transfers.sweep(later);
     assert.notEqual(state(big), "open", "one byte of 8 MiB isn't getting going");
     assert.equal(state(small), "open", "a small send that has begun may finish");
     assert.equal(state(busy), "open", "4 MiB arrived: it is going");
     assert.equal(state(queued), "open", "its visitor is busy sending something else");
+    assert.notEqual(state(stalled), "open", "a finished empty file elsewhere doesn't count as busy");
   } finally {
     await instance.close();
   }
