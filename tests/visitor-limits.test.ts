@@ -9,7 +9,7 @@ import { DEFAULTS, LIMITS } from "../shared/model.ts";
 import { GUEST_STREAMS_PER_ADDRESS } from "../server/modules/auth/streams.ts";
 import { UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
 import { OPEN_PER_NETWORK } from "../server/modules/transfers/create.ts";
-import { VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
+import { VISITS_PER_ADDRESS, VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
 import { receiversOf } from "../server/modules/transfers/receivers.ts";
 import { DISK_HEADROOM } from "../server/modules/transfers/room.ts";
 import { ApiError, Client, admin, member, patchUpload, start, type Instance } from "./support/harness.ts";
@@ -160,39 +160,50 @@ test("starting new visits doesn't reset how many sends one network may hold open
   }
 });
 
-test("visits without a cookie don't pile up: a network keeps a bounded number, and those in use stay", async () => {
+test("visits without a cookie don't pile up: one device cycles through its own, and those sending stay", async () => {
   const instance = await start();
   try {
     const owner = await member(instance, "piling-owner");
-    const request = await owner.call(api.requests.create, {
-      body: { id: crypto.randomUUID(), name: "Piles", description: "", days: 5, maxBytes: 1000 },
-    });
-    const visits = (network: string) =>
-      instance.ctx.db.value<number>(
-        "SELECT count(*) FROM guest_grants WHERE request_id = ? AND address = ?",
-        request.id,
-        network,
-      );
+    const create = (name: string) =>
+      owner.call(api.requests.create, {
+        body: { id: crypto.randomUUID(), name, description: "", days: 5, maxBytes: 1000 },
+      });
     const file = [{ path: "a", size: 1 }];
-    const idle = await visit(instance, request.token, "198.51.100.1");
-    const sending = await visit(instance, request.token, "198.51.100.2");
-    await sendTo(sending, request.token, file);
-    // Cancelled, but its page is still open.
-    const looking = await visit(instance, request.token, "198.51.100.3");
-    await looking.call(api.transfers.cancel, { params: { id: (await sendTo(looking, request.token, file)).id } });
-    for (let i = 4; i < VISITS_PER_NETWORK + 20; i++) await visit(instance, request.token, `198.51.100.${i}`);
-    assert.equal(visits("198.51.100.0/24"), VISITS_PER_NETWORK);
+    const visits = (requestId: string, column: "address" | "network", value: string) =>
+      instance.ctx.db.value<number>(
+        `SELECT count(*) FROM guest_grants WHERE request_id = ? AND ${column} = ?`,
+        requestId,
+        value,
+      );
 
-    // The oldest idle visit made room; one with a send open, or a page open, did not.
-    assert.equal(await status(sendTo(idle, request.token, file)), 401);
-    assert.equal(await status(sendTo(sending, request.token, file)), 200);
-    assert.equal(await status(sendTo(looking, request.token, file)), 200);
-    // Coming back is simply a new visit.
-    await idle.call(api.requests.start, { params: { token: request.token } });
-    assert.equal(await status(sendTo(idle, request.token, file)), 200);
-    // Another network is untouched.
-    await visit(instance, request.token, "203.0.113.1");
-    assert.equal(visits("203.0.113.0/24"), 1);
+    // One device starting visit after visit forgets its own oldest, not its neighbour's.
+    const piles = await create("Piles");
+    const neighbour = await visit(instance, piles.token, "198.51.100.50");
+    const busy = await visit(instance, piles.token, "198.51.100.7");
+    await sendTo(busy, piles.token, file);
+    for (let i = 0; i < VISITS_PER_ADDRESS + 2; i++) await visit(instance, piles.token, "198.51.100.7");
+    assert.equal(visits(piles.id, "address", "198.51.100.7"), VISITS_PER_ADDRESS);
+    assert.equal(await status(sendTo(busy, piles.token, file)), 200, "its visit with a send open stays");
+    assert.equal(await status(sendTo(neighbour, piles.token, file)), 200, "its neighbour's stays");
+
+    // A network full of many devices' visits forgets its oldest that isn't sending; a cancelled
+    // send doesn't keep a visit.
+    const crowd = await create("Crowd");
+    const idle = await visit(instance, crowd.token, "198.51.100.1");
+    const sending = await visit(instance, crowd.token, "198.51.100.2");
+    await sendTo(sending, crowd.token, file);
+    const cancelled = await visit(instance, crowd.token, "198.51.100.3");
+    await cancelled.call(api.transfers.cancel, { params: { id: (await sendTo(cancelled, crowd.token, file)).id } });
+    for (let i = 4; i < VISITS_PER_NETWORK + 10; i++) await visit(instance, crowd.token, `198.51.100.${i}`);
+    assert.equal(visits(crowd.id, "network", "198.51.100.0/24"), VISITS_PER_NETWORK);
+    assert.equal(await status(sendTo(idle, crowd.token, file)), 401);
+    assert.equal(await status(sendTo(cancelled, crowd.token, file)), 401);
+    assert.equal(await status(sendTo(sending, crowd.token, file)), 200);
+    // Coming back is simply a new visit, and another network is untouched.
+    await idle.call(api.requests.start, { params: { token: crowd.token } });
+    assert.equal(await status(sendTo(idle, crowd.token, file)), 200);
+    await visit(instance, crowd.token, "203.0.113.1");
+    assert.equal(visits(crowd.id, "network", "203.0.113.0/24"), 1);
   } finally {
     await instance.close();
   }

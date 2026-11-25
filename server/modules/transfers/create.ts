@@ -157,11 +157,13 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           OPEN_PER_GRANT
         )
           fail(429, "Finish or cancel an open transfer before sending more files.");
-        // A new visit (another /start) is a new grant, so its own count alone is easy to reset.
+        // A new visit (another /start) is a new grant, so its own count alone is easy to reset. Visits
+        // from before networks were recorded count with others from their address.
         if (
           ctx.db.value<number>(
             `SELECT count(*) FROM guest_grants mine
-             JOIN guest_grants g ON g.request_id = mine.request_id AND g.address = mine.address
+             JOIN guest_grants g ON g.request_id = mine.request_id AND g.network IS mine.network
+               AND (mine.network IS NOT NULL OR g.address = mine.address)
              JOIN transfers t ON t.principal = 'grant:' || g.token_hash AND t.state = 'open'
              WHERE mine.token_hash = ?`,
             options.principal.tokenHash,

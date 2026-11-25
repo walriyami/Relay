@@ -308,12 +308,14 @@ CREATE TABLE guest_grants (
   item TEXT REFERENCES items(id) ON DELETE SET NULL,
   created INTEGER NOT NULL,
   expires INTEGER NOT NULL,
-  -- The visitor's network (an IPv4 /24 or IPv6 /56, see codeNetworkOf), so starting a new visit can't
-  -- reset per-visitor limits. Visits made before 2026-11 hold the single address instead.
-  address TEXT
+  -- The visitor's address group (see addressKey) and network (an IPv4 /24 or IPv6 /56, see
+  -- codeNetworkOf), so starting a new visit can't reset per-visitor limits. Visits made before
+  -- 2026-11 have no network, and count by their address alone.
+  address TEXT,
+  network TEXT
 ) STRICT;
--- A request's visits from one network, oldest first: limited, and the oldest idle one makes room.
-CREATE INDEX guest_grants_request ON guest_grants(request_id, address, created);
+-- A request's visits from one network and from one address: limited, and the oldest idle one makes room.
+CREATE INDEX guest_grants_request ON guest_grants(request_id, network, address, created);
 CREATE INDEX guest_grants_item ON guest_grants(item) WHERE item IS NOT NULL;
 CREATE INDEX guest_grants_expires ON guest_grants(expires);
 
