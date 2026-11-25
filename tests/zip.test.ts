@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { api, urls } from "../shared/api.ts";
 import { LIMITS } from "../shared/model.ts";
 import { zipLayout, type ZipBody } from "../server/modules/downloads/zip.ts";
-import { type Client, member, patchUpload, send, start } from "./support/harness.ts";
+import { Client, member, openShare, patchUpload, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 
@@ -354,6 +354,82 @@ test("ZIP times: MS-DOS fields in the downloader's time zone, and an exact UTC t
     // Without a zone Relay knows, the MS-DOS fields are UTC.
     for (const tz of [undefined, "Not/AZone", "x".repeat(100)])
       assert.deepEqual((await stamps(tz)).zip.stamps["photos/a.txt"], [[2026, 1, 15, 22, 30, 10], created / 1000]);
+  } finally {
+    await instance.close();
+  }
+});
+
+// Working out a ZIP checks every file on disk. A HEAD, a resumed download or a download manager's
+// ranges must not repeat that each time, or a link holder can make the server do it at will.
+test("a ZIP is worked out once and reused until the item changes", async () => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "tia");
+    const { result } = await send(
+      client,
+      [
+        { path: "Photos/a.txt", data: "alpha" },
+        { path: "Photos/b.txt", data: "bravo" },
+        { path: "c.txt", data: "charlie" },
+      ],
+      { text: "a note" },
+    );
+    const link = await client.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    const visitor = new Client(instance);
+    await openShare(visitor, link.token);
+    const blobs = instance.ctx.blobs as { verify: (...args: unknown[]) => Promise<unknown> };
+    const verify = blobs.verify.bind(blobs);
+    let checked = 0;
+    blobs.verify = (...args) => {
+      checked++;
+      return verify(...args);
+    };
+    const head = (url: string) => visitor.raw({ method: "HEAD", url });
+
+    // Asked for many times at once, it's worked out once.
+    const first = await Promise.all(Array.from({ length: 5 }, () => head(urls.shareZip(link.token))));
+    assert.ok(first.every((res) => res.statusCode === 200));
+    assert.equal(checked, 3, "each file checked once");
+    const length = first[0].headers["content-length"];
+
+    // Later HEADs, ranges and other time zones reuse it: a zone moves only times inside headers.
+    for (let i = 0; i < 5; i++) assert.equal((await head(urls.shareZip(link.token))).statusCode, 200);
+    const ranged = await fetchZip(visitor, urls.shareZip(link.token, undefined, "Asia/Tokyo"), {
+      range: "bytes=0-99",
+    });
+    assert.equal(ranged.statusCode, 206);
+    assert.equal(ranged.headers["content-range"], `bytes 0-99/${length}`);
+    assert.notEqual(ranged.headers.etag, first[0].headers.etag, "another zone is another archive");
+    const whole = await fetchZip(visitor, urls.shareZip(link.token));
+    assert.equal(whole.rawPayload.length, Number(length));
+    const zip = inspect(whole.rawPayload);
+    assert.equal(zip.bad, null);
+    assert.equal(zip.hashes["c.txt"], sha("charlie"));
+    assert.equal(zip.hashes["Text.txt"], sha("a note"));
+    assert.equal(checked, 3);
+
+    // A folder is its own archive.
+    const photos = (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.find(
+      (n) => n.path === "Photos",
+    )!;
+    assert.equal((await head(urls.shareZip(link.token, photos.id))).statusCode, 200);
+    assert.equal(checked, 5);
+
+    // New contents are a new archive.
+    await send(client, [{ path: "d.txt", data: "delta" }], { item: result.itemId });
+    const grown = await head(urls.shareZip(link.token));
+    assert.ok(Number(grown.headers["content-length"]) > Number(length));
+    assert.equal(checked, 9);
+
+    // So is a stored copy found damaged since: nobody is handed an archive that can't finish.
+    const blob = instance.ctx.db.value<string>(
+      "SELECT blob FROM nodes WHERE item = ? AND name = 'a.txt'",
+      result.itemId,
+    )!;
+    instance.ctx.db.run("UPDATE blobs SET integrity = 'missing' WHERE sha256 = ?", blob);
+    assert.equal((await head(urls.shareZip(link.token))).statusCode, 503);
   } finally {
     await instance.close();
   }

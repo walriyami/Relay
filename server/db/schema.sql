@@ -170,7 +170,10 @@ CREATE TABLE items (
   -- Cached ItemSummary fields derived from the nodes. Triggers set summary_dirty on any node change;
   -- the library recomputes dirty summaries when it next reads them.
   summary TEXT NOT NULL DEFAULT '{}',
-  summary_dirty INTEGER NOT NULL DEFAULT 1
+  summary_dirty INTEGER NOT NULL DEFAULT 1,
+  -- Moves whenever the item's ready contents change (see nodes_ready_*), so a ZIP worked out
+  -- for one version can be served again until the next.
+  content_version INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX items_owner ON items(owner, trashed, created);
 CREATE INDEX items_request ON items(request_id);
@@ -270,6 +273,18 @@ BEGIN
   INSERT INTO stored_types(owner, mime, bytes, files)
     SELECT NEW.owner, NEW.mime, NEW.size, NEW.kind = 'file' WHERE NEW.state = 'ready' AND NEW.kind <> 'folder'
     ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files;
+END;
+
+-- What a download can see is the ready nodes, so only they move an item's content_version: a
+-- folder or text saved, a file finishing, or anything about a ready node changing or going.
+CREATE TRIGGER nodes_ready_insert AFTER INSERT ON nodes WHEN NEW.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id = NEW.item;
+END;
+CREATE TRIGGER nodes_ready_update AFTER UPDATE ON nodes WHEN OLD.state = 'ready' OR NEW.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id IN (OLD.item, NEW.item);
+END;
+CREATE TRIGGER nodes_ready_delete AFTER DELETE ON nodes WHEN OLD.state = 'ready' BEGIN
+  UPDATE items SET content_version = content_version + 1 WHERE id = OLD.item;
 END;
 
 -- One browser page load. Its event stream renews the lease; an expired or closed tab abandons its transfers.
