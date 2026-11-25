@@ -1,3 +1,4 @@
+import { localCandidates } from "../../../shared/candidates";
 import { NEARBY, type NearbySignal } from "../../../shared/nearby";
 import type { Mux } from "../../../shared/lanes";
 import { describe, Lanes } from "../lanes";
@@ -15,6 +16,8 @@ const CONNECT_MS = 12_000;
 const RECOVER_MS = 10_000;
 /** The longest control message put back together from pieces: an offer of thousands of files. */
 const MESSAGE_CHARS = 16 * 1024 * 1024;
+/** How soon a signal Relay refused as busy is sent again, doubling each time, until CONNECT_MS. */
+const BUSY_MS = 1000;
 
 export type LinkEnd = "closed" | "unreachable" | "lost";
 
@@ -115,8 +118,17 @@ export class Link {
   private async start(describe: () => Promise<NearbySignal>) {
     try {
       const signal = await describe();
-      if (this.state !== "connecting") return;
-      await this.signal(signal);
+      // Relay refuses a signal as busy (429, 503) while the other device is behind on reading, or
+      // has had many from this one: send it again shortly, until the time to connect runs out.
+      for (let wait = BUSY_MS; this.state === "connecting"; wait *= 2) {
+        try {
+          return await this.signal(signal);
+        } catch (error) {
+          const status = (error as { status?: unknown } | null)?.status;
+          if (status !== 429 && status !== 503) throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
     } catch {
       // Relay couldn't pass it on (the other side left), or this browser couldn't describe a connection.
       this.end("unreachable");
@@ -127,7 +139,8 @@ export class Link {
   async answered(sdp: string) {
     if (!this.offering || this.state !== "connecting" || this.pc.signalingState !== "have-local-offer") return;
     try {
-      await this.pc.setRemoteDescription({ type: "answer", sdp });
+      // Only its local candidates: the other side may be anyone holding a Nearby code.
+      await this.pc.setRemoteDescription({ type: "answer", sdp: localCandidates(sdp) });
     } catch {
       this.end("unreachable");
     }

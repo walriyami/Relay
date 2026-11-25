@@ -167,10 +167,10 @@ export async function buildApp(config: Config): Promise<App> {
       secured(reply, config.origin);
       if (pathOf(req.url).startsWith("/api/")) {
         reply.header("Cache-Control", "no-store");
-        // Stamped before the handler reads anything, so a view can tell what it may have missed. The
-        // count moves with everyone's activity, so only members see it; a guest's views reload when
-        // their stream opens instead.
-        if (authOf(ctx, req).member) reply.header(headers.changes, ctx.events.stamp());
+        // Stamped before the handler reads anything, so a view can tell what it may have missed. It
+        // counts the member's own changes only; a guest's views reload when their stream opens instead.
+        const member = authOf(ctx, req).member;
+        if (member) reply.header(headers.changes, ctx.events.stamp(member.userId));
       }
       checkHost(ctx, req);
       checkCsrf(ctx, req, req.routeOptions.config ?? {});

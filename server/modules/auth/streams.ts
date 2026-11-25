@@ -39,10 +39,19 @@ type Stream = {
 };
 type Lease = { tab: string; principal: Principal };
 
+/**
+ * What a stream may hold that its connection hasn't taken yet. A phone on a weak link, or a tab the
+ * browser paused, falls behind for a moment; past this, it isn't reading, and is ended rather than
+ * kept in memory.
+ */
+const BACKLOG_BYTES = 256 * 1024;
+
 /** An open stream as other modules see it: something to send to, that ends. */
 export type Channel = {
-  /** Sends one event. A connection that can't take it is ended. */
+  /** Sends one event. A connection that has fallen too far behind to take it is ended. */
   send(event: string, data: unknown): void;
+  /** Bytes sent that the connection hasn't taken yet. */
+  backlog(): number;
   /** Runs `fn` when the stream ends, at once if it has. Returns a way to cancel that. */
   onEnd(fn: () => void): () => void;
 };
@@ -203,7 +212,7 @@ class Streams {
 
   write(stream: Stream, data: string) {
     try {
-      if (stream.res.write(data)) return;
+      if (stream.res.write(data) || stream.res.writableLength <= BACKLOG_BYTES) return;
     } catch {
       // A broken or stalled connection must not break the event bus or grow an unbounded buffer.
     }
@@ -221,6 +230,7 @@ class Streams {
   channelOf(stream: Stream): Channel {
     return (stream.channel ??= {
       send: (event, data) => this.write(stream, `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+      backlog: () => stream.res.writableLength,
       onEnd: (fn) => {
         if (!this.open.has(stream)) {
           fn();
@@ -392,9 +402,9 @@ export function openStream(
       : () => {},
   };
   // Taken once subscribed, and before this device is announced online: every change after it,
-  // that announcement included, reaches this stream. The count moves with everyone's activity, so
-  // only a member's stream, which gets their changes, is told it.
-  const changes = subscribe ? ctx.events.stamp() : undefined;
+  // that announcement included, reaches this stream. Only a member's stream, which gets their
+  // changes, is told it.
+  const changes = subscribe ? ctx.events.stamp(spec.userId) : undefined;
   res.on("close", () => streams.end(stream));
   res.on("error", () => streams.end(stream));
   streams.add(stream);

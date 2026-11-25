@@ -1,9 +1,13 @@
 // Nearby: who is present, who may reach whom, signals passed along, and guests with a Nearby code.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { request, type IncomingMessage } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { api, urls } from "../shared/api.ts";
-import type { NearbyEvent, NearbySignal } from "../shared/nearby.ts";
-import { networkOf } from "../server/modules/nearby/hub.ts";
+import { localCandidates } from "../shared/candidates.ts";
+import { NEARBY, type NearbyEvent, type NearbySignal } from "../shared/nearby.ts";
+import { hubOf, networkOf } from "../server/modules/nearby/hub.ts";
 import { ApiError, Client, member, start, type Instance } from "./support/harness.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
@@ -248,6 +252,214 @@ test("ending or outliving a Nearby code ends it for its guests and retires its n
     assert.notEqual(renewed.id, next.id);
     await instance.sweep();
     assert.equal(instance.ctx.db.value("SELECT COUNT(*) FROM nearby_invites"), 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+/** A guest who joined `host`'s Nearby code from another network, with their stream open. */
+async function guestOf(instance: Instance, base: string, host: Client) {
+  const invite = await host.call(api.nearby.invite);
+  const guest = new Client(instance);
+  guest.address = "198.51.100.77";
+  const joined = await guest.call(api.nearby.join, {
+    params: { token: invite.token },
+    body: { name: "Dana", kind: "computer" },
+  });
+  guest.csrf = joined.self!.csrf;
+  const stream = await Stream.open(base, urls.nearbyEvents(invite.token), guest);
+  await stream.until((events) => events.some((event) => event.startsWith("event: ready")));
+  const signal = (to: string, signal: NearbySignal) =>
+    guest.call(api.nearby.guestSignal, { params: { token: invite.token }, body: { to, signal } });
+  return { stream, signal };
+}
+
+test("only local candidates reach a browser, so nobody can make it contact the internet", async () => {
+  const lines = (sdp: string) => sdp.split("\r\n").filter((line) => /a=candidate/i.test(line));
+  const sdp = [
+    "v=0",
+    "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+    "c=IN IP4 0.0.0.0",
+    "a=candidate:1 1 udp 2122260223 4b1c2f3e-8a9d-4e5f-a6b7-c8d9e0f1a2b3.local 50000 typ host",
+    "a=candidate:2 1 udp 2122260223 192.168.1.30 50001 typ host",
+    "a=candidate:3 1 tcp 1518280447 192.168.1.30 9 typ host tcptype active",
+    "a=candidate:4 1 udp 2122260223 fd12:3456::30 50002 typ host",
+    "a=candidate:5 1 udp 2122260223 fe80::1c2b:3a4d 50003 typ host",
+    "a=candidate:6 1 udp 2122260223 198.51.100.77 40000 typ host",
+    "a=candidate:7 1 tcp 1518280447 198.51.100.77 443 typ host tcptype passive",
+    "a=candidate:8 1 udp 1686052607 198.51.100.77 40001 typ srflx raddr 0.0.0.0 rport 0",
+    "a=candidate:9 1 udp 2122260223 2001:db8::30 50004 typ host",
+    // Written to slip past a careless reading: behind a lone carriage return, in capitals, indented,
+    // with leading zeros, as a short IPv6 that isn't unique local, as a mapped IPv4, or a long name.
+    "a=mid:0\ra=candidate:10 1 udp 2122260223 198.51.100.77 40002 typ host",
+    "A=CANDIDATE:11 1 UDP 2122260223 198.51.100.77 40003 typ host",
+    " a=candidate:12 1 udp 2122260223 198.51.100.77 40004 typ host",
+    "a=candidate:13 1 udp 2122260223 010.0.0.1 40005 typ host",
+    "a=candidate:14 1 udp 2122260223 fd::1 40006 typ host",
+    "a=candidate:15 1 udp 2122260223 ::ffff:198.51.100.77 40007 typ host",
+    "a=candidate:16 1 udp 2122260223 relay.local.example.com 40008 typ host",
+    // Local, but aimed at this machine itself: a port of the guest's choosing on the member's computer.
+    "a=candidate:17 1 udp 2122260223 127.0.0.1 631 typ host",
+    "a=candidate:18 1 udp 2122260223 ::1 631 typ host",
+    "a=end-of-candidates",
+    "",
+  ].join("\r\n");
+  assert.deepEqual(lines(localCandidates(sdp)), [
+    "a=candidate:1 1 udp 2122260223 4b1c2f3e-8a9d-4e5f-a6b7-c8d9e0f1a2b3.local 50000 typ host",
+    "a=candidate:2 1 udp 2122260223 192.168.1.30 50001 typ host",
+    "a=candidate:4 1 udp 2122260223 fd12:3456::30 50002 typ host",
+    "a=candidate:5 1 udp 2122260223 fe80::1c2b:3a4d 50003 typ host",
+  ]);
+  assert.ok(localCandidates(sdp).includes("a=mid:0\r\n"), "the line it hid behind stays");
+  // Direct's helper also takes loopback, as it always has.
+  assert.equal(lines(localCandidates(sdp, { loopback: true })).length, 6);
+
+  // Relay passes on only the local ones too, for browsers that don't filter them.
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const olgaId = (await olga.call(api.session.get)).device.id;
+    const olgaStream = await present(base, olga);
+    const { stream, signal } = await guestOf(instance, base, olga);
+    await signal(olgaId, { kind: "offer", session: "session-one", sdp });
+    await olgaStream.until(() => nearbyEvents(olgaStream).some((event) => event.type === "signal"));
+    const got = nearbyEvents(olgaStream).find((event) => event.type === "signal");
+    assert.ok(got?.type === "signal" && got.signal.kind === "offer");
+    assert.equal(got.signal.sdp, localCandidates(sdp));
+    await Promise.all([olgaStream.close(), stream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a flood of signals can't push a slowly reading device out of Nearby", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const olgaId = (await olga.call(api.session.get)).device.id;
+    // A tab whose reader has stalled for a moment, as a phone's on a weak link does.
+    const cookie = [...olga.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(`${base}${urls.events(olga.tab)}&browser=${olga.tab}`, {
+        agent: false,
+        headers: { host: "relay.test", cookie },
+      });
+      req.on("response", resolve).on("error", reject).end();
+    });
+    res.once("data", () => res.pause());
+    await eventually(() => res.isPaused());
+    await olga.call(api.nearby.present, { body: { tab: olga.tab } });
+    const hub = hubOf(instance.ctx);
+
+    // A guest sending as fast as it can gets a few signals through; the device stays.
+    const { stream, signal } = await guestOf(instance, base, olga);
+    const sdp = "v=0\r\n" + "a=x:".padEnd(NEARBY.sdpBytes - 8, "A");
+    const refused: number[] = [];
+    for (let i = 0; i < 80; i++)
+      await signal(olgaId, { kind: "offer", session: `flood-session-${i}`, sdp }).catch((error: ApiError) =>
+        refused.push(error.status),
+      );
+    assert.ok(refused.length >= 55 && refused.every((status) => status === 429 || status === 503), refused.join(", "));
+    assert.ok(hub.get(olgaId), "the device is still in Nearby");
+
+    // Its stream may fall a little behind before it's cut...
+    const channel = hub.get(olgaId)!.channel;
+    const filler = "x".repeat(16 * 1024);
+    for (let i = 0; i < 1000 && channel.backlog() <= 160 * 1024; i++) channel.send("beat", filler);
+    assert.ok(channel.backlog() > 64 * 1024 && hub.get(olgaId), "behind, and still open");
+    // ...but one that has stopped reading altogether is let go, rather than held in memory.
+    for (let i = 0; i < 100 && hub.get(olgaId); i++) channel.send("beat", filler);
+    assert.equal(hub.get(olgaId), undefined);
+    res.destroy();
+
+    // Signals to a device whose stream is behind wait: the sender tries again, and the device stays.
+    const phone = await signIn(instance, "olga", "Phone");
+    const phoneStream = await present(base, phone.client);
+    const behind = {
+      send: () => assert.fail("nothing more goes to a stream that's behind"),
+      backlog: () => 100 * 1024,
+      onEnd: () => () => {},
+    };
+    const userId = (await olga.call(api.session.get)).user.id;
+    const tablet = randomUUID();
+    hub.attach({ id: tablet, kind: "device", userId, network: "local", channel: behind });
+    await rejects(phone.client.call(api.nearby.signal, { body: { to: tablet, signal: offer() } }), 503);
+    await Promise.all([stream.close(), phoneStream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a member hidden from Nearby neither announces their devices nor hears of others'", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const pia = await member(instance, "pia");
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: false } } });
+    olga.address = "203.0.113.5";
+    pia.address = "203.0.113.5";
+    const pings = (stream: Stream) =>
+      stream.events.filter((e) => e.startsWith("event: change") && e.includes('"nearby"')).length;
+    // Change events go out a moment after the change; this is well past that.
+    const settle = () => sleep(300);
+
+    const olgaStream = await present(base, olga);
+    await settle();
+    const quiet = pings(olgaStream);
+    const piaStream = await present(base, pia);
+    await settle();
+    const piaHeard = pings(piaStream);
+    // pia renames herself while hidden: nothing anyone else is shown.
+    await pia.call(api.account.update, { body: { name: "Pia P" } });
+    // olga's phone comes: pia isn't told, and olga is, once.
+    const phone = await signIn(instance, "olga", "Phone");
+    phone.client.address = "203.0.113.5";
+    const phoneStream = await present(base, phone.client);
+    await settle();
+    assert.equal(pings(piaStream) - piaHeard, 1, "pia hears only of her own rename");
+    await piaStream.close();
+    await settle();
+    assert.equal(pings(olgaStream), quiet + 1, "olga hears only of her own phone");
+
+    // Becoming visible, and hiding again, are what olga is told of.
+    const again = await present(base, pia);
+    await settle();
+    const before = pings(olgaStream);
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: true } } });
+    await olgaStream.until(() => pings(olgaStream) > before);
+    const shown = pings(olgaStream);
+    await pia.call(api.account.update, { body: { prefs: { nearbyVisible: false } } });
+    await olgaStream.until(() => pings(olgaStream) > shown);
+    await Promise.all([olgaStream.close(), again.close(), phoneStream.close()]);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a device that moves to another network leaves the old network's Nearby at once", async () => {
+  const instance = await start();
+  try {
+    const base = await listen(instance);
+    const olga = await member(instance, "olga");
+    const pia = await member(instance, "pia");
+    olga.address = "203.0.113.5";
+    pia.address = "203.0.113.5";
+    const olgaStream = await present(base, olga);
+    const piaStream = await present(base, pia);
+    const peers = async () => (await olga.call(api.nearby.get)).peers.length;
+    assert.equal(await peers(), 1, "pia is shown to olga");
+    const pings = () => olgaStream.events.filter((e) => e.startsWith("event: change") && e.includes('"nearby"')).length;
+    await sleep(300);
+    const before = pings();
+    // pia's laptop joins another network, and says it's still there.
+    pia.address = "198.51.100.9";
+    await pia.call(api.nearby.present, { body: { tab: pia.tab } });
+    await olgaStream.until(() => pings() > before);
+    assert.equal(await peers(), 0, "pia is gone from olga’s Nearby");
+    await Promise.all([olgaStream.close(), piaStream.close()]);
   } finally {
     await instance.close();
   }

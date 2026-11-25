@@ -12,6 +12,7 @@ import {
   type NearbyPeer,
   type NearbySignal,
 } from "../../../shared/nearby.ts";
+import { localCandidates } from "../../../shared/candidates.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { clearCookie, cookieOptions, nearbyCookie } from "../../lib/auth.ts";
 import { fail, notFound } from "../../lib/errors.ts";
@@ -27,6 +28,41 @@ const INVITE_MS = NEARBY.inviteMinutes * 60_000;
 // Setting up one connection takes an offer, an answer and perhaps a goodbye; a page of devices
 // connecting at once, and again after a network change, stays well inside this.
 const SIGNALS = perAddress(600, "1 minute");
+/**
+ * Signals one endpoint may pass to one other: a burst, then one every few seconds. A browser keeps
+ * one connection per device and tries again after a second at the soonest, so this is far more than
+ * it sends; it keeps one sender from filling another device's stream.
+ */
+const PAIR_BURST = 20;
+const PAIR_REFILL_MS = 2000;
+/**
+ * A signal goes on only while the receiving stream holds less than this not yet read. Past it the
+ * signal is refused as busy and the sender's browser sends it again shortly (client/lib/nearby/
+ * link.ts), so a device reading slowly gets its signals late rather than losing its stream.
+ */
+const SIGNAL_BACKLOG_BYTES = 64 * 1024;
+
+/** What each sender may still pass to each receiver, refilled as time passes. */
+class PairBudgets {
+  private readonly budgets = new Map<string, { tokens: number; at: number }>();
+
+  /** Takes one signal from `from`'s budget towards `to`; false when there is none left. */
+  spend(from: string, to: string, now = Date.now()) {
+    const key = `${from} ${to}`;
+    const tokens = this.tokens(this.budgets.get(key), now);
+    if (tokens < 1) return false;
+    this.budgets.delete(key);
+    this.budgets.set(key, { tokens: tokens - 1, at: now });
+    // Full budgets need no entry; forget them now and then, so the map stays the size of who's busy.
+    if (this.budgets.size > 1000)
+      for (const [pair, budget] of this.budgets) if (this.tokens(budget, now) >= PAIR_BURST) this.budgets.delete(pair);
+    return true;
+  }
+
+  private tokens(budget: { tokens: number; at: number } | undefined, now: number) {
+    return budget ? Math.min(PAIR_BURST, budget.tokens + (now - budget.at) / PAIR_REFILL_MS) : PAIR_BURST;
+  }
+}
 
 type InviteRow = { id: string; user_id: string; expires: number; host: string; disabled: number };
 type GuestRow = { id: string; name: string; kind: DeviceKind; csrf: string };
@@ -84,6 +120,7 @@ function devicesById(ctx: Context, ids: string[]) {
 export function registerNearby(app: FastifyInstance, ctx: Context) {
   const hub = hubOf(ctx);
   const streams = streamsOf(ctx);
+  const budgets = new PairBudgets();
 
   const inviteOf = (userId: string): NearbyInvite | null => {
     const now = Date.now();
@@ -202,7 +239,14 @@ export function registerNearby(app: FastifyInstance, ctx: Context) {
     if (!from) fail(409, "Open Nearby again to continue.");
     const target = hub.get(to);
     if (!target || !hub.related(from, target)) fail(404, "That device isn’t in Nearby any more.");
-    hub.send(target, { type: "signal", from: from.id, signal });
+    // Checked first, so a signal refused as busy doesn't use up the sender's allowance.
+    if (target.channel.backlog() > SIGNAL_BACKLOG_BYTES)
+      fail(503, "That device isn’t keeping up right now. Try again in a moment.");
+    if (!budgets.spend(from.id, target.id))
+      fail(429, "That device has had too many requests from this one. Try again in a moment.");
+    // Only local candidates go on (see shared/candidates.ts), for browsers that don't filter them themselves.
+    const passed = signal.kind === "bye" ? signal : { ...signal, sdp: localCandidates(signal.sdp) };
+    hub.send(target, { type: "signal", from: from.id, signal: passed });
     return { ok: true as const };
   };
 

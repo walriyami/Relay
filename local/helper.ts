@@ -12,8 +12,8 @@ import { Agent, createServer, type IncomingMessage, type ServerResponse } from "
 import { join } from "node:path";
 import nodeDataChannel, { type PeerConnection } from "node-datachannel";
 import { LANES, Mux, type Lane } from "../shared/lanes.ts";
+import { localCandidates } from "../shared/candidates.ts";
 import { LOCAL, SOCKETS, type HelperStatus } from "../shared/local.ts";
-import { isLocalAddress } from "./addresses.ts";
 import { Exchanges } from "./exchange.ts";
 import { feed, gathered, laneChannel, laneOf } from "./lanes.ts";
 
@@ -319,15 +319,7 @@ function isDataOffer(sdp: string) {
  * (see isLocalAddress). Checking any other would reach beyond the local network.
  */
 export function localOffer(sdp: string) {
-  return sdp
-    .split(/\r?\n/)
-    .filter((line) => {
-      if (!line.startsWith("a=candidate:")) return true;
-      // a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> …
-      const [, , transport, , address] = line.slice("a=candidate:".length).split(" ");
-      return transport?.toUpperCase() === "UDP" && isLocalAddress(address ?? "");
-    })
-    .join("\r\n");
+  return localCandidates(sdp, { loopback: true });
 }
 
 /**
