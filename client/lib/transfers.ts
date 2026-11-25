@@ -439,9 +439,10 @@ async function prepare(t: Transfer, input: StartInput) {
       // same request can only be refused again.
       t.rejected = error.status;
       pendingCreates.delete(t.id);
-    } else if (error instanceof ApiError && error.status === 400) {
-      // The list itself was refused (folders nested too deep, say): its message says what to change,
-      // and retrying the same list can't help, so no Retry is offered.
+    } else if (error instanceof ApiError && error.status === 400 && !error.unreadable) {
+      // Relay refused the list itself (folders nested too deep, say): its message says what to
+      // change, and retrying the same list can't help, so no Retry is offered. A 400 with no
+      // readable body came from a proxy or a cut-off reply, and keeps its Retry.
       pendingCreates.delete(t.id);
     }
     // Otherwise keep the exact manifest and id: retry recovers even a lost successful response.

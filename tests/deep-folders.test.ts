@@ -58,10 +58,10 @@ async function deepItem(client: Client, db: Database, data = "hello") {
   return result.itemId;
 }
 
-/** Stops one item's deletion, standing in for any failure the server can meet. */
-const keep = (db: Database, itemId: string) =>
+/** Stops these items' deletion, standing in for any failure the server can meet. */
+const keep = (db: Database, ...itemIds: string[]) =>
   db.sqlite.exec(
-    `CREATE TEMP TRIGGER keep_item BEFORE DELETE ON items WHEN OLD.id = '${itemId}'
+    `CREATE TEMP TRIGGER keep_item BEFORE DELETE ON items WHEN OLD.id IN (${itemIds.map((id) => `'${id}'`).join(", ")})
      BEGIN SELECT RAISE(ABORT, 'kept for the test'); END`,
   );
 const release = (db: Database) => db.sqlite.exec("DROP TRIGGER temp.keep_item");
@@ -96,7 +96,7 @@ test("paths may nest only so many folders deep, for members and request visitors
     for (const tooDeep of [{ files: [deepPath(MAX_PATH_DEPTH + 1)] }, { folders: [deepPath(MAX_PATH_DEPTH + 1)] }]) {
       const error = await failure(create(tooDeep));
       assert.equal(error.status, 400);
-      assert.match(error.message, /“d” has folders inside folders more than 64 levels deep/);
+      assert.match(error.message, /Something in “d” is nested more than 64 levels deep/);
     }
 
     const request = await client.call(api.requests.create, {
@@ -173,7 +173,7 @@ test("an item nested deeper than SQLite cascades is deleted from Trash and Empty
   }
 });
 
-test("removing a member with a deep tree completes, and a failed removal leaves them suspended to retry", async () => {
+test("removing a member with a deep tree completes; a failed removal leaves them suspended to retry", async () => {
   const instance = await start();
   try {
     const { db } = instance.ctx;
@@ -181,24 +181,36 @@ test("removing a member with a deep tree completes, and a failed removal leaves 
     const gone = await member(instance, "gone", boss);
     const trashed = await deepItem(gone, db);
     await gone.call(api.items.trash, { params: { id: trashed } });
-    const kept = await deepItem(gone, db);
+    const stuck = [await deepItem(gone, db)];
+    for (const name of ["a.txt", "b.txt"]) stuck.push((await send(gone, [{ path: name, data: "x" }])).result.itemId);
     const id = userId(db, "gone");
+    db.run("UPDATE users SET admin = 1 WHERE id = ?", id);
 
-    keep(db, kept);
+    keep(db, ...stuck);
     const error = await failure(boss.call(api.admin.removeMember, { params: { id } }));
-    assert.equal(error.status, 500);
     assert.equal(
       error.message,
-      "500 1 of their items couldn’t be deleted, so gone is suspended but not removed yet. Try removing them again.",
+      "500 3 of their items couldn’t be deleted, so gone is suspended but not removed yet. Try removing them again.",
     );
-    assert.equal(db.value("SELECT disabled FROM users WHERE id = ?", id), 1, "suspended, not half-removed");
     assert.deepEqual(
-      db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", id).map((r) => r.id),
-      [kept],
+      { ...db.get<{ disabled: number; admin: number }>("SELECT disabled, admin FROM users WHERE id = ?", id) },
+      { disabled: 1, admin: 0 },
+      "suspended, not half-removed, and no longer counted as an administrator",
+    );
+    assert.equal(db.value("SELECT COUNT(*) FROM history WHERE kind = 'suspended'"), 1, "History says what happened");
+    assert.deepEqual(
+      db.all<{ id: string }>("SELECT id FROM items WHERE owner = ? ORDER BY id", id).map((r) => r.id),
+      stuck.sort(),
+      "everything else was deleted",
     );
 
     release(db);
-    await boss.call(api.admin.removeMember, { params: { id } });
+    // A second click while the first removal is still deleting is turned away, not run twice.
+    const clicks = await Promise.allSettled([0, 1].map(() => boss.call(api.admin.removeMember, { params: { id } })));
+    assert.deepEqual(
+      clicks.map((c) => (c.status === "fulfilled" ? 200 : (c.reason as ApiError).status)).sort(),
+      [200, 409],
+    );
     assert.equal(db.value("SELECT COUNT(*) FROM users WHERE id = ?", id), 0);
     assert.equal(db.value("SELECT COUNT(*) FROM nodes WHERE owner = ?", id), 0);
     assert.equal(db.value("SELECT COUNT(*) FROM history WHERE kind = 'removed'"), 1, "recorded once");

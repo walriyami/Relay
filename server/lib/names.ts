@@ -40,7 +40,7 @@ export function splitPath(value: string): string[] {
   if (names.length > MAX_PATH_DEPTH)
     fail(
       400,
-      `“${names[0]}” has folders inside folders more than ${MAX_PATH_DEPTH} levels deep, which Relay can’t store. ` +
+      `Something in “${names[0]}” is nested more than ${MAX_PATH_DEPTH} levels deep, which Relay can’t store. ` +
         "Move the deepest files nearer the top and try again.",
     );
   return names;

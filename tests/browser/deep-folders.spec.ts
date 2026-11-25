@@ -17,7 +17,7 @@ test("a folder nested too deep is refused with a plain reason and no Retry", asy
     await destinations(page).getByRole("button", { name: "Save to Files" }).click();
     const transfer = page.locator(".transfer").first();
     await expect(transfer).toContainText("Couldn’t finish");
-    await expect(transfer).toContainText("more than 64 levels deep");
+    await expect(transfer).toContainText("is nested more than 64 levels deep");
     await expect(transfer.getByRole("button", { name: "Retry" })).toHaveCount(0);
   } finally {
     await rm(root, { recursive: true, force: true });

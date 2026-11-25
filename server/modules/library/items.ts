@@ -375,7 +375,9 @@ export async function emptyTrash(ctx: Context, owner: string) {
     const batch = ids.slice(i, i + PURGE_BATCH);
     try {
       removed += ctx.db.tx(() => purgeEach(batch));
-    } catch {
+    } catch (error) {
+      // Committed, but an after-commit action failed: the batch is gone, so there is nothing to retry.
+      if (error instanceof AggregateError) throw error;
       // One item that can't go must not keep the rest in Trash: retry this batch an item at a time.
       for (const id of batch)
         try {

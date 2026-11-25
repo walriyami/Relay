@@ -37,10 +37,13 @@ export class ApiError extends Error {
   readonly status: number;
   /** Seconds until a refused (429) request may be tried again, when the server said. */
   readonly retryAfter?: number;
-  constructor(status: number, message: string, retryAfter?: number) {
+  /** No readable answer from Relay: a proxy answered for it, or the reply was cut off. */
+  readonly unreadable: boolean;
+  constructor(status: number, message: string, retryAfter?: number, unreadable = false) {
     super(message);
     this.status = status;
     this.retryAfter = retryAfter;
+    this.unreadable = unreadable;
   }
 }
 
@@ -122,7 +125,7 @@ async function request<E extends Endpoint>(
     data = await res.json();
   } catch {
     if (!res.status || res.status >= 500 || isProxyFailure(res.status)) reportFailure();
-    throw new ApiError(res.status, unreadable(res.status));
+    throw new ApiError(res.status, unreadable(res.status), undefined, true);
   }
   // Relay itself answered, whatever it said.
   reportReachable();

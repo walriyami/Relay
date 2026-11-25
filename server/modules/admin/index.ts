@@ -304,9 +304,12 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     removing.add(target.id);
     try {
       const freed = removalOf(target);
-      // Sign the member out first so nothing new arrives while their files are deleted.
+      // Sign the member out first so nothing new arrives while their files are deleted. An
+      // administrator also stops being one here, so a removal that stops part way never leaves a
+      // suspended administrator counted as one, and two removals can't take the last two.
       ctx.db.tx(() => {
-        ctx.db.run("UPDATE users SET disabled = 1 WHERE id = ?", target.id);
+        if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
+        ctx.db.run("UPDATE users SET disabled = 1, admin = 0 WHERE id = ?", target.id);
         ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       });
       streamsOf(ctx).recheck();
@@ -321,28 +324,24 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
         }
         await new Promise((resolve) => setImmediate(resolve));
       }
+      const by = usernameOf(ctx, administrator.userId);
+      // No await from here on, so nothing can arrive between this count and the deletion.
+      const left = ctx.db.value<number>("SELECT COUNT(*) FROM items WHERE owner = ?", target.id)!;
+      if (left) {
+        ctx.log.error(
+          { err: failures[0], member: target.id, failed: failures.length, left },
+          "member removal stopped: items could not be deleted",
+        );
+        ctx.db.tx(() => recordHistory(ctx, { kind: "suspended", username: target.username, by }, target.id));
+        fail(
+          500,
+          `${left === 1 ? "1 of their items" : `${left} of their items`} couldn’t be deleted, so ${target.username} ` +
+            "is suspended but not removed yet. Try removing them again.",
+        );
+      }
       ctx.db.tx(() => {
-        if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
-        const left = ctx.db.value<number>("SELECT COUNT(*) FROM items WHERE owner = ?", target.id)!;
-        if (left) {
-          ctx.log.error(
-            { err: failures[0], member: target.id, failed: failures.length, left },
-            "member removal stopped: items could not be deleted",
-          );
-          fail(
-            500,
-            `${left === 1 ? "1 of their items" : `${left} of their items`} couldn’t be deleted, so ${target.username} ` +
-              "is suspended but not removed yet. Try removing them again.",
-          );
-        }
         ctx.db.run("DELETE FROM users WHERE id = ?", target.id);
-        recordHistory(ctx, {
-          kind: "removed",
-          username: target.username,
-          by: usernameOf(ctx, administrator.userId),
-          items: freed.items,
-          bytes: freed.bytes,
-        });
+        recordHistory(ctx, { kind: "removed", username: target.username, by, items: freed.items, bytes: freed.bytes });
       });
     } finally {
       removing.delete(target.id);
