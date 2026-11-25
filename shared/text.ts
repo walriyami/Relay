@@ -54,9 +54,14 @@ export function shownText(value: string): string {
  * nothing (a soft hyphen, emoji tags) can't make a gap, so they stay too.
  */
 const HIDDEN = /[\u115f\u200b\u2060-\u206f\u2800\u3164\ufeff\uffa0\ufff9-\ufffb]|\u1160|\u17b4|\u17b5/g;
-/** The most spaces a name may have in a row. Characters that show nothing don't break a run. */
+/**
+ * The most spaces a name may have in a row. What a space can carry doesn't break a run: characters
+ * that show nothing, combining marks (an accent on a space is still a gap), and format controls
+ * such as the Egyptian hieroglyph joiners. Marks on letters, as in Indic writing or accents typed
+ * separately, never sit between two spaces.
+ */
 export const MAX_SPACES = 3;
-const SPACE_RUN = new RegExp(`(?:\\s\\p{Default_Ignorable_Code_Point}*){${MAX_SPACES + 1},}`, "gu");
+const SPACE_RUN = new RegExp(`(?:\\s[\\p{Default_Ignorable_Code_Point}\\p{M}\\p{Cf}]*){${MAX_SPACES + 1},}`, "gu");
 /** Spaces, and characters that show nothing at all. */
 const BLANK = /[\s\p{Default_Ignorable_Code_Point}]/gu;
 
