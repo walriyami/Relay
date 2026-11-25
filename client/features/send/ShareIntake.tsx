@@ -68,7 +68,10 @@ export function ShareIntake() {
     const result = await addShare(incoming).catch(() => "failed" as const);
     leaveShare();
     if (result === "failed") toast("This couldn’t be added. Share it again.", { tone: "error" });
-    else if (result === "missing") toast("This was already added or discarded.", { key: "share-intake" });
+    else if (result === "missing")
+      toast("This is no longer waiting in Relay: it was added, discarded or replaced by newer shares.", {
+        key: "share-intake",
+      });
     else {
       if (!result.files && result.text) window.dispatchEvent(new Event("relay-show-text"));
       if (result.files || result.text)

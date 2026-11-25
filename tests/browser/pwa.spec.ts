@@ -126,6 +126,34 @@ test("nothing shared to Relay reaches the draft until Add, and Discard forgets i
   await expect(composer(page).locator("textarea")).toHaveValue("");
 });
 
+test("a website posting shares over and over can't fill the browser's storage", async ({ page }) => {
+  await controlled(page);
+  const addresses: string[] = [];
+  for (let i = 1; i <= 7; i++) {
+    await shareSheet(page, { text: `Posted ${i}` });
+    await expect(page.getByRole("group", { name: "Shared text" })).toContainText(`Posted ${i}`);
+    addresses.push(page.url());
+  }
+  const waiting = await page.evaluate(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open("relay-share");
+        open.onerror = () => reject(new Error(String(open.error)));
+        open.onsuccess = () => {
+          const count = open.result.transaction("shares").objectStore("shares").count();
+          count.onsuccess = () => resolve(count.result);
+          count.onerror = () => reject(new Error(String(count.error)));
+        };
+      }),
+  );
+  expect(waiting).toBe(5);
+  // The oldest gave way to newer ones; the newest still wait.
+  await page.goto(addresses[0]);
+  await expect(page).toHaveURL(`${BASE}/`);
+  await page.goto(addresses[6]);
+  await expect(page.getByRole("group", { name: "Shared text" })).toContainText("Posted 7");
+});
+
 test("the iPhone Shortcut's address offers its text without sending it to the server", async ({ page }) => {
   await signedIn(page);
   const requests: string[] = [];
