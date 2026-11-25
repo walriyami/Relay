@@ -4,13 +4,14 @@ import workerThreads from "node:worker_threads";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
 import { MAX_QUEUED_PER_PERSON, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { imageSignature } from "../server/modules/downloads/image-signature.ts";
+import { decodeRefusal, jpegLayout } from "../server/modules/downloads/image-limits.ts";
 import { Client, member, send, start } from "./support/harness.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
@@ -519,6 +520,120 @@ test("thumbnails: a tiny AVIF of huge dimensions isn't decoded, and an image Rel
     assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(photo)}-image.failed`)));
     assert.equal(existsSync(note), false);
   } finally {
+    await instance.close();
+  }
+});
+
+/** A small progressive JPEG with its last scan repeated: damaged, and as many scans as asked for. */
+async function rescanned(copies: number) {
+  const jpeg = await sharp({ create: { width: 16, height: 16, channels: 3, background: "#4a8" } })
+    .jpeg({ progressive: true })
+    .toBuffer();
+  const scan = jpeg.lastIndexOf(Buffer.from([0xff, 0xda]));
+  const end = jpeg.length - 2;
+  return Buffer.concat([
+    jpeg.subarray(0, end),
+    ...Array<Buffer>(copies).fill(jpeg.subarray(scan, end)),
+    jpeg.subarray(end),
+  ]);
+}
+
+test("thumbnails: an image too costly to decode is refused from its header, and damaged ones aren't retried", async () => {
+  const flat = (width: number, height: number) =>
+    sharp({ create: { width, height, channels: 4, background: { r: 9, g: 9, b: 9, alpha: 0.5 } } })
+      .png()
+      .toBuffer();
+  // A row wider than 128 KiB: tiny as a file, but shrinking it needs memory that grows with the row.
+  const wide = await flat(32_769, 1);
+  const widest = await flat(32_768, 1);
+  const avif = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#4a8" } })
+    .avif()
+    .toBuffer();
+  const tooManyScans = await rescanned(120);
+  // The marker walk sees what libjpeg would allocate, without decoding anything.
+  const layout = jpegLayout(tooManyScans);
+  assert.equal(layout.scans, 130);
+  assert.equal(layout.wholeImage, true);
+  assert.match(decodeRefusal(await sharp(tooManyScans).metadata(), layout)!, /too many scans/);
+
+  const instance = await start();
+  try {
+    const client = await member(instance, "costly-owner");
+    const files = {
+      "wide.png": wide,
+      "widest.png": widest,
+      "scans.jpg": tooManyScans,
+      // Damaged files whose decoder errors used to look temporary, so they were retried on every look.
+      "progression.jpg": await rescanned(3),
+      "truncated.avif": avif.subarray(0, avif.length - 40),
+    };
+    const { result } = await send(
+      client,
+      Object.entries(files).map(([path, data]) => ({ path, data })),
+    );
+    const nodes = new Map(
+      (await client.call(api.items.get, { params: { id: result.itemId } })).nodes.map((n) => [n.name, n]),
+    );
+    assert.equal((await get(client, urls.nodeThumbnail(nodes.get("widest.png")!.id))).statusCode, 200);
+    for (const name of ["wide.png", "scans.jpg", "progression.jpg", "truncated.avif"]) {
+      assert.equal((await get(client, urls.nodeThumbnail(nodes.get(name)!.id))).statusCode, 415, name);
+      const data = files[name as keyof typeof files];
+      assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(data)}-image.failed`)), `${name} is never retried`);
+    }
+  } finally {
+    await instance.close();
+  }
+});
+
+test("thumbnails: an image that times out twice isn't tried again, so it can't hold up every preview", async (t) => {
+  const instance = await start();
+  const original = workerThreads.Worker;
+  let posted = 0;
+  /** A worker that never answers the first two jobs, as with a decode that takes too long. */
+  class SlowWorker extends EventEmitter {
+    postMessage(job: { id: number }) {
+      posted++;
+      if (posted > 2) queueMicrotask(() => this.emit("message", { id: job.id, ok: false, code: "RENDER_FAILED" }));
+    }
+    unref() {}
+    terminate() {
+      return Promise.resolve(1);
+    }
+  }
+  let before = 0;
+  const asked = async () => {
+    while (posted === before) await new Promise((resolve) => setImmediate(resolve));
+  };
+  try {
+    const client = await member(instance, "slow-owner");
+    const png = await sharp({ create: { width: 30, height: 30, channels: 3, background: "teal" } })
+      .png()
+      .toBuffer();
+    const { result } = await send(client, [{ path: "slow.png", data: png, mime: "image/png" }]);
+    const node = (await client.call(api.items.get, { params: { id: result.itemId } })).nodes[0];
+    const url = urls.nodeThumbnail(node.id);
+    const note = join(instance.root, "thumbnails", `${sha(png)}-image.rendering`);
+    workerThreads.Worker = SlowWorker as unknown as typeof original;
+    syncBuiltinESMExports();
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+
+    for (const strike of ["0", "1"]) {
+      before = posted;
+      const response = get(client, url);
+      await asked();
+      t.mock.timers.tick(15_000);
+      assert.equal((await response).statusCode, 503);
+      assert.equal(readFileSync(note, "utf8"), strike, "a render cut short by the time limit keeps its note");
+      t.mock.timers.tick(RENDITION_RETRY_MS + 1);
+    }
+    const third = await get(client, url);
+    assert.equal(third.statusCode, 415);
+    assert.equal(posted, 2, "not decoded a third time");
+    assert.ok(existsSync(join(instance.root, "thumbnails", `${sha(png)}-image.failed`)));
+  } finally {
+    workerThreads.Worker = original;
+    syncBuiltinESMExports();
+    t.mock.timers.reset();
     await instance.close();
   }
 });

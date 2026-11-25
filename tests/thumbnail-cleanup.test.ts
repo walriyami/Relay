@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import sharp from "sharp";
 import { api, urls } from "../shared/api.ts";
-import { thumbnailFailure, thumbnailPath } from "../server/storage/blobs.ts";
-import { member, send, start, stop, type Instance } from "./support/harness.ts";
+import { thumbnailAttempt, thumbnailFailure, thumbnailPath } from "../server/storage/blobs.ts";
+import { Client, member, send, start, stop, type Instance } from "./support/harness.ts";
 
 const gate = () => {
   let resolve!: () => void;
@@ -213,6 +213,39 @@ test("startup reclaims an interrupted thumbnail temporary while preserving its r
     assert.equal(existsSync(publication.file), false);
     assert.equal(restarted.ctx.db.value("SELECT count(*) FROM blob_cleanup WHERE sha256 = ?", sha), 0);
     assert.deepEqual(readFileSync(restarted.ctx.blobs.path(sha)), data);
+  } finally {
+    await restarted?.close();
+    await instance.close();
+  }
+});
+
+test("startup cleanup keeps the note of a render Relay stopped during, so a crashing image isn't decoded again", async () => {
+  const instance = await start();
+  let restarted: Instance | undefined;
+  try {
+    const owner = await member(instance, "thumbnail-crash-owner");
+    const data = await sharp({ create: { width: 20, height: 20, channels: 3, background: "red" } })
+      .png()
+      .toBuffer();
+    const sha = createHash("sha256").update(data).digest("hex");
+    const { result } = await send(owner, [{ path: "crashing.png", data, mime: "image/png" }]);
+    const node = (await owner.call(api.items.get, { params: { id: result.itemId } })).nodes[0];
+    // As Relay is left when a decoder takes it down: a staged rendition, and the note of a render
+    // that had already been cut short once before.
+    const publication = instance.ctx.blobs.stageThumbnail(sha);
+    writeFileSync(publication.file, "");
+    const note = thumbnailAttempt(instance.root, sha, "image");
+    writeFileSync(note, "1");
+    await stop(instance);
+    restarted = await start({}, instance.root);
+    assert.equal(existsSync(publication.file), false);
+    assert.equal(readFileSync(note, "utf8"), "1", "the note survives startup cleanup");
+
+    const again = new Client(restarted);
+    for (const [name, value] of owner.cookies) again.cookies.set(name, value);
+    assert.equal((await again.raw({ method: "GET", url: urls.nodeThumbnail(node.id) })).statusCode, 415);
+    assert.equal(existsSync(thumbnailFailure(restarted.root, sha, "image")), true);
+    assert.equal(existsSync(thumbnailPath(restarted.root, sha, "s")), false);
   } finally {
     await restarted?.close();
     await instance.close();
