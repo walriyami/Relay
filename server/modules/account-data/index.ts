@@ -9,6 +9,7 @@ import type { Context } from "../../context.ts";
 import { currentMember } from "../../lib/auth.ts";
 import { fail, HttpError } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
+import { preparing } from "../../lib/jobs.ts";
 import { usageOf } from "../auth/sessions.ts";
 import { MAX_ZIP_TEXT_BYTES } from "../downloads/index.ts";
 import { contentDisposition, send } from "../downloads/serve.ts";
@@ -148,37 +149,43 @@ export function registerAccountData(app: FastifyInstance, ctx: Context) {
     url: urls.exportZip(),
     async handler(req, reply) {
       const member = signedIn(req);
-      const { rows, placed, wrappers } = exportEntries(ctx, member.userId);
-      for (const { row } of placed) if (row.kind === "file") await ctx.blobs.verify(row.blob!, row.size);
-      const textRows = rows.filter((row) => row.kind === "text");
-      const texts = new Map(
-        textRows.length
-          ? ctx.db
-              .all<{ id: string; text: string | null }>(
-                "SELECT id, text FROM nodes WHERE id IN (SELECT value FROM json_each(?))",
-                JSON.stringify(textRows.map((row) => row.id)),
-              )
-              .map((row) => [row.id, row.text ?? ""])
-          : [],
-      );
-      const data = new Map(textRows.map((row) => [row.id, Buffer.from(texts.get(row.id) ?? "", "utf8")]));
-      type Entry = ZipEntry & { content: ZipContent | null };
-      const entries: Entry[] = [
-        ...wrappers.map((wrapper) => ({ ...wrapper, content: null })),
-        ...placed.map(({ row, path }): Entry => {
-          const base = { path, created: row.created, kind: row.kind, size: row.size, crc32: row.crc32 };
-          if (row.kind === "folder") return { ...base, content: null };
-          if (row.kind === "text") return { ...base, content: { data: data.get(row.id)! } };
-          return { ...base, content: { file: ctx.blobs.path(row.blob!) } };
-        }),
-      ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-      // MS-DOS times have no time zone, so they are written in the downloader's, as for any other ZIP.
-      const timeZone = validTimeZone((req.query as { tz?: string }).tz);
-      const layout = zipLayout(entries, (index) => entries[index].content!, timeZone);
-      const etag = createHash("sha256")
-        .update(timeZone ?? "")
-        .update(JSON.stringify(placed.map(({ row, path }) => [row.id, path, row.blob, row.size, row.created])))
-        .digest("hex");
+      // Listing everything and checking each file on disk is the costly part, so it takes one of
+      // the few places for that; sending the archive afterwards doesn't hold one.
+      const { layout, etag } = await preparing(ctx, reply, member.userId, async () => {
+        const { rows, placed, wrappers } = exportEntries(ctx, member.userId);
+        for (const { row } of placed) if (row.kind === "file") await ctx.blobs.verify(row.blob!, row.size);
+        const textRows = rows.filter((row) => row.kind === "text");
+        const texts = new Map(
+          textRows.length
+            ? ctx.db
+                .all<{ id: string; text: string | null }>(
+                  "SELECT id, text FROM nodes WHERE id IN (SELECT value FROM json_each(?))",
+                  JSON.stringify(textRows.map((row) => row.id)),
+                )
+                .map((row) => [row.id, row.text ?? ""])
+            : [],
+        );
+        const data = new Map(textRows.map((row) => [row.id, Buffer.from(texts.get(row.id) ?? "", "utf8")]));
+        type Entry = ZipEntry & { content: ZipContent | null };
+        const entries: Entry[] = [
+          ...wrappers.map((wrapper) => ({ ...wrapper, content: null })),
+          ...placed.map(({ row, path }): Entry => {
+            const base = { path, created: row.created, kind: row.kind, size: row.size, crc32: row.crc32 };
+            if (row.kind === "folder") return { ...base, content: null };
+            if (row.kind === "text") return { ...base, content: { data: data.get(row.id)! } };
+            return { ...base, content: { file: ctx.blobs.path(row.blob!) } };
+          }),
+        ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+        // MS-DOS times have no time zone, so they are written in the downloader's, as for any other ZIP.
+        const timeZone = validTimeZone((req.query as { tz?: string }).tz);
+        return {
+          layout: zipLayout(entries, (index) => entries[index].content!, timeZone),
+          etag: createHash("sha256")
+            .update(timeZone ?? "")
+            .update(JSON.stringify(placed.map(({ row, path }) => [row.id, path, row.blob, row.size, row.created])))
+            .digest("hex"),
+        };
+      });
       const date = new Date().toISOString().slice(0, 10);
       reply
         .type("application/zip")
