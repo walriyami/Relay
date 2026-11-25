@@ -317,7 +317,8 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       // suspended administrator counted as one, and two removals can't take the last two.
       ctx.db.tx(() => {
         if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
-        ctx.db.run("UPDATE users SET disabled = 1, admin = 0 WHERE id = ?", target.id);
+        // Marked as stopping part way from the start, so a restart in the middle shows it too.
+        ctx.db.run("UPDATE users SET disabled = 1, admin = 0, removal_stopped = ? WHERE id = ?", Date.now(), target.id);
         ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       });
       streamsOf(ctx).recheck();

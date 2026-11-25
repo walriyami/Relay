@@ -788,7 +788,7 @@ function RemoveMember({ member, onRemoved }: { member: AdminMember; onRemoved: (
         <strong>Remove member</strong>
         <span className="field-hint">
           {member.removalStopped
-            ? `Removing them stopped ${ago(member.removalStopped)} because some of their files couldn’t be deleted. They’re suspended until you remove them again.`
+            ? `Removing them stopped ${ago(member.removalStopped)} before everything of theirs was deleted. They’re suspended until you remove them again.`
             : "Deletes their account, files and links, and frees their space."}
         </span>
       </span>
