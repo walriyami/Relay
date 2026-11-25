@@ -1,8 +1,8 @@
 // Verifies that no image can make a preview cost more memory than Relay can spare. Each image is
 // made, then rendered by the real render worker, in a process of its own that reports its memory:
 //   1. images built to exhaust memory or time (a 25,000,000-pixel-wide 16-bit PNG, a 50 MP 4:4:4
-//      progressive JPEG, a JPEG with 2,000 scans, large GIF and AVIF) are refused from their
-//      headers, quickly and cheaply;
+//      progressive JPEG, a JPEG with 2,000 scans, large GIF and AVIF, and a 16 MP AVIF cropped to
+//      64 × 64) are refused from their headers, quickly and cheaply;
 //   2. the most costly images still previewed in each format render within the memory budget and
 //      Relay's time limit.
 // HEIC needs an encoder this script doesn't have; pass HEIC files (or any others) to measure them too.
@@ -95,6 +95,83 @@ async function rescanned(copies: number) {
   ]);
 }
 
+/**
+ * An AVIF from sharp with a crop (`clap`) added to its image, so it reports the cropped size while
+ * its whole frame is decoded. Built for sharp's layout: one image item, one-byte property indexes.
+ */
+function withCrop(avif: Buffer, width: number, height: number) {
+  const children = (start: number, end: number) => {
+    const list: { type: string; start: number; end: number }[] = [];
+    for (let i = start; i < end; i += avif.readUInt32BE(i))
+      list.push({ type: avif.toString("latin1", i + 4, i + 8), start: i, end: i + avif.readUInt32BE(i) });
+    return list;
+  };
+  const find = (list: ReturnType<typeof children>, type: string) => list.find((box) => box.type === type)!;
+  const meta = find(children(0, avif.length), "meta");
+  const metaKids = children(meta.start + 12, meta.end);
+  const iprp = find(metaKids, "iprp");
+  const iprpKids = children(iprp.start + 8, iprp.end);
+  const ipma = find(iprpKids, "ipma");
+  const properties = children(find(iprpKids, "ipco").start + 8, find(iprpKids, "ipco").end).length;
+  // Version 0, one-byte indexes, one item.
+  if (avif[ipma.start + 8] || avif[ipma.start + 11] & 1 || avif.readUInt32BE(ipma.start + 12) !== 1)
+    throw new Error("unexpected AVIF layout");
+  // Clean aperture: the crop's width and height as fractions, centred.
+  const clap = Buffer.alloc(40);
+  clap.writeUInt32BE(40, 0);
+  clap.write("clap", 4, "latin1");
+  [width, 1, height, 1, 0, 1, 0, 1].forEach((value, i) => clap.writeUInt32BE(value, 8 + i * 4));
+  const box = (head: Buffer, ...parts: Buffer[]) => {
+    const whole = Buffer.concat([head, ...parts]);
+    whole.writeUInt32BE(whole.length, 0);
+    return whole;
+  };
+  const rebuilt = (kids: ReturnType<typeof children>, replace: (kid: (typeof kids)[number]) => Buffer | null) =>
+    kids.map((kid) => replace(kid) ?? avif.subarray(kid.start, kid.end));
+  // The one item's association list gains the new property, marked essential.
+  const ipmaNew = box(Buffer.from(avif.subarray(ipma.start, ipma.end)), Buffer.from([0x80 | (properties + 1)]));
+  ipmaNew[18]++;
+  const grown = clap.length + 1;
+  const iloc = Buffer.from(avif.subarray(find(metaKids, "iloc").start, find(metaKids, "iloc").end));
+  // Every item's data is in mdat, after meta, so each offset moves by what meta grew.
+  const version = iloc[8];
+  const offsetSize = iloc[12] >> 4;
+  const lengthSize = iloc[12] & 15;
+  const baseSize = iloc[13] >> 4;
+  const indexSize = version ? iloc[13] & 15 : 0;
+  let at = 16;
+  const shift = (size: number) => {
+    if (size === 4) iloc.writeUInt32BE(iloc.readUInt32BE(at) + grown, at);
+    if (size === 8) iloc.writeBigUInt64BE(iloc.readBigUInt64BE(at) + BigInt(grown), at);
+  };
+  if (version > 1) throw new Error("unexpected AVIF layout");
+  for (let items = iloc.readUInt16BE(14); items > 0; items--) {
+    // Item id, construction method (version 1), data reference.
+    at += 2 + (version ? 2 : 0) + 2;
+    const based = baseSize && (baseSize === 4 ? iloc.readUInt32BE(at) : Number(iloc.readBigUInt64BE(at)));
+    if (based) shift(baseSize);
+    at += baseSize;
+    let extents = iloc.readUInt16BE(at);
+    at += 2;
+    for (; extents > 0; extents--) {
+      at += indexSize;
+      if (!based) shift(offsetSize);
+      at += offsetSize + lengthSize;
+    }
+  }
+  const iprpNew = box(
+    Buffer.from(avif.subarray(iprp.start, iprp.start + 8)),
+    ...rebuilt(iprpKids, (kid) =>
+      kid.type === "ipco" ? box(Buffer.from(avif.subarray(kid.start, kid.end)), clap) : kid === ipma ? ipmaNew : null,
+    ),
+  );
+  const metaNew = box(
+    Buffer.from(avif.subarray(meta.start, meta.start + 12)),
+    ...rebuilt(metaKids, (kid) => (kid === iprp ? iprpNew : kid.type === "iloc" ? iloc : null)),
+  );
+  return Buffer.concat(rebuilt(children(0, avif.length), (kid) => (kid.type === "meta" ? metaNew : null)));
+}
+
 const refused: Record<string, () => Promise<Buffer>> = {
   "png-25000000x2-rgba16.png": () => png(25_000_000, 2, 16, 4),
   "png-interlaced-7071x7071-rgba16.png": () => png(7071, 7071, 16, 4, true),
@@ -103,6 +180,9 @@ const refused: Record<string, () => Promise<Buffer>> = {
   "jpeg-2000-scans.jpg": () => rescanned(2000),
   "gif-50mp.gif": () => flat(7071, 7071).gif().toBuffer(),
   "avif-12mp.avif": () => flat(4000, 3000).avif({ effort: 0 }).toBuffer(),
+  // 16 MP: encoding a larger frame takes more memory than the container has.
+  "avif-16mp-cropped-to-64x64.avif": async () =>
+    withCrop(await flat(4000, 4000).avif({ effort: 0 }).toBuffer(), 64, 64),
 };
 const allowed: Record<string, () => Promise<Buffer>> = {
   "jpeg-progressive-34mp-444.jpg": () =>
@@ -112,6 +192,8 @@ const allowed: Record<string, () => Promise<Buffer>> = {
   "gif-26mp.gif": () => noisy(5100, 5100).gif({ effort: 1, colours: 16 }).toBuffer(),
   "avif-8.6mp-lossless-12bit.avif": () =>
     noisy(3400, 2540, 8).avif({ effort: 0, lossless: true, bitdepth: 12 }).toBuffer(),
+  "avif-8.6mp-12bit-alpha.avif": () =>
+    noisy(3400, 2540, 8).ensureAlpha(0.5).avif({ effort: 0, quality: 90, bitdepth: 12 }).toBuffer(),
 };
 
 type Measured = { code: string; message?: string; ms: number; peakMiB: number; renderMiB: number };
@@ -127,8 +209,8 @@ async function renderOne(source: string, dir: string): Promise<Measured> {
   const job = (id: number, file: string, decoder: string) =>
     new Promise<{ ok: boolean; code?: string; message?: string }>((resolve, reject) => {
       worker.once("error", reject);
-      const answered = (message: { id: number; ok: boolean }) => {
-        if (message.id !== id) return;
+      const answered = (message: { id: number; ok: boolean; decoding?: true }) => {
+        if (message.id !== id || message.decoding) return;
         worker.off("message", answered);
         resolve(message);
       };
