@@ -124,27 +124,36 @@ async function* metered(chunks: AsyncIterable<Buffer>, onSent: (bytes: number) =
   }
 }
 
-/** A running download asks again whether it may go on after this many bytes or this long, whichever is first. */
+/**
+ * A running download asks again whether it may go on once it has sent RECHECK_BYTES or RECHECK_MS
+ * has passed, and never more often than RECHECK_GAP_MS: a fast download costs a handful of checks a
+ * second, however fast it goes.
+ */
 export const RECHECK_BYTES = 1024 * 1024;
 export const RECHECK_MS = 1000;
+export const RECHECK_GAP_MS = 100;
 
 /**
- * Passes a response's bytes through, asking `allowed` again every RECHECK_BYTES or RECHECK_MS. When
- * access has gone (a link turned off, a session signed out, a member suspended, an item deleted)
- * `allowed` throws, which cuts the response short of its Content-Length: the download fails rather
- * than finishing with what it was no longer allowed to have. Each check is a few indexed lookups.
+ * Passes a response's bytes through, asking `allowed` again as RECHECK_* say. When access has gone
+ * (a link turned off, a session signed out, a member suspended, an item deleted) `allowed` throws,
+ * which cuts the response short of its Content-Length: the download fails rather than finishing
+ * with what it was no longer allowed to have. The first bytes always go, so the response has begun
+ * and the cut can't turn into an error page under the download's headers.
  */
 export async function* rechecked(source: AsyncIterable<Buffer>, allowed: () => unknown) {
+  let started = false;
   let bytes = 0;
   let checked = Date.now();
   for await (const chunk of source) {
-    bytes += chunk.length;
-    if (bytes >= RECHECK_BYTES || Date.now() - checked >= RECHECK_MS) {
+    const waited = Date.now() - checked;
+    if (started && waited >= RECHECK_GAP_MS && (bytes >= RECHECK_BYTES || waited >= RECHECK_MS)) {
       allowed();
       bytes = 0;
       checked = Date.now();
     }
     yield chunk;
+    started = true;
+    bytes += chunk.length;
   }
 }
 
