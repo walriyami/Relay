@@ -134,8 +134,8 @@ function shareStore(mode) {
 }
 
 /**
- * What the share sheet sent waits in this browser's storage (never on the server) until Send picks
- * it up; client/lib/pwa-share.ts reads and deletes it.
+ * What the share sheet sent waits in this browser's storage (never on the server) until the person
+ * adds or discards it on /share (client/lib/pwa-share.ts), at most a day.
  */
 async function receiveShare(event) {
   try {

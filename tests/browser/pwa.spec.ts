@@ -77,7 +77,7 @@ test("Share to Relay shows what arrived, and one tap adds it to the Send draft",
   await expect(arrived(page)).toBeVisible();
   await expect(page.getByRole("list", { name: "Shared files" })).toContainText("shared.txt");
   await expect(page.getByRole("group", { name: "Shared text" })).toContainText("From the share sheet");
-  await expect(page.getByRole("button", { name: "Add to Send" })).toBeFocused();
+  await expect(arrived(page)).toBeFocused();
   await page.getByRole("button", { name: "Add to Send" }).click();
   await expect(page).toHaveURL(`${BASE}/`);
   await expect(selected(page)).toContainText("shared.txt");
@@ -93,8 +93,21 @@ test("Share to Relay shows what arrived, and one tap adds it to the Send draft",
 
 test("nothing shared to Relay reaches the draft until Add, and Discard forgets it", async ({ page }) => {
   // A website can post the same form as the share sheet, so arrival alone must not fill the draft.
+  // Nor can the website time a click (the second half of a double-click) to land on Add the moment it
+  // appears: this one clicks it as soon as it exists. (Add isn't focused, so a held Enter misses it.)
+  await page.addInitScript(() => {
+    const watch = new MutationObserver(() => {
+      const add = [...document.querySelectorAll("button")].find((b) => b.textContent === "Add to Send");
+      if (!add) return;
+      watch.disconnect();
+      add.click();
+    });
+    watch.observe(document, { childList: true, subtree: true });
+  });
   await controlled(page);
   await shareSheet(page, { text: "Planted by a website" });
+  await expect(arrived(page)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add to Send" })).toBeEnabled();
   await expect(arrived(page)).toBeVisible();
   const shared = page.url();
   await page.goto("/");

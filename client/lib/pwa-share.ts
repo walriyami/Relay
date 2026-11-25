@@ -58,6 +58,15 @@ async function find(id: string, remove: boolean) {
   }
 }
 
+/**
+ * When Relay starts: drops shares nobody added or discarded within a day (the person closed Relay
+ * instead of choosing).
+ */
+export async function sweepShares() {
+  if (typeof indexedDB === "undefined") return;
+  await find("", false).catch(() => undefined);
+}
+
 /** On sign-out: nothing shared stays in this browser for the next person. */
 export async function forgetShares() {
   if (typeof indexedDB === "undefined") return;

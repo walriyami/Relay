@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { bytes, plural } from "../../lib/format";
 import { addShare, discardShare, leaveShare, readShare, type Incoming } from "../../lib/pwa-share";
@@ -12,10 +12,24 @@ import { Button, toast } from "../../components/ui";
 
 /** Rows shown before "and N more", so the buttons stay in reach on a phone. */
 const ROWS = 5;
+/**
+ * Add works only after this long on screen, and isn't focused: a website that sends something here
+ * can't have a held Enter or the second half of a double-click land on it.
+ */
+const SETTLE_MS = 500;
 
 export function ShareIntake() {
   const [incoming, setIncoming] = useState<Incoming | null>(null);
   const [busy, setBusy] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!incoming) return;
+    heading.current?.focus({ preventScroll: true });
+    setSettled(false);
+    const timer = setTimeout(() => setSettled(true), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [incoming]);
   useEffect(() => {
     let live = true;
     const read = () => {
@@ -49,12 +63,13 @@ export function ShareIntake() {
 
   const { files, text } = incoming;
   const add = async () => {
-    if (busy) return;
+    if (busy || !settled) return;
     setBusy(true);
     const result = await addShare(incoming).catch(() => "failed" as const);
     leaveShare();
     if (result === "failed") toast("This couldn’t be added. Share it again.", { tone: "error" });
-    else if (result !== "missing") {
+    else if (result === "missing") toast("This was already added or discarded.", { key: "share-intake" });
+    else {
       if (!result.files && result.text) window.dispatchEvent(new Event("relay-show-text"));
       if (result.files || result.text)
         toast(
@@ -75,7 +90,9 @@ export function ShareIntake() {
     <div className="page share-intake">
       <div className="page-head">
         <div>
-          <h1>Something was shared to Relay</h1>
+          <h1 ref={heading} tabIndex={-1}>
+            Something was shared to Relay
+          </h1>
           <p className="muted">Add it to Send, then choose where it goes. If you didn’t just share this, discard it.</p>
         </div>
       </div>
@@ -106,7 +123,7 @@ export function ShareIntake() {
         )}
       </section>
       <div className="row">
-        <Button variant="primary" autoFocus busy={busy} onClick={() => void add()}>
+        <Button variant="primary" busy={busy} disabled={!settled} onClick={() => void add()}>
           Add to Send
         </Button>
         <Button disabled={busy} onClick={() => void discard()}>
