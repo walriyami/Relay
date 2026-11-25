@@ -47,11 +47,28 @@ export const LINK_SELECT = `SELECT l.id, l.owner, l.item, l.created, l.expires, 
 /**
  * New people one network (an IPv4 /24 or IPv6 /48) can add to a link's visits in an hour. Past it,
  * a link without a limit or password still opens for them, uncounted, so nobody can churn out the
- * visits of the people the link was shared with. A limit already bounds a link's visits.
+ * visits of the people the link was shared with; a password link is unlocked for nobody new from
+ * that network until the hour is up, since a browser stays unlocked only through its visit.
  */
 export const NEW_VISITORS_PER_NETWORK = 30;
-/** A link without a limit keeps this many of its most recently active visits; links.visitors keeps the total. */
+/**
+ * Places of a link limited to `limit` people that one network may take in an hour: half of them,
+ * at least two (a couple on one Wi-Fi) and at most NEW_VISITORS_PER_NETWORK. Relay can't tell
+ * people apart without accounts, so someone holding the link can still pose as several; this only
+ * stops them taking every place at once from one network, leaving the rest for the others it was
+ * shared with, while a household opening it together waits at most an hour.
+ */
+export const placesPerNetwork = (limit: number) =>
+  Math.min(NEW_VISITORS_PER_NETWORK, Math.max(2, Math.ceil(limit / 2)));
+/** A link without a limit keeps this many visits; links.visitors keeps the total. */
 export const VISITS_KEPT = 1_000;
+/**
+ * Of those, the most recently active ones always stay, so someone who just arrived isn't forgotten
+ * before they can download (or, on a password link, asked for the password again). The others that
+ * stay are the people who downloaded before those who only looked, most recently active first: new
+ * visits, real or made up, push out only visitors who took nothing.
+ */
+export const VISITS_RECENT_KEPT = 100;
 /** What a browser that doesn't keep the visitor cookie is told by a link that counts people. */
 export const NEEDS_COOKIES =
   "This link counts the people who open it, which needs cookies. Allow cookies for this site, then reload.";
@@ -116,7 +133,9 @@ export const effectiveLinkExpiry = (expires: number | null, itemExpires: number 
 export function linkVisits(ctx: Context, owner: string, id: string): LinkVisit[] {
   ownedLink(ctx, owner, id);
   return ctx.db.all<LinkVisit>(
-    "SELECT id, device, first, last, downloads FROM link_visits WHERE link = ? ORDER BY last DESC, id DESC LIMIT 200",
+    // People who downloaded first, so a crowd of visits that took nothing can't hide them.
+    `SELECT id, device, first, last, downloads FROM link_visits WHERE link = ?
+       ORDER BY downloads > 0 DESC, last DESC, id DESC LIMIT 200`,
     id,
   );
 }
@@ -162,7 +181,8 @@ const visitOf = (ctx: Context, linkId: string, visitor: string) =>
 /**
  * Lets a visitor in: records them the first time (which counts toward a limit, and tells the owner),
  * and afterwards notes when they were last here. `unlocked` is the password hash they just entered.
- * Null when a link without a limit or password lets them in uncounted (NEW_VISITORS_PER_NETWORK).
+ * Null when a link without a limit or password lets them in uncounted (NEW_VISITORS_PER_NETWORK);
+ * any other link refuses someone new past their network's budget.
  */
 function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string, unlocked: string | null) {
   const now = Date.now();
@@ -177,20 +197,28 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
     const current = ctx.db.value<number>("SELECT visitors FROM links WHERE id = ?", row.id)!;
     if (row.visitor_limit !== null && current >= row.visitor_limit) fail(410, LINK_USED_UP);
     const network = ctx.secrets.linkVisitNetwork(row.id, wideNetworkOf(req.ip));
-    // Only a link anyone can open without being counted against a limit or knowing a password has
-    // a budget of new people per network.
-    const open = row.visitor_limit === null && row.password_hash === null;
-    if (
-      open &&
-      ctx.db.value<number>(
-        "SELECT count(*) FROM (SELECT 1 FROM link_visits WHERE link = ? AND network = ? AND first > ? LIMIT ?)",
-        row.id,
-        network,
-        now - HOUR_MS,
-        NEW_VISITORS_PER_NETWORK,
-      )! >= NEW_VISITORS_PER_NETWORK
-    )
-      return null;
+    // Every link has a budget of new people per network an hour; a limited one a smaller one.
+    const budget = row.visitor_limit === null ? NEW_VISITORS_PER_NETWORK : placesPerNetwork(row.visitor_limit);
+    const recent = ctx.db.all<{ first: number }>(
+      "SELECT first FROM link_visits WHERE link = ? AND network = ? AND first > ? ORDER BY first LIMIT ?",
+      row.id,
+      network,
+      now - HOUR_MS,
+      budget,
+    );
+    if (recent.length >= budget) {
+      // A link anyone may open without a limit or password still opens, uncounted.
+      if (row.visitor_limit === null && row.password_hash === null) return null;
+      const minutes = Math.max(1, Math.ceil((recent[0].first + HOUR_MS - now) / 60_000));
+      const when = minutes >= 60 ? "an hour" : minutes === 1 ? "a minute" : `${minutes} minutes`;
+      const wait = `Try again in ${when}, or on another connection.`;
+      fail(
+        429,
+        row.visitor_limit === null
+          ? `Many people on your network have unlocked this link in the last hour. ${wait}`
+          : `This link is for ${row.visitor_limit} people, and ${budget} of them just opened it on your network. Its other places are kept for people elsewhere for now. ${wait}`,
+      );
+    }
     const id = uuidv7();
     const device = deviceLabel(String(req.headers["user-agent"] ?? ""));
     ctx.db.run(
@@ -204,15 +232,18 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
       unlocked,
       network,
     );
-    // Rows a link without a limit keeps are bounded; the counts in links keep everyone. A limited
-    // link's visits are what it counts, so they all stay. On a password link, someone whose visit
-    // was forgotten is asked for the password again.
+    // Rows a link without a limit keeps are bounded (VISITS_RECENT_KEPT says which stay); the counts
+    // in links keep everyone. A limited link's visits are what it counts, so they all stay. On a
+    // password link, someone whose visit was forgotten is asked for the password again.
     if (row.visitor_limit === null)
       ctx.db.run(
         `DELETE FROM link_visits WHERE id IN
-           (SELECT id FROM link_visits WHERE link = ? ORDER BY last DESC, id DESC LIMIT -1 OFFSET ?)`,
+           (SELECT id FROM
+              (SELECT id, downloads, last FROM link_visits WHERE link = ? ORDER BY last DESC, id DESC LIMIT -1 OFFSET ?)
+            ORDER BY downloads > 0 DESC, last DESC, id DESC LIMIT -1 OFFSET ?)`,
         row.id,
-        VISITS_KEPT,
+        VISITS_RECENT_KEPT,
+        VISITS_KEPT - VISITS_RECENT_KEPT,
       );
     ctx.activity.record(row.owner, {
       kind: "link",

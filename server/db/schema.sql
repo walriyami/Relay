@@ -581,7 +581,7 @@ CREATE INDEX links_item ON links(item);
 -- visitor last unlocked with; changing or removing the password makes it stale. The owner's own
 -- views are never recorded. `network` is an HMAC of the visitor's network (IPv4 /24, IPv6 /48) and
 -- the link id, to count new people per network; visits before 2026-11 have none. A link without a
--- limit keeps its most recently active visits only (see VISITS_KEPT in links/service.ts).
+-- limit keeps only some of its visits (see VISITS_KEPT in links/service.ts).
 CREATE TABLE link_visits (
   id TEXT PRIMARY KEY,
   link TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,

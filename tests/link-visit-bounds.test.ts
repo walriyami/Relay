@@ -3,13 +3,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
-import { api } from "../shared/api.ts";
+import { api, urls } from "../shared/api.ts";
 import { uuidv7 } from "../shared/ids.ts";
 import { LINK_SELECT, NEEDS_COOKIES, NEW_VISITORS_PER_NETWORK, VISITS_KEPT } from "../server/modules/links/service.ts";
 import { ACTIVITY_LIMIT } from "../server/modules/activity/index.ts";
-import { Client, member, openShare, send, start, stop, type Instance } from "./support/harness.ts";
+import { ApiError, Client, member, openShare, send, start, stop, type Instance } from "./support/harness.ts";
 
-async function setup(instance: Instance, settings: { visitorLimit?: number } = {}) {
+const status = (promise: Promise<unknown>) =>
+  promise.then(
+    () => 200,
+    (error: unknown) => {
+      if (error instanceof ApiError) return error.status;
+      throw error;
+    },
+  );
+
+async function setup(instance: Instance, settings: { visitorLimit?: number; password?: string } = {}) {
   const owner = await member(instance, "sara");
   const { result } = await send(owner, [{ path: "a.txt", data: "alpha" }]);
   const link = await owner.call(api.links.create, {
@@ -150,6 +159,92 @@ test("link activity can't push sign-ins out of the feed", async () => {
       entries.map((e) => e.created).sort((a, b) => b - a),
       "newest first",
     );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("one network can take only some of a limited link's places at once", async () => {
+  const instance = await start();
+  try {
+    const { owner, link } = await setup(instance, { visitorLimit: 5 });
+    // Each new browser (or script making up its own cookie) is a new person to Relay.
+    const browser = (address: string) => Object.assign(new Client(instance), { address });
+    const codes = [];
+    for (let i = 0; i < 5; i++) codes.push(await status(openShare(browser("198.51.100.7"), link.token)));
+    assert.deepEqual(codes, [200, 200, 200, 429, 429], "three of five from one network, for now");
+    const refused = await browser("198.51.100.9")
+      .call(api.links.open, { params: { token: link.token } })
+      .catch((error: unknown) => error as ApiError);
+    assert.ok(refused instanceof ApiError);
+    assert.match(
+      refused.message,
+      /This link is for 5 people, and 3 of them just opened it on your network\..* an hour/,
+    );
+    // The people it was shared with, elsewhere, still get in.
+    for (const address of ["203.0.113.5", "192.0.2.1"]) await openShare(browser(address), link.token);
+    assert.equal((await owner.call(api.links.list))[0].visitors, 5);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a password link unlocks only so many new people per network an hour; those in stay unlocked", async () => {
+  const instance = await start();
+  try {
+    const { link } = await setup(instance, { password: "open sesame" });
+    const unlock = (client: Client) =>
+      client.call(api.links.unlock, { params: { token: link.token }, body: { password: "open sesame" } });
+    const real = Object.assign(new Client(instance), { address: "203.0.113.5" });
+    await unlock(real);
+    // Someone who knows the password, from many addresses (/64s) of one IPv6 /48.
+    const codes = new Map<number, number>();
+    for (let i = 0; i <= NEW_VISITORS_PER_NETWORK; i++) {
+      const code = await status(unlock(Object.assign(new Client(instance), { address: `2001:db8:1:${i}::1` })));
+      codes.set(code, (codes.get(code) ?? 0) + 1);
+    }
+    assert.deepEqual(
+      [...codes],
+      [
+        [200, NEW_VISITORS_PER_NETWORK],
+        [429, 1],
+      ],
+    );
+    assert.equal((await real.call(api.links.open, { params: { token: link.token } })).locked, undefined);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("new visits push out only visitors who took nothing; the owner sees who downloaded first", async () => {
+  const instance = await start();
+  try {
+    const { owner, link } = await setup(instance);
+    const db = instance.ctx.db;
+    const real = Object.assign(new Client(instance), { address: "203.0.113.5" });
+    const node = (await openShare(real, link.token)).nodes[0].id;
+    assert.equal((await real.raw({ method: "GET", url: urls.shareContent(link.token, node) })).statusCode, 200);
+    // Their visit is the longest idle, behind more visits than a link keeps that took nothing.
+    db.run("UPDATE link_visits SET first = 1, last = 1");
+    db.tx(() => {
+      for (let i = 0; i < VISITS_KEPT + 50; i++)
+        db.run(
+          "INSERT INTO link_visits(id, link, visitor, device, first, last) VALUES(?, ?, ?, 'Firefox on Linux', 2, ?)",
+          uuidv7(),
+          link.id,
+          `made-up-${i}`,
+          2 + i,
+        );
+    });
+    await openShare(Object.assign(new Client(instance), { address: "192.0.2.1" }), link.token);
+    assert.equal(db.value("SELECT count(*) FROM link_visits"), VISITS_KEPT);
+    assert.equal(db.value("SELECT count(*) FROM link_visits WHERE downloads = 1"), 1, "the real visitor stays");
+    const [first] = await owner.call(api.links.visits, { params: { id: link.id } });
+    assert.equal(first.downloads, 1);
+    // Coming back, they are the same person, not counted again.
+    const before = (await owner.call(api.links.list))[0].visitors;
+    await openShare(real, link.token);
+    assert.equal((await owner.call(api.links.list))[0].visitors, before);
   } finally {
     await instance.close();
   }
