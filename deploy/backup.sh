@@ -34,7 +34,9 @@ trap 'exit 1' HUP INT TERM
 echo "$(date '+%Y-%m-%d %H:%M') Backing up to $file"
 docker compose stop relay
 # Runs as Relay's own user inside a throwaway copy of the container, writing the archive to this shell.
-docker compose run --rm --no-deps -T --entrypoint tar relay -czf - -C /data . > "$file.part"
+# restore.sh's work folders, if one was ever left behind, aren't Relay's data.
+docker compose run --rm --no-deps -T --entrypoint tar relay \
+  -czf - --exclude=./.restoring --exclude=./.previous -C /data . > "$file.part"
 docker compose start relay >/dev/null
 started=1
 # A copy that can't be read back to the end isn't a backup (a full disk cuts it short).
@@ -44,8 +46,9 @@ chmod 0600 "$file"
 rm -f "$failed"
 echo "Saved $file ($(du -h "$file" | cut -f1))."
 
-# Oldest first: the names sort by date.
-set -- backups/relay-*.tar.gz
+# Oldest first: the names sort by date. Only this script's own dated names count, so a backup you
+# renamed (relay-before-upgrade.tar.gz) is never deleted and doesn't take one of the places.
+set -- backups/relay-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9].tar.gz
 [ -e "$1" ] || set --
 while [ "$#" -gt "$keep" ]; do
   rm -f -- "$1"

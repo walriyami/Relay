@@ -140,7 +140,9 @@ It then reads the new backup back to the end, and only once that works deletes a
 keep another number, run it as `RELAY_BACKUPS_KEEP=14 ./backup.sh`).
 
 If a backup fails (a full disk, say), it says why, deletes nothing, starts Relay again and leaves a file named
-`backups/LAST-BACKUP-FAILED`. `up.sh` warns about that file until a backup works again.
+`backups/LAST-BACKUP-FAILED`. `up.sh` warns about that file until a backup works again, and also when the newest
+backup is more than 2 days old. To keep a backup for good, rename it (for example to
+`relay-before-upgrade.tar.gz`): only the dated names are ever deleted.
 
 - **Copy backups off the machine.** A backup on the same disk doesn't help if the disk dies. From your own
   computer, for example: `scp you@server:relay/deploy/backups/relay-*.tar.gz .`
@@ -156,7 +158,8 @@ To put a backup back (this replaces everything Relay holds now, and asks you to 
 
 It first reads the whole backup and checks that it holds Relay's database; a damaged or wrong file is refused
 before anything changes. It then unpacks the backup next to the current data and only swaps it in once that
-worked, so it needs free disk space of about the size of everything in the backup.
+worked, so it needs free disk space of about the size of everything in the backup. If the swap itself fails, the
+data from before is put back.
 
 To back up every night at 3 a.m., run `crontab -e` and add this line (with your own username):
 

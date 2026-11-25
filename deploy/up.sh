@@ -18,7 +18,12 @@ if [ -n "$(git status --porcelain --untracked-files=no -- ..)" ]; then
   exit 1
 fi
 if [ -f backups/LAST-BACKUP-FAILED ]; then
-  echo "Warning: the last backup, on $(cat backups/LAST-BACKUP-FAILED), failed. Run ./backup.sh to see why." >&2
+  echo "Warning: the last backup, on $(cat backups/LAST-BACKUP-FAILED), failed. The nightly backup's messages" >&2
+  echo "are in ~/relay-backup.log, and running ./backup.sh shows them too." >&2
+elif [ -n "$(find backups -maxdepth 1 -name 'relay-*.tar.gz' 2>/dev/null)" ] &&
+  [ -z "$(find backups -maxdepth 1 -name 'relay-*.tar.gz' -mtime -2)" ]; then
+  # Nothing failed, but nothing ran either (the nightly job was removed, say).
+  echo "Warning: the newest backup is more than 2 days old. Is the nightly backup still set up? (crontab -l)" >&2
 fi
 
 RELAY_COMMIT="$(git rev-parse HEAD)"

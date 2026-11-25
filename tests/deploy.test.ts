@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,12 +82,16 @@ test("a backup is checked, old ones beyond the newest 7 go, and a failed one is 
   await mkdir(join(s.deploy, "backups"));
   const old = Array.from({ length: 8 }, (_, i) => `relay-2020-01-0${i + 1}-0300.tar.gz`);
   for (const name of old) await writeFile(join(s.deploy, "backups", name), "old");
+  // Renamed by hand to keep: never deleted, and not one of the 7.
+  const named = "relay-before-upgrade.tar.gz";
+  await writeFile(join(s.deploy, "backups", named), "kept by hand");
+  const dated = async () => (await s.backups()).filter((name) => name !== named);
 
   // Cut short (a full disk): refused, reported, Relay started again, nothing old deleted.
   let result = s.run("backup.sh", { FAKE_ARCHIVE: "truncated" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Backup FAILED/);
-  assert.deepEqual(await s.backups(), [...old, "LAST-BACKUP-FAILED"].sort());
+  assert.deepEqual(await s.backups(), [...old, named, "LAST-BACKUP-FAILED"].sort());
   assert.match(await s.calls(), /compose start relay/);
 
   result = s.run("backup.sh", { FAKE_FAIL: "run" });
@@ -97,7 +101,8 @@ test("a backup is checked, old ones beyond the newest 7 go, and a failed one is 
   // A good one clears the warning and keeps the newest 7, itself included.
   result = s.run("backup.sh");
   assert.equal(result.status, 0, result.stderr);
-  const kept = await s.backups();
+  assert.ok((await s.backups()).includes(named));
+  const kept = await dated();
   assert.equal(kept.length, 7);
   assert.ok(!kept.includes("LAST-BACKUP-FAILED"));
   assert.deepEqual(kept.slice(0, 6), old.slice(2));
@@ -105,7 +110,8 @@ test("a backup is checked, old ones beyond the newest 7 go, and a failed one is 
 
   result = s.run("backup.sh", { RELAY_BACKUPS_KEEP: "2" });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal((await s.backups()).length, 2);
+  assert.equal((await dated()).length, 2);
+  assert.ok((await s.backups()).includes(named));
 });
 
 test("restore checks the backup before touching Relay's data, and swaps it in only once unpacked", async (t) => {
@@ -134,6 +140,8 @@ test("restore checks the backup before touching Relay's data, and swaps it in on
   await mkdir(join(backup, "blobs"), { recursive: true });
   await writeFile(join(backup, "relay.sqlite"), "restored");
   await writeFile(join(backup, "blobs", "a"), "file");
+  // Left inside a backup by an earlier restore that stopped partway: not data, and no obstacle.
+  await mkdir(join(backup, ".restoring", "x"), { recursive: true });
   execFileSync("tar", ["-czf", join(s.dir, "good.tar.gz"), "-C", backup, "."]);
   result = s.run("restore.sh", { ARG: join(s.dir, "good.tar.gz") }, "restore\n");
   assert.equal(result.status, 0, result.stderr);
@@ -171,8 +179,15 @@ test("up.sh builds from exactly the commit: files that aren't part of it stay ou
   await mkdir(join(s.deploy, "secrets"));
   await writeFile(join(s.deploy, "secrets", "tunnel_credentials.json"), "{}");
 
+  // The nightly backup stopped running: up.sh says so.
+  await mkdir(join(s.deploy, "backups"));
+  const stale = join(s.deploy, "backups", "relay-2020-01-01-0300.tar.gz");
+  await writeFile(stale, "old");
+  await utimes(stale, new Date("2020-01-01"), new Date("2020-01-01"));
+
   const result = s.run("up.sh");
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /newest backup is more than 2 days old/);
   const calls = await s.calls();
   const built = calls.split("\n");
   assert.ok(built.includes(`commit=${git("rev-parse", "HEAD").trim()}`));
@@ -182,6 +197,7 @@ test("up.sh builds from exactly the commit: files that aren't part of it stay ou
 
 test("Relay's networks and egress proxy keep it away from the machine and from look-alike names", async () => {
   const compose = await read("deploy/compose.yaml");
+  assert.match(compose, /^ {6}context: \$\{RELAY_BUILD_CONTEXT:-\.\.\}$/m, "up.sh's copy of the commit is built");
   const networks = compose.slice(compose.indexOf("\nnetworks:\n"), compose.indexOf("\nvolumes:\n"));
   for (const network of ["edge", "egress"]) {
     const block = networks.match(new RegExp(`\\n  ${network}:\\n((?:    .*\\n)+)`))?.[1] ?? "";
@@ -208,6 +224,8 @@ test("Relay's networks and egress proxy keep it away from the machine and from l
 
   const dockerfile = await read("Dockerfile");
   const final = dockerfile.slice(dockerfile.lastIndexOf("\nFROM "));
-  for (const tool of ["/usr/bin/bash", "/usr/bin/perl", "/usr/local/bin/corepack"])
-    assert.ok(final.includes(tool), tool);
+  const removed = (final.match(/^RUN rm -rf (?:.*\\\n)*.*$/m)?.[0] ?? "").split(/[\s\\]+/);
+  for (const tool of ["/bin/bash", "/usr/bin/bash", "/usr/bin/perl", "/usr/local/bin/npm", "/usr/local/bin/corepack"])
+    assert.ok(removed.includes(tool), tool);
+  assert.ok(final.includes(`sed -i 's#:/bin/bash$#:/bin/sh#' /etc/passwd`), "no account's shell is the removed bash");
 });
