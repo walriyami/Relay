@@ -93,5 +93,7 @@ export const visitorStorageRoom = (ctx: Context, owner: string) =>
  */
 export function ensureVisitorRoom(ctx: Context, upload: { id: string; size: number; offset: number }) {
   if (storedBytes(ctx) + heldBytes(ctx, false, upload.id) + upload.size > capacityOf(ctx)) fail(507, CAPACITY_FULL);
-  if (upload.size - upload.offset > diskRoom(ctx, false)) fail(507, DISK_FULL);
+  // The bytes of this request already written have already left the disk's free space.
+  const arrived = receiversOf(ctx)?.arriving().get(upload.id) ?? 0;
+  if (upload.size - upload.offset - arrived > diskRoom(ctx, false)) fail(507, DISK_FULL);
 }

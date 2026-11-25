@@ -141,8 +141,11 @@ export type CreateTransferOptions = {
   itemId?: string;
   /** Create the new item as a submission to this request. */
   requestId?: string;
-  /** Name for a newly created item; otherwise input.name (null derives it from the contents). */
-  itemName?: string;
+  /**
+   * Name for a newly created item; otherwise input.name (null derives it from the contents). Given
+   * the planned entries when it is worked out from them, so the list is planned only once.
+   */
+  itemName?: string | ((plan: { name: string; parentKey: string | null }[]) => string);
   /** Sanitized guest label stored atomically when creating a submission item. */
   sender?: string | null;
   /** What a guest request can still accept: bytes, and entries (every created file, folder and text). */

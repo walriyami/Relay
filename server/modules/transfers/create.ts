@@ -29,13 +29,16 @@ const OPEN_PER_ADDRESS = 10;
 /** NUL, and half of a surrogate pair on its own: characters a text can't be stored with. */
 const UNSTORABLE = /\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-/** The request's room, the owner's quota, service capacity and free disk space must all hold the new bytes. */
-function admit(ctx: Context, options: CreateTransferOptions, bytes: number, entries: number) {
+/**
+ * The request's room, the owner's quota, service capacity and free disk space must all hold the new
+ * bytes. Checked before the file list is planned, so a send that can't fit costs no planning;
+ * the request's entry room is checked once the plan says how many entries it makes.
+ */
+function admit(ctx: Context, options: CreateTransferOptions, bytes: number) {
   if (options.limit) {
     const room = options.limit;
     if ((bytes > 0 && room.bytes === 0) || room.entries === 0) fail(413, "This request is full.");
     if (bytes > room.bytes) fail(413, `This request has room for ${bytesLabel(room.bytes)} more.`);
-    if (entries > room.entries) fail(413, "This request cannot take that many more files.");
   }
 
   if (bytes > 0 && bytes > quotaRoom(ctx, options.owner))
@@ -144,7 +147,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
 
     const result = ctx.db.tx(() => {
       assertTransferAvailability(ctx, target);
-      const plan = planNodes(input);
+      // The cheap checks come first: planning a long file list is the costly part.
       if (options.principal.kind === "grant") {
         if (
           ctx.db.value<number>("SELECT count(*) FROM transfers WHERE principal = ? AND state = 'open'", principal)! >=
@@ -162,22 +165,35 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           )! >= OPEN_PER_ADDRESS
         )
           fail(429, "Too many sends to this request are still open from your network. Try again once they finish.");
-        if (plan.length > LIMITS.visitorEntriesPerTransfer)
+      }
+      if (!ctx.transfers.renewTab(input.tab, options.principal)) fail(409, TAB_CLOSED);
+      const text = input.text?.trim() ? input.text : null;
+      if (!input.files.length && !input.folders.length && text === null) fail(400, "Choose something to send.");
+      // A visitor's text is limited in bytes, not characters, and must be text that can be stored.
+      if (options.principal.kind === "grant" && text !== null) {
+        if (Buffer.byteLength(text) > LIMITS.textBytes) fail(413, "This text is too long to send.");
+        if (UNSTORABLE.test(text)) fail(400, "This text contains characters that can't be saved.");
+      }
+      const bytes = input.files.reduce((sum, f) => sum + f.size, 0) + (text === null ? 0 : Buffer.byteLength(text));
+      admit(ctx, options, bytes);
+      // A visitor's list already longer than the limit is refused before it is planned. (Planning
+      // merges repeats and adds the folders that hold files, so the plan is checked as well.)
+      const visitorEntries = (entries: number) => {
+        if (options.principal.kind === "grant" && entries > LIMITS.visitorEntriesPerTransfer)
           fail(
             413,
             `Send up to ${LIMITS.visitorEntriesPerTransfer.toLocaleString("en-US")} files and folders at a time.`,
           );
-      }
-      if (!ctx.transfers.renewTab(input.tab, options.principal)) fail(409, TAB_CLOSED);
-      const text = input.text?.trim() ? input.text : null;
-      if (!plan.length && text === null) fail(400, "Choose something to send.");
-      if (text !== null && Buffer.byteLength(text) > LIMITS.textBytes) fail(413, "This text is too long to send.");
-      if (text !== null && UNSTORABLE.test(text)) fail(400, "This text contains characters that can't be saved.");
-      const bytes = input.files.reduce((sum, f) => sum + f.size, 0) + (text === null ? 0 : Buffer.byteLength(text));
-      admit(ctx, options, bytes, plan.length + (text === null ? 0 : 1));
+      };
+      visitorEntries(input.files.length + input.folders.length);
+      const plan = planNodes(input);
+      visitorEntries(plan.length);
+      if (options.limit && plan.length + (text === null ? 0 : 1) > options.limit.entries)
+        fail(413, "This request cannot take that many more files.");
 
       const now = Date.now();
-      const itemName = options.itemName ?? input.name?.normalize("NFC") ?? null;
+      const named = typeof options.itemName === "function" ? options.itemName(plan) : options.itemName;
+      const itemName = named ?? input.name?.normalize("NFC") ?? null;
       const safeItemName = itemName === null ? null : cleanName(itemName);
       let itemId = options.itemId;
       if (itemId) ctx.library.owned(options.owner, itemId, { live: true });

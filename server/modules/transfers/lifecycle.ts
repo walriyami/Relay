@@ -8,7 +8,7 @@ import { fail, HttpError, notFound } from "../../lib/errors.ts";
 import { publishItemChange } from "./publish.ts";
 import { assertTransferAvailability, ensureTransferAvailability, settleTransferAvailability } from "./availability.ts";
 import { CANCELLED, TAB_CLOSED } from "./create.ts";
-import { isActive, uploadRow, type Receivers, type UploadRow } from "./receivers.ts";
+import { PROGRESS_STEP, isActive, uploadRow, type Receivers, type UploadRow } from "./receivers.ts";
 
 import { DAY_MS } from "../../lib/time.ts";
 import { recordHistory, usernameOf } from "../history/index.ts";
@@ -330,9 +330,11 @@ export const STALLED_GUEST_MS = 30 * 60_000;
 export const STALLED_MEMBER_MS = DAY_MS;
 
 /**
- * How long a visitor's send may wait for its first byte. A declared upload holds the request's room
- * from the start, so one that never begins gives it back sooner than a stalled one, unless the same
- * visitor is busy sending something else (its turn may simply not have come yet).
+ * How long a visitor's send may take to get going. A declared upload holds the request's room from
+ * the start, so one that never really begins gives it back sooner than a stalled one, unless the
+ * same visitor is busy sending something else (its turn may simply not have come yet). Getting going
+ * means what counts as progress against a stall (`PROGRESS_STEP` arrived), so a byte or two doesn't
+ * buy the full half hour; a send smaller than that holds little room and needs only to have begun.
  */
 export const UNSTARTED_GUEST_MS = 10 * 60_000;
 
@@ -463,14 +465,19 @@ export async function sweep(ctx: Context, receivers: Receivers, now: number) {
   }
 
   for (const t of ctx.db.all<{ id: string; principal: string }>(
-    `SELECT t.id, t.principal FROM transfers t
+    `SELECT t.id, t.principal FROM transfers t JOIN uploads u ON u.transfer = t.id
      WHERE t.state = 'open' AND t.principal LIKE 'grant:%' AND t.created <= ?
-       AND EXISTS (SELECT 1 FROM uploads u WHERE u.transfer = t.id AND u.completed IS NULL)
-       AND NOT EXISTS (SELECT 1 FROM uploads u WHERE u.transfer = t.id AND u.offset > 0)
-       AND NOT EXISTS (SELECT 1 FROM transfers o JOIN uploads u ON u.transfer = o.id
-                       WHERE o.principal = t.principal AND u.offset > 0 AND u.touched > ?)`,
+       AND NOT EXISTS (SELECT 1 FROM transfers o JOIN uploads p ON p.transfer = o.id
+                       WHERE o.principal = t.principal AND o.id != t.id AND o.state = 'open'
+                         AND (p.offset > 0 OR p.completed IS NOT NULL) AND p.touched > ?)
+     GROUP BY t.id
+     HAVING sum(u.completed IS NULL) > 0
+       AND (sum(CASE WHEN u.completed IS NULL THEN u.offset ELSE u.size END) = 0
+            OR (sum(u.size) >= ? AND sum(CASE WHEN u.completed IS NULL THEN u.offset ELSE u.size END) < ?))`,
     now - UNSTARTED_GUEST_MS,
     now - UNSTARTED_GUEST_MS,
+    PROGRESS_STEP,
+    PROGRESS_STEP,
   )) {
     const busy = ctx.db.all<{ id: string }>(
       `SELECT u.id FROM transfers o JOIN uploads u ON u.transfer = o.id
