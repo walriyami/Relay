@@ -6,6 +6,7 @@ import { grantFor, memberFromToken, requireMember, sessionCookie } from "../../l
 import { fail, notFound } from "../../lib/errors.ts";
 import { sha256 } from "../../lib/secrets.ts";
 import { TAB_CLOSED } from "../transfers/create.ts";
+import { addressKey } from "./limits.ts";
 
 export type EndReason = SessionEnded["reason"];
 /** Why a user's sessions were just revoked, when the database alone can't tell. */
@@ -19,6 +20,11 @@ type Stream = {
   /** A member session or guest grant may hold only a bounded number of event streams. */
   capKey: string;
   cap: number;
+  /**
+   * Wider groups it also counts toward, each with its own cap: a request's visitors, and each address
+   * among them, so starting new visits can't pile up streams without end.
+   */
+  groups?: { key: string; cap: number }[];
   /** Shared across an origin's tabs and grants; an admission hint that grants no authority. */
   browser: string | null;
   res: ServerResponse;
@@ -88,17 +94,21 @@ class Streams {
   }
 
   /** Admission never evicts an existing tab: that would rotate every reconnect around the cap. */
-  canAdd(spec: Pick<Stream, "capKey" | "cap" | "browser">) {
+  canAdd(spec: Pick<Stream, "capKey" | "cap" | "browser" | "groups">) {
     this.recheck();
     // Without shared storage, short probes still renew leases and refresh member views. Never
     // occupy an unbounded share of HTTP/1's six sockets across unrelated guest grants.
     if (!spec.browser) return false;
     let count = 0;
     let browserCount = 0;
+    const groups = new Map(spec.groups?.map((group) => [group.key, 0]));
     for (const current of this.open) {
       if (current.capKey === spec.capKey) count++;
       if (current.browser === spec.browser) browserCount++;
+      for (const group of current.groups ?? [])
+        if (groups.has(group.key)) groups.set(group.key, groups.get(group.key)! + 1);
     }
+    if (spec.groups?.some((group) => groups.get(group.key)! >= group.cap)) return false;
     return count < spec.cap && browserCount < 4;
   }
 
@@ -400,6 +410,10 @@ function memberStream(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
   );
 }
 
+/** Lasting event streams one request's visitors may hold, together and from one address. */
+export const GUEST_STREAMS_PER_REQUEST = 30;
+export const GUEST_STREAMS_PER_ADDRESS = 8;
+
 function guestStream(ctx: Context, req: FastifyRequest<{ Params: { token: string } }>, reply: FastifyReply) {
   const requestId =
     ctx.db.value<string>("SELECT id FROM requests WHERE token_hash = ?", sha256(req.params.token)) ??
@@ -426,6 +440,11 @@ function guestStream(ctx: Context, req: FastifyRequest<{ Params: { token: string
       deviceId: null,
       capKey: `grant:${grant.tokenHash}`,
       cap: 2,
+      // Past these, a visitor's page still works by asking again every so often instead.
+      groups: [
+        { key: `request:${requestId}`, cap: GUEST_STREAMS_PER_REQUEST },
+        { key: `address:${addressKey(req.ip)}`, cap: GUEST_STREAMS_PER_ADDRESS },
+      ],
       browser: browserOf(req),
       ended,
       lease: tab ? { tab, principal: grant } : null,
