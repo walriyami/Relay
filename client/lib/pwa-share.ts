@@ -4,11 +4,15 @@ import { navigate } from "./router";
 import { canShare, downloadFile, share, touch } from "./nearby/save";
 
 // "Share to Relay" from another app. The service worker (public/sw.js) keeps what was shared in this
-// browser's IndexedDB and opens /share?id=<id>; this module moves it into the Send draft and forgets
-// it. The iOS Shortcut (README) opens /share#text=…&url=… instead: after "#" nothing reaches the server.
+// browser's IndexedDB and opens /share?id=<id>; the iOS Shortcut (README) opens /share#text=…&url=…
+// instead (after "#" nothing reaches the server). Either way Relay first shows what arrived and adds
+// it to the Send draft only when the person chooses Add: an outside website can submit the same form
+// or open the same address, and nothing in the request reliably tells it apart from the share sheet.
 
 type Shared = { id: string; created: number; title: string; text: string; url: string; files: File[] };
-export type ShareResult = { files: number; text: boolean } | "failed" | "missing" | null;
+/** What arrived, waiting for Add or Discard. `id` is set when it came through the service worker. */
+export type Incoming = { id?: string; files: File[]; text: string };
+export type ShareResult = { files: number; text: boolean } | "missing";
 
 const DB = "relay-share";
 const STORE = "shares";
@@ -29,8 +33,11 @@ function done(tx: IDBTransaction) {
   });
 }
 
-/** Takes one share out of the browser's store (and drops any left over from more than a day ago). */
-async function take(id: string) {
+/**
+ * Finds one share in the browser's store and, with `remove`, takes it out. Shares left over from
+ * more than a day ago are dropped either way.
+ */
+async function find(id: string, remove: boolean) {
   const db = await open();
   try {
     const tx = db.transaction(STORE, "readwrite");
@@ -39,8 +46,9 @@ async function take(id: string) {
     const all = store.getAll();
     all.onsuccess = () => {
       for (const share of all.result as Shared[]) {
-        if (share.id === id) found = share;
-        if (share.id === id || Date.now() - share.created > DAY) store.delete(share.id);
+        const old = Date.now() - share.created > DAY;
+        if (share.id === id && !old) found = share;
+        if ((share.id === id && remove) || old) store.delete(share.id);
       }
     };
     await done(tx);
@@ -48,6 +56,15 @@ async function take(id: string) {
   } finally {
     db.close();
   }
+}
+
+/**
+ * When Relay starts: drops shares nobody added or discarded within a day (the person closed Relay
+ * instead of choosing).
+ */
+export async function sweepShares() {
+  if (typeof indexedDB === "undefined") return;
+  await find("", false).catch(() => undefined);
 }
 
 /** On sign-out: nothing shared stays in this browser for the next person. */
@@ -85,27 +102,51 @@ function addText(text: string) {
 }
 
 /**
- * Puts what was shared into the Send draft, for the address Relay opened on (/share…). Returns what
- * was added, "failed" when the browser couldn't keep it, "missing" when it was already taken.
+ * What was shared, for the address Relay opened on (/share…), without adding it anywhere yet.
+ * "failed" when the browser couldn't keep it, "missing" when it was already added or discarded,
+ * null when the address carries nothing.
  */
-export async function receiveShare(location: Pick<Location, "search" | "hash">): Promise<ShareResult> {
+export async function readShare(
+  location: Pick<Location, "search" | "hash">,
+): Promise<Incoming | "failed" | "missing" | null> {
   const id = new URLSearchParams(location.search).get("id");
   if (id === "failed") return "failed";
   if (id) {
-    const shared = await take(id).catch(() => undefined);
+    const shared = await find(id, false).catch(() => undefined);
     if (!shared) return "missing";
-    if (shared.files.length) addSelection(fromFileList(shared.files));
-    const text = addText(sharedText(shared));
-    return { files: shared.files.length, text };
+    return { id, files: shared.files, text: sharedText(shared) };
   }
   if (location.hash.length > 1) {
     const params = new URLSearchParams(location.hash.slice(1));
-    const text = addText(
-      sharedText({ title: params.get("title") ?? "", text: params.get("text") ?? "", url: params.get("url") ?? "" }),
-    );
-    return { files: 0, text };
+    const text = sharedText({
+      title: params.get("title") ?? "",
+      text: params.get("text") ?? "",
+      url: params.get("url") ?? "",
+    });
+    return text ? { files: [], text } : null;
   }
   return null;
+}
+
+/**
+ * Adds what arrived to the Send draft (the person chose Add). A share the service worker kept is
+ * taken out of the store first, so a second tab or a second tap can't add it twice.
+ */
+export async function addShare(incoming: Incoming): Promise<ShareResult> {
+  let { files, text } = incoming;
+  if (incoming.id) {
+    const shared = await find(incoming.id, true);
+    if (!shared) return "missing";
+    files = shared.files;
+    text = sharedText(shared);
+  }
+  if (files.length) addSelection(fromFileList(files));
+  return { files: files.length, text: addText(text) };
+}
+
+/** Forgets what arrived without adding it (the person chose Discard). */
+export async function discardShare(incoming: Incoming) {
+  if (incoming.id) await find(incoming.id, true).catch(() => undefined);
 }
 
 /** Leaves /share for Send, without the shared details in the address or the history. */

@@ -7,7 +7,8 @@ small programs run in Docker:
 - **cloudflared**: connects out to Cloudflare, so people reach Relay at your web address. Nothing on the machine
   is opened to the internet or to your home network; no router changes are needed.
 - **egress**: the only way Relay can reach the internet, and only to the phone and browser notification
-  services. If someone ever broke into Relay, they couldn't use it to reach anything else.
+  services. If someone ever broke into Relay, they couldn't use it to reach anything else: not other websites,
+  not your home network, and not the programs running on this machine itself.
 
 Everything Relay keeps (accounts, files, links) lives in one Docker storage area called `relay-data`, which
 survives updates and restarts.
@@ -114,8 +115,9 @@ git pull
 ```
 
 Relay is unavailable for a few seconds while it swaps; transfers in progress pause and carry on by themselves.
-Your data stays. `up.sh` refuses to build if Relay's files were edited on the server, so what runs is always
-exactly a saved version.
+Your data stays. `up.sh` refuses to build if Relay's files were edited on the server, and it builds from a fresh
+copy of the version git has saved, so a stray file left in the folder never ends up inside Relay. What runs is
+always exactly a saved version. If the last backup failed, `up.sh` says so before it builds.
 
 ## Where the data lives
 
@@ -134,6 +136,13 @@ cd ~/relay/deploy
 ```
 
 This stops Relay for a moment, saves everything to `backups/relay-<date>-<time>.tar.gz`, and starts it again.
+It then reads the new backup back to the end, and only once that works deletes all but the newest 7 backups (to
+keep another number, run it as `RELAY_BACKUPS_KEEP=14 ./backup.sh`).
+
+If a backup fails (a full disk, say), it says why, deletes nothing, starts Relay again and leaves a file named
+`backups/LAST-BACKUP-FAILED`. `up.sh` warns about that file until a backup works again, and also when the newest
+backup is more than 2 days old. To keep a backup for good, rename it (for example to
+`relay-before-upgrade.tar.gz`): only the dated names are ever deleted.
 
 - **Copy backups off the machine.** A backup on the same disk doesn't help if the disk dies. From your own
   computer, for example: `scp you@server:relay/deploy/backups/relay-*.tar.gz .`
@@ -147,11 +156,19 @@ To put a backup back (this replaces everything Relay holds now, and asks you to 
 ./restore.sh backups/relay-2026-11-25-0300.tar.gz
 ```
 
+It first reads the whole backup and checks that it holds Relay's database; a damaged or wrong file is refused
+before anything changes. It then unpacks the backup next to the current data and only swaps it in once that
+worked, so it needs free disk space of about the size of everything in the backup. If the swap itself fails, the
+data from before is put back.
+
 To back up every night at 3 a.m., run `crontab -e` and add this line (with your own username):
 
 ```
-0 3 * * * /home/you/relay/deploy/backup.sh >/dev/null 2>&1
+0 3 * * * /home/you/relay/deploy/backup.sh >>/home/you/relay-backup.log 2>&1
 ```
+
+Each night adds a few lines to `relay-backup.log` in your home folder, so you can see when backups ran and why
+one failed.
 
 ## Everyday checks
 
@@ -159,6 +176,8 @@ To back up every night at 3 a.m., run `crontab -e` and add this line (with your 
 - What's it saying? `docker compose logs --tail 100 relay` (or `cloudflared`, or `egress`).
 - Docker restarts Relay if it crashes, and after the machine reboots. It does **not** restart a copy that is
   running but unhealthy; if `ps` shows `unhealthy` for more than a few minutes, run `docker compose restart relay`.
+- Are backups working? `ls backups` should show recent dates and no `LAST-BACKUP-FAILED`; if it's there,
+  `tail ~/relay-backup.log` says why.
 - Keep the machine itself updated (`sudo apt update && sudo apt upgrade`, or turn on `unattended-upgrades`).
 
 ## Locked out of the administrator account
@@ -181,6 +200,6 @@ The link is as powerful as the password: don't paste the log anywhere.
 | `egress/squid.conf` | The list of places Relay may reach: the notification services only.           |
 | `tunnel-setup.sh`   | Creates the Cloudflare Tunnel and points your address at it. Run once.        |
 | `up.sh`             | Builds the version you have and starts or restarts everything.                |
-| `backup.sh`         | Saves all of Relay's data to `backups/`.                                      |
-| `restore.sh`        | Puts a backup back.                                                           |
+| `backup.sh`         | Saves all of Relay's data to `backups/` and keeps the newest 7.               |
+| `restore.sh`        | Checks a backup, then puts it back.                                           |
 | `.env`, `secrets/`  | Yours, created above. Never committed to git.                                 |

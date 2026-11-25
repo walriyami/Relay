@@ -24,7 +24,9 @@ services:
   relay:
     <<: *locked-down
     build:
-      context: ..
+      # up.sh builds from a copy of the commit (git archive), so files that aren't part of it never
+      # reach the image. `..` is only for running compose by hand.
+      context: ${RELAY_BUILD_CONTEXT:-..}
       args:
         # The commit being built: Relay shows it in Admin and /api/health, and the build stops without it.
         # up.sh fills it in from git.
@@ -51,6 +53,10 @@ services:
       # Deliberately not set: RELAY_SECRET (Relay keeps its own key in /data/secret.key), RELAY_SETUP_KEY
       # (setup always asks for the one-time key on a public address) and WAL_* (no Walriyami here).
     volumes:
+      # Accepted risk: /data allows running programs, so someone who could already write files there and run
+      # them (another bug first) could start one. Compose can't mount a Docker-managed volume noexec; that
+      # would mean moving the data to a fixed folder on the machine, for little gain, since Node itself can
+      # already run any code it is given. The image has no bash, perl, npm or corepack (see the Dockerfile).
       - relay-data:/data
     networks: [edge, egress]
     # One bad upload or preview must not take the whole machine down. The same limit as production.
@@ -106,12 +112,19 @@ services:
       retries: 3
 
 networks:
-  # Relay and cloudflared only. `internal`: no route to the internet, the machine or the home network.
+  # Relay and cloudflared only. `internal`: no route to the internet or the home network. `internal` alone
+  # still gives the machine an address on the network (its gateway), where anything on the machine that
+  # listens on all addresses (SSH, a printer service, other containers' published ports) would answer
+  # Relay. inhibit_ipv4 leaves the machine off the network, so containers reach only each other.
   edge:
     internal: true
-  # Relay and the egress proxy only.
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+  # Relay and the egress proxy only, cut off from the machine in the same way.
   egress:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
   # The only network with a way out. Relay is never on it.
   outbound: {}
 

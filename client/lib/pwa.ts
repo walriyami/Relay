@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { navigate } from "./router";
+import { sweepShares } from "./pwa-share";
 
 // Relay as an installed app: its service worker (public/sw.js), the browser's install offer, and
 // what this device can do (iPhones and iPads only allow notifications in the Home Screen app).
@@ -39,6 +40,8 @@ export function startServiceWorker() {
     .register("/sw.js", { scope: "/", updateViaCache: "none" })
     .then(() => navigator.serviceWorker.ready)
     .catch(() => null);
+  // Only the service worker keeps shares, so only Relay with one has old ones to drop.
+  void sweepShares();
   // A tapped notification opens its page in a Relay window that's already open.
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent<{ type?: string; url?: unknown }>) => {
     const url = event.data?.url;
