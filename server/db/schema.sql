@@ -554,7 +554,7 @@ CREATE TABLE link_visits (
   network TEXT,
   UNIQUE (link, visitor)
 ) STRICT;
-CREATE INDEX link_visits_last ON link_visits(link, last);
+CREATE INDEX link_visits_last ON link_visits(link, last, id);
 CREATE INDEX link_visits_network ON link_visits(link, network, first);
 
 -- links.visitors, downloads and last_visit. Deleting a visit leaves them: they count everyone ever let in.

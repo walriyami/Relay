@@ -174,7 +174,8 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
     const current = ctx.db.value<number>("SELECT visitors FROM links WHERE id = ?", row.id)!;
     if (row.visitor_limit !== null && current >= row.visitor_limit) fail(410, LINK_USED_UP);
     const network = ctx.secrets.linkVisitNetwork(row.id, wideNetworkOf(req.ip));
-    // A visit someone needs to stay let in (a limited link's, or one past a password) is always kept.
+    // Only a link anyone can open without being counted against a limit or knowing a password has
+    // a budget of new people per network.
     const open = row.visitor_limit === null && row.password_hash === null;
     if (
       open &&
@@ -200,7 +201,9 @@ function admit(ctx: Context, req: FastifyRequest, row: LinkRow, visitor: string,
       unlocked,
       network,
     );
-    // Rows a link without a limit keeps are bounded; the counts in links keep everyone.
+    // Rows a link without a limit keeps are bounded; the counts in links keep everyone. A limited
+    // link's visits are what it counts, so they all stay. On a password link, someone whose visit
+    // was forgotten is asked for the password again.
     if (row.visitor_limit === null)
       ctx.db.run(
         `DELETE FROM link_visits WHERE id IN

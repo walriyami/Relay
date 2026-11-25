@@ -70,10 +70,17 @@ export class Session {
     let path: string = endpoint.path;
     for (const [key, value] of Object.entries(params ?? {})) path = path.replace(`:${key}`, encodeURIComponent(value));
     if (query) path += `?${new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)]))}`;
-    const res = await this.fetch(path, {
+    let res = await this.fetch(path, {
       method: endpoint.method,
       ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
     });
+    // Opening a share sends a browser without a visitor cookie straight back with one, as a
+    // browser's fetch would follow by itself; only a same-site address is followed.
+    const location = res.headers.get("location");
+    if (endpoint.method === "GET" && res.status === 307 && location?.startsWith("/")) {
+      await res.body?.cancel();
+      res = await this.fetch(location);
+    }
     const text = await res.text();
     const data = (text ? JSON.parse(text) : undefined) as { error?: string; csrf?: unknown } | undefined;
     if (!res.ok) throw new HttpError(res.status, data?.error ?? text);
