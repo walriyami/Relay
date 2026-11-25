@@ -2,13 +2,14 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { parentPort } from "node:worker_threads";
 import type HeicDecode from "heic-decode";
 import sharp from "sharp";
+import { heifLayout } from "./heif-layout.ts";
 import { ALLOWED_LOADERS, imageSignature } from "./image-signature.ts";
 import {
   MAX_HEIF_PIXELS,
   MAX_PIXELS,
   MAX_SOURCE_BYTES,
   decodeRefusal,
-  heifLayout,
+  heicRefusal,
   jpegLayout,
 } from "./image-limits.ts";
 
@@ -52,11 +53,16 @@ async function rendition(buffer: Buffer, job: Job, decodeHeic: HeicDecoder | nul
       .toBuffer();
   }
 
+  // The same header walk as AVIF's, before libheif reads anything: the size libheif reports is
+  // after any crop, and the memory decoding takes is set by the whole of the largest image.
+  const refusal = heicRefusal(heifLayout(buffer));
+  if (refusal) throw invalid(refusal, "IMAGE_TOO_COSTLY");
   const images = await decodeHeic!.all({ buffer });
   if (!images.length) throw invalid("HEIF image not found");
   const primary = images[0];
   try {
     // libheif exposes the size before display() allocates the RGBA pixel buffer.
+    if (!primary.width || !primary.height) throw invalid("The image has no size.");
     if (primary.width * primary.height > MAX_HEIF_PIXELS)
       throw invalid("This image is too large to preview.", "HEIF_DIMENSIONS_TOO_LARGE");
     const image = await primary.decode();

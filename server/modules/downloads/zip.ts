@@ -6,6 +6,7 @@
 // entry: an item of any size can be downloaded without holding its whole directory in memory.
 import { createReadStream } from "node:fs";
 import { crc32 } from "node:zlib";
+import { cleanFileName } from "../../../shared/text.ts";
 
 export type ZipEntry = {
   /** Path inside the archive, "/"-separated, without a trailing slash. */
@@ -131,6 +132,79 @@ function partAt(starts: Float64Array, count: number, at: number) {
   return low;
 }
 
+/**
+ * A path that an unzip tool could place outside the folder it unzips into, or that names its own
+ * folder: one starting with a slash, with an empty, "." or ".." part, or with a backslash, which
+ * Windows tools read as a slash.
+ */
+const OUTSIDE = /^\/|\/$|\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\\/;
+
+/** "photo.jpg" → "photo (2).jpg"; folders and names without an extension get the number at the end. */
+function numbered(name: string, n: number, folder: boolean) {
+  const dot = folder ? -1 : name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)} (${n})${name.slice(dot)}` : `${name} (${n})`;
+}
+
+/** One stored name as written: cleaned as a downloaded file's is, and never "", ".", ".." or a slash. */
+const writtenName = (name: string) => cleanFileName(name).replace(/[/\\]/g, "-") || "Untitled";
+
+/**
+ * The paths that must be written differently, by entry: names stored before Relay's name rules may
+ * hide what they are (a direction override showing "…gpj.exe" as "…exe.jpg", 50 spaces before
+ * ".exe"), and an unzip tool shows them as they are. Each name in a path is cleaned as a downloaded
+ * file's is, so a folder's new name carries over to everything inside it. A cleaned name that
+ * matches another in its folder, ignoring case as macOS and Windows do, gets a number; paths that
+ * needed no cleaning keep theirs. Nothing may put an entry outside its folder when unzipped: a name
+ * that is, or cleans to, "." or ".." or nothing is written "Untitled", and a slash or backslash "-".
+ * Null when nothing needs it, as for nearly every archive.
+ */
+function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null {
+  const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
+  const leafOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+  // Whether a path, and every folder above it, is written as stored.
+  const asStored = new Map<string, boolean>();
+  const stored = (path: string): boolean => {
+    let known = asStored.get(path);
+    if (known === undefined) {
+      // The folders above are judged first, so each one written as stored is known, and claims its
+      // place, even when a name inside it is cleaned.
+      const above = !path.includes("/") || stored(parentOf(path));
+      known = above && writtenName(leafOf(path)) === leafOf(path);
+      asStored.set(path, known);
+    }
+    return known;
+  };
+  const changed = entries.flatMap((entry, i) => (stored(entry.path) ? [] : [i]));
+  if (!changed.length) return null;
+  // Every path written as stored, with the folders above it, claims its place first.
+  const taken = new Set<string>();
+  for (const [path, same] of asStored) if (same) taken.add(path.toLowerCase());
+  // Each original path (a folder's, or an entry's) and what it's written as; and for each cleaned
+  // path, the next number to try, so many names cleaning to one don't each count up from 2.
+  const written = new Map<string, string>();
+  const next = new Map<string, number>();
+  const write = (path: string, folder: boolean): string => {
+    if (stored(path)) return path;
+    let result = written.get(path);
+    if (result !== undefined) return result;
+    const into = path.includes("/") ? `${write(parentOf(path), true)}/` : "";
+    const clean = writtenName(leafOf(path));
+    result = into + clean;
+    const key = result.toLowerCase();
+    if (taken.has(key)) {
+      let n = next.get(key) ?? 2;
+      while (taken.has((result = into + numbered(clean, n, folder)).toLowerCase())) n++;
+      next.set(key, n + 1);
+    }
+    taken.add(result.toLowerCase());
+    written.set(path, result);
+    return result;
+  };
+  const paths = new Map<number, string>();
+  for (const i of changed) paths.set(i, write(entries[i].path, entries[i].kind === "folder"));
+  return paths;
+}
+
 export function zipLayout(
   entries: readonly ZipEntry[],
   content: (index: number) => ZipContent,
@@ -148,12 +222,18 @@ export function zipPlan(entries: readonly ZipEntry[], content: (index: number) =
   // Where each entry's local header starts, and where its record starts within the directory.
   const headerAt = new Float64Array(count + 1);
   const recordAt = new Float64Array(count + 1);
+  const cleaned = cleanedPaths(entries);
+  const pathOf = (i: number) => cleaned?.get(i) ?? entries[i].path;
+  // Whatever the names, no entry may land outside the folder the archive is unzipped into.
+  if (cleaned)
+    for (const path of cleaned.values()) if (OUTSIDE.test(path)) throw new Error("An archive path escapes its folder.");
   let offset = 0;
   let directory = 0;
   for (let i = 0; i < count; i++) {
     const entry = entries[i];
-    nameLength[i] = Buffer.byteLength(entry.path) + (entry.kind === "folder" ? 1 : 0);
-    if (nameLength[i] > U16_MAX) throw new Error(`A path in this archive is too long: ${entry.path.slice(0, 80)}…`);
+    const path = pathOf(i);
+    nameLength[i] = Buffer.byteLength(path) + (entry.kind === "folder" ? 1 : 0);
+    if (nameLength[i] > U16_MAX) throw new Error(`A path in this archive is too long: ${path.slice(0, 80)}…`);
     if (entry.kind === "text" && entry.crc32 === null) {
       const { data } = content(i) as { data: Buffer };
       sizes[i] = data.length;
@@ -180,8 +260,7 @@ export function zipPlan(entries: readonly ZipEntry[], content: (index: number) =
     // Written as each header goes out: a body costs nothing until bytes are asked for.
     const shift = wallClock(timeZone);
     const stamp = (i: number) => dosDateTime(shift(entries[i].created));
-    const name = (i: number) =>
-      Buffer.from(entries[i].kind === "folder" ? `${entries[i].path}/` : entries[i].path, "utf8");
+    const name = (i: number) => Buffer.from(entries[i].kind === "folder" ? `${pathOf(i)}/` : pathOf(i), "utf8");
     const timestamp = (w: Writer, i: number) => w.u16(0x5455).u16(5).u8(1).u32(seconds[i]);
     const localHeader = (i: number) => {
       const dos = stamp(i);
