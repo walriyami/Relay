@@ -22,6 +22,12 @@ export function cleanName(value: string): string {
   return name;
 }
 
+/**
+ * Most names one path may have: folders inside folders, plus the file. Real folders stay far below
+ * this; past it, nothing useful is lost, and SQLite cannot cascade a delete through ~1,000 levels.
+ */
+export const MAX_PATH_DEPTH = 64;
+
 /** A relative "/"-separated path, split into validated segments. */
 export function splitPath(value: string): string[] {
   const trimmed = value.replace(/\/+$/, "");
@@ -30,7 +36,14 @@ export function splitPath(value: string): string[] {
   const segments = trimmed.split("/");
   for (const segment of segments)
     if (!segment || segment !== segment.trim() || segment === "." || segment === "..") fail(400, "Invalid file path.");
-  return segments.map(cleanName);
+  const names = segments.map(cleanName);
+  if (names.length > MAX_PATH_DEPTH)
+    fail(
+      400,
+      `“${names[0]}” has folders inside folders more than ${MAX_PATH_DEPTH} levels deep, which Relay can’t store. ` +
+        "Move the deepest files nearer the top and try again.",
+    );
+  return names;
 }
 
 /** A name someone gives themselves, as a label: one line, no control or direction characters; null when blank. */
