@@ -4,6 +4,8 @@ import { api } from "../shared/api.ts";
 import {
   CODE_COOL_DOWN_MS,
   CODE_LIFE_MS,
+  CODE_TRIES,
+  NEW_CODES_PER_DAY,
   issuePickupCode,
   livePickupCode,
   type PickupCodeKind,
@@ -15,7 +17,7 @@ import {
   recordCodeFailure,
   wideNetworkOf,
 } from "../server/lib/pickup-code-guard.ts";
-import { normalizeCode, sha256 } from "../server/lib/secrets.ts";
+import { normalizeCode, Secrets, sha256 } from "../server/lib/secrets.ts";
 import { rm } from "node:fs/promises";
 import type { HttpError } from "../server/lib/errors.ts";
 import { admin, Client, member, send, start, stop, type Instance } from "./support/harness.ts";
@@ -526,6 +528,143 @@ test("listing links doesn't issue new codes; the share screen asks for one when 
     const current = await owner.call(api.pickup.current, { body: { code: listed.code } });
     assert.ok(current.code && current.code !== link.code);
     assert.equal(issued(), before + 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a nearly full code space gives up after a few tries instead of stalling the server", async () => {
+  const instance = await start();
+  try {
+    const { db, secrets } = instance.ctx;
+    const now = Date.now();
+    const hold = (nonce: number) =>
+      db.run(
+        "INSERT INTO pickup_codes(code_hash, kind, target_id, nonce, created) VALUES(?, 'request', ?, 0, ?)",
+        secrets.pickupCodeHash(normalizeCode(secrets.pickupCodeFor("share", "crowded", nonce))!),
+        `holder-${nonce}`,
+        now,
+      );
+    for (let nonce = 0; nonce < CODE_TRIES - 1; nonce++) hold(nonce);
+    assert.equal(
+      issuePickupCode(db, secrets, "share", "crowded", now).code,
+      secrets.pickupCodeFor("share", "crowded", CODE_TRIES - 1),
+      "the last allowed try still finds a free code",
+    );
+    db.run("DELETE FROM pickup_codes WHERE target_id = 'crowded'");
+    hold(CODE_TRIES - 1);
+    assert.throws(
+      () => issuePickupCode(db, secrets, "share", "crowded", now),
+      (error: HttpError) => error.status === 503 && /nothing new was made/.test(error.message),
+    );
+
+    // A recipient's next code carries on from its last one rather than trying its own old codes.
+    db.run("DELETE FROM pickup_codes");
+    let day = now;
+    for (let i = 0; i < CODE_TRIES + 5; i++, day += CODE_LIFE_MS)
+      assert.equal(
+        issuePickupCode(db, secrets, "share", "daily", day).code,
+        secrets.pickupCodeFor("share", "daily", i),
+      );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("one member's things get a fixed number of new codes a day, renewals included", async () => {
+  const instance = await start();
+  try {
+    const { db } = instance.ctx;
+    const owner = await member(instance, "busy-maker");
+    const userId = db.value<string>("SELECT id FROM users WHERE username = 'busy-maker'")!;
+    const { result } = await send(owner, [{ path: "a.txt", data: "alpha", mime: "text/plain" }]);
+    const request = () =>
+      owner.call(api.requests.create, {
+        body: { id: crypto.randomUUID(), name: "Papers", description: "", days: 5, maxBytes: 1000 },
+      });
+    const share = () =>
+      owner.call(api.links.create, { body: { id: crypto.randomUUID(), item: result.itemId, days: 7 } });
+    const open = await request();
+    await share();
+    const now = Date.now();
+    for (let i = 2; i < NEW_CODES_PER_DAY; i++)
+      db.run("INSERT INTO failures(kind, key, time) VALUES('new-code', ?, ?)", userId, now);
+    const refused = (error: HttpError) => {
+      assert.equal(error.status, 429);
+      assert.match(error.message, /try again tomorrow/);
+      return true;
+    };
+    await assert.rejects(request(), refused);
+    await assert.rejects(share(), refused);
+    await assert.rejects(owner.call(api.nearby.invite), refused);
+    assert.equal(db.value("SELECT count(*) FROM requests"), 1, "a refused request leaves nothing behind");
+
+    // An open request's code that has run out isn't renewed either; the list still loads, without it.
+    db.run("UPDATE pickup_codes SET created = created - ? WHERE target_id = ?", CODE_LIFE_MS, open.id);
+    assert.deepEqual(
+      (await owner.call(api.requests.list)).map((listed) => listed.code),
+      [""],
+    );
+
+    // Someone else still can, and the allowance comes back a day later.
+    const other = await member(instance, "other-maker");
+    await other.call(api.nearby.invite);
+    db.run("UPDATE failures SET time = time - ? WHERE kind = 'new-code'", CODE_LIFE_MS);
+    assert.match((await owner.call(api.requests.list))[0].code, /^\d{3}-\d{3}$/);
+    await request();
+  } finally {
+    await instance.close();
+  }
+});
+
+test("when no free code turns up, the owner's list still loads and only that code is missing", async () => {
+  const instance = await start();
+  try {
+    const { db, secrets } = instance.ctx;
+    const owner = await member(instance, "crowded-owner");
+    const open = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Papers", description: "", days: 5, maxBytes: 1000 },
+    });
+    db.run("UPDATE pickup_codes SET created = created - ? WHERE target_id = ?", CODE_LIFE_MS, open.id);
+    for (let nonce = 1; nonce <= CODE_TRIES; nonce++)
+      db.run(
+        "INSERT INTO pickup_codes(code_hash, kind, target_id, nonce, created) VALUES(?, 'share', ?, 0, ?)",
+        secrets.pickupCodeHash(normalizeCode(secrets.pickupCodeFor("request", open.id, nonce))!),
+        `holder-${nonce}`,
+        Date.now(),
+      );
+    assert.deepEqual(
+      (await owner.call(api.requests.list)).map((listed) => listed.code),
+      [""],
+    );
+  } finally {
+    await instance.close();
+  }
+});
+
+test("after the secret key changes, owners are shown fresh codes instead of an error", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "rekeyed");
+    const created = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Papers", description: "", days: 5, maxBytes: 1000 },
+    });
+    const { result } = await send(owner, [{ path: "a.txt", data: "alpha", mime: "text/plain" }]);
+    const shared = await owner.call(api.links.create, {
+      body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
+    });
+    (instance.ctx as { secrets: Secrets }).secrets = new Secrets(instance.root, "a-different-key-".repeat(3));
+    const [listed] = await owner.call(api.requests.list);
+    assert.match(listed.code, /^\d{3}-\d{3}$/);
+    assert.notEqual(listed.code, created.code, "the request's code from the old key is replaced");
+    const [link] = await owner.call(api.links.list);
+    assert.match(link.code, /^\d{3}-\d{3}$/);
+    assert.notEqual(link.code, shared.code, "the share's code from the old key is replaced");
+    for (const id of [created.id, shared.id])
+      assert.equal(
+        instance.ctx.db.value("SELECT count(*) FROM pickup_codes WHERE target_id = ? AND retired IS NULL", id),
+        1,
+      );
   } finally {
     await instance.close();
   }

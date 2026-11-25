@@ -17,7 +17,7 @@ import { route } from "../../lib/http.ts";
 import { localStatus } from "../local/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
 import { hashPassword, sha256 } from "../../lib/secrets.ts";
-import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { countNewCode, issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { lastCodeAttackAt } from "../../lib/pickup-code-guard.ts";
 import { applyMemberLimits, LIMIT_COLUMNS, limitValues, toLimits, type LimitRow } from "../auth/member-limits.ts";
 import { DAY_MS, storageFree, toUser, usageOf, USER_COLUMNS, type UserRow } from "../auth/sessions.ts";
@@ -130,7 +130,8 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     return ctx.db.tx(() => {
       const id = uuidv7(now);
       const token = ctx.secrets.inviteToken(id);
-      const { code, codeHash } = issuePickupCode(ctx.db, ctx.secrets, "invitation", id);
+      countNewCode(ctx, admin.userId, now);
+      const { code, codeHash } = issuePickupCode(ctx.db, ctx.secrets, "invitation", id, now);
       const expires = now + DEFAULTS.inviteDays * DAY_MS;
       ctx.db.run(
         `INSERT INTO invites(id, token_hash, code_hash, created_by, note, ${LIMIT_COLUMNS}, created, expires)

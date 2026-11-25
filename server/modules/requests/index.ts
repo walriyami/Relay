@@ -7,7 +7,7 @@ import type { Submission, UploadRequest } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
 import { sha256 } from "../../lib/secrets.ts";
-import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { countNewCode, issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { bytesLabel } from "../transfers/create.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
 import { registerGuests, remaining, used } from "./guests.ts";
@@ -86,7 +86,8 @@ export function registerRequests(app: FastifyInstance, ctx: Context) {
         if (ctx.db.get("SELECT 1 FROM pickup_codes WHERE kind = 'request' AND target_id = ?", body.id))
           fail(409, "That request id has already been used.");
         const now = Date.now();
-        const pickup = issuePickupCode(ctx.db, ctx.secrets, "request", body.id);
+        countNewCode(ctx, member.userId, now);
+        const pickup = issuePickupCode(ctx.db, ctx.secrets, "request", body.id, now);
         ctx.db.run(
           `INSERT INTO requests(id, owner, token_hash, name, description, created, expires, max_bytes, code_hash, creation_fingerprint)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
