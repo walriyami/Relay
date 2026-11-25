@@ -252,7 +252,7 @@ export function createLinks(ctx: Context): Links {
           );
         try {
           // A network that keeps getting it wrong waits behind everyone else for the password check.
-          const lane = failures.count(pair, now) >= SUSPECT_AFTER ? "suspect" : "fresh";
+          const lane = failures.atLeast(pair, SUSPECT_AFTER, now) ? "suspect" : "fresh";
           if (!(await verifyPassword(password, row.password_hash, { lane }))) {
             failures.add(pair, Date.now());
             linkFailures.add(row.id, Date.now());

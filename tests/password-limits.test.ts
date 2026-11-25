@@ -5,7 +5,8 @@ import { LIMITS } from "../shared/model.ts";
 import { hashPassword } from "../server/lib/secrets.ts";
 import { recordFailure } from "../server/lib/failures.ts";
 import { wideNetworkOf } from "../server/modules/auth/limits.ts";
-import { ADMIN_PASSWORD, admin, type ApiError, Client, member, start, type Instance } from "./support/harness.ts";
+import { rm } from "node:fs/promises";
+import { ADMIN_PASSWORD, admin, type ApiError, Client, member, start, stop, type Instance } from "./support/harness.ts";
 
 const MEMBER_PASSWORD = "Member-password-only";
 
@@ -240,5 +241,22 @@ test("networks that keep getting passwords wrong wait behind joins and first sig
     );
   } finally {
     await instance.close();
+  }
+});
+
+test("wrong passwords still count after a restart", async () => {
+  const first = await start();
+  const root = first.root;
+  let again: Instance | undefined;
+  try {
+    await member(first, "steady");
+    for (let attempt = 0; attempt < 10; attempt++)
+      assert.equal((await signIn(first, "198.18.3.1", "steady", "wrong-password")).statusCode, 401);
+    await stop(first);
+    again = await start({}, root);
+    assert.equal((await signIn(again, "198.18.3.2", "steady", MEMBER_PASSWORD)).statusCode, 429);
+  } finally {
+    await (again ?? first).close();
+    await rm(root, { recursive: true, force: true });
   }
 });

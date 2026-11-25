@@ -8,7 +8,7 @@ import { isAvailable, LINK_SELECT, type LinkRow } from "../links/service.ts";
 import { checkCodeAttempt, recordCodeFailure } from "../../lib/pickup-code-guard.ts";
 import { currentOwnedPickupCode, findPickupCode } from "../../lib/pickup-codes.ts";
 
-const CODE_GONE = "That code doesn’t match anything open. Codes stop working after a day; ask for a new one.";
+const CODE_GONE = "That code doesn’t open anything right now. Ask whoever gave it to you for a new one.";
 
 /** One entry point classifies a code, then its recipient flow applies its own access rules. */
 export function registerCodes(app: FastifyInstance, ctx: Context) {

@@ -187,7 +187,13 @@ export async function checkPassword(
     if (running >= CONCURRENT_PER_NETWORK) fail(429, "Too many sign-ins from your network at once. Try again shortly.");
     limits.running.set(network, running + 1);
     try {
-      const lane = known ? "known" : limits.anyAccount.count(network, now) >= SUSPECT_AFTER ? "suspect" : "fresh";
+      // A network with another check already running, or that keeps getting passwords wrong, waits
+      // behind everyone else.
+      const lane = known
+        ? "known"
+        : running > 0 || limits.anyAccount.atLeast(network, SUSPECT_AFTER, now)
+          ? "suspect"
+          : "fresh";
       const valid = await verifyPassword(password, hash, { lane });
       if (!valid) {
         limits.network.add(pair, Date.now());

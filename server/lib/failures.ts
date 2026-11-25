@@ -59,13 +59,15 @@ export class FailureCounter {
     recordFailure(this.ctx, this.kind, [key], now);
   }
 
-  count(key: string, now: number) {
-    return failuresSince(this.ctx, this.kind, key, now - this.windowMs);
+  /** Whether `key` has at least `max` failures in the window, reading no more than `max` rows. */
+  atLeast(key: string, max: number, now: number) {
+    return nthNewestFailure(this.ctx, this.kind, key, now - this.windowMs, max) !== undefined;
   }
 
   /** Reserves one concurrent check so parallel attempts cannot bypass the failure cap. */
   reserve(key: string, now: number, max: number) {
-    if (this.count(key, now) + (this.active.get(key) ?? 0) >= max) return false;
+    const active = this.active.get(key) ?? 0;
+    if (active >= max || this.atLeast(key, max - active, now)) return false;
     this.active.set(key, (this.active.get(key) ?? 0) + 1);
     return true;
   }

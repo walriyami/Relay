@@ -402,23 +402,30 @@ test("a network's addresses share one day's wrong codes, and an IPv6 neighbour h
   try {
     const t0 = Date.now();
     const { ctx } = instance;
-    // Twenty wrong codes, a few from each address of one /24, spread over the day.
-    for (let i = 0; i < 20; i++) recordCodeFailure(ctx, `198.18.7.${1 + (i >> 2)}`, t0 + i * 60 * 60_000);
-    const later = t0 + 20 * 60 * 60_000;
+    // The alarm for guessing from everywhere is a separate limit; this test is about one network.
+    const calm = () => ctx.db.setSetting("pickupCodeAttackUntil", "0");
+    // Fifty wrong codes, five from each of ten addresses in one /24, spread over the day.
+    for (let i = 0; i < 50; i++) recordCodeFailure(ctx, `198.18.7.${1 + (i % 10)}`, t0 + i * 20 * 60_000);
+    calm();
+    const later = t0 + 50 * 20 * 60_000;
     assert.throws(() => checkCodeAttempt(ctx, "198.18.7.200", later), { status: 429 });
     checkCodeAttempt(ctx, "198.18.8.1", later);
 
     // IPv6: one home's /56 is capped the same way, but the next /56 in the same /48 isn't.
-    for (let i = 0; i < 20; i++) recordCodeFailure(ctx, `2001:db8:1:${(i % 4) + 1}::1`, later);
+    ctx.db.run("DELETE FROM failures");
+    for (let i = 0; i < 50; i++)
+      recordCodeFailure(ctx, `2001:db8:1:${((i % 10) + 1).toString(16)}::1`, later + i * 20 * 60_000);
+    calm();
+    const last = later + 50 * 20 * 60_000;
     assert.throws(
-      () => checkCodeAttempt(ctx, "2001:db8:1:ff::1", later),
+      () => checkCodeAttempt(ctx, "2001:db8:1:ff::1", last),
       (error: HttpError) => {
         assert.equal(error.status, 429);
         assert.match(error.message, /from your network.*The link or QR code you were sent still works/);
         return true;
       },
     );
-    checkCodeAttempt(ctx, "2001:db8:1:100::1", later);
+    checkCodeAttempt(ctx, "2001:db8:1:100::1", last);
     assert.equal(codeNetworkOf("2001:db8:1:1ff::1"), "2001:db8:1:100::/56");
     assert.equal(codeNetworkOf("198.18.7.9"), "198.18.7.0/24");
   } finally {
@@ -511,7 +518,7 @@ test("listing links doesn't issue new codes; the share screen asks for one when 
     });
     age(instance, "share", link.id, CODE_LIFE_MS + 1);
     const issued = () =>
-      instance.ctx.db.value<number>("SELECT count(*) FROM pickup_codes WHERE target_id = ?", link.id);
+      instance.ctx.db.value<number>("SELECT count(*) FROM pickup_codes WHERE target_id = ?", link.id) ?? 0;
     const before = issued();
     const [listed] = await owner.call(api.links.list);
     assert.equal(listed.code, link.code, "the list shows the last code, which the screen asks about");

@@ -17,7 +17,7 @@
 import type { Context } from "../context.ts";
 import { fail } from "./errors.ts";
 import { addressKey, wideNetworkOf } from "../modules/auth/limits.ts";
-import { failuresSince, nthNewestFailure, recordFailure } from "./failures.ts";
+import { nthNewestFailure, recordFailure } from "./failures.ts";
 
 export { wideNetworkOf };
 
@@ -29,7 +29,7 @@ const DAY = 24 * HOUR;
 const BURST = { windowMs: 15 * MINUTE, max: 5 };
 const DAILY = { windowMs: DAY, max: 20 };
 /** Wrong codes one network may enter in a day, however many addresses it uses. */
-const NETWORK_DAILY = 20;
+const NETWORK_DAILY = 50;
 /** Wrong codes from everywhere that mean someone is guessing: within an hour, or within a day. */
 const ALARM = [
   { windowMs: HOUR, max: 30, label: "within an hour" },
@@ -116,12 +116,18 @@ export function checkCodeAttempt(ctx: Context, ip: string, now = Date.now(), { s
 export function recordCodeFailure(ctx: Context, ip: string, now = Date.now()) {
   const { address, network, block } = keysOf(ip);
   recordFailure(ctx, KIND, [address, network, ...(block ? [block] : []), "all"], now);
-  if (failuresSince(ctx, KIND, "all", now - DAY) === EVERYONE_DAILY)
+  // Said once, by the wrong code that spends the budget.
+  if (
+    nthNewestFailure(ctx, KIND, "all", now - DAY, EVERYONE_DAILY) !== undefined &&
+    nthNewestFailure(ctx, KIND, "all", now - DAY, EVERYONE_DAILY + 1) === undefined
+  )
     ctx.log.warn(
       `${EVERYONE_DAILY} wrong codes were entered within a day, so codes are paused for anyone who isn't signed in ` +
         "until the oldest is a day old. Links and QR codes keep working.",
     );
-  const alarm = ALARM.find(({ windowMs, max }) => failuresSince(ctx, KIND, "all", now - windowMs) >= max);
+  const alarm = ALARM.find(
+    ({ windowMs, max }) => nthNewestFailure(ctx, KIND, "all", now - windowMs, max) !== undefined,
+  );
   if (!alarm) return false;
   const started = attackUntil(ctx) <= now;
   ctx.db.setSetting(ATTACK_UNTIL_SETTING, String(now + ATTACK_LINGER_MS));
