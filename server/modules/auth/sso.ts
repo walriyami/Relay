@@ -242,6 +242,14 @@ export async function registerSharedSignIn(app: FastifyInstance, ctx: Context) {
     route(app, ctx, api.sso.link, () => fail(404, "Walriyami sign-in isn't set up on this server."));
     return;
   }
+  // Linking and signing out act on a session: someone without one is refused before their body is
+  // read, as on every route of Relay's own.
+  const sessionRoutes = new Set(["/api/sso/link", "/api/sso/logout"]);
+  app.addHook("preParsing", async (req, _reply, payload) => {
+    if (req.method === "POST" && sessionRoutes.has(req.routeOptions.url ?? "") && !currentMember(ctx, req))
+      fail(401, "Sign in to continue.");
+    return payload;
+  });
   app.addHook("onRequest", async (req, reply) => {
     if (req.routeOptions.config.auth === "public" || !req.routeOptions.config.auth) return;
     const member = currentMember(ctx, req);
