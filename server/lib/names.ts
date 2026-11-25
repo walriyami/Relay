@@ -1,4 +1,5 @@
 import { LIMITS } from "../../shared/model.ts";
+import { oneLine } from "../../shared/text.ts";
 import { fail } from "./errors.ts";
 
 /** A single path segment: a file, folder or item name. */
@@ -35,11 +36,6 @@ export function splitPath(value: string): string[] {
 
 /** A name someone gives themselves, as a label: one line, no control or direction characters; null when blank. */
 export function cleanLabel(value: string | undefined, max: number): string | null {
-  const name = (value ?? "")
-    .normalize("NFC")
-    // eslint-disable-next-line no-control-regex -- control characters are exactly what's replaced.
-    .replace(/[\x00-\x1f\x7f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const name = oneLine(value ?? "");
   return name ? [...name].slice(0, max).join("") : null;
 }
