@@ -26,9 +26,20 @@ test("names and notes others see keep to one line, without control or direction 
         note: " Hi\r\nthe photos\u202e\u0007 are here \n",
       },
     });
+    // An item's name is also a file name, so hidden line breaks are refused there instead.
+    for (const name of ["Invoice\u2028Security notice", "Invoice\u0085"])
+      await assert.rejects(sara.call(api.items.update, { params: { id: result.itemId }, body: { name } }), {
+        status: 400,
+      });
     const share = await openShare(new Client(instance), link.token);
     assert.equal(share.from, ONE_LINE);
     assert.equal(share.note, "Hi\nthe photos are here");
+    // Changing the note later is cleaned the same way; marks right-to-left writing uses stay.
+    await sara.call(api.links.update, {
+      params: { id: link.id },
+      body: { note: "\u05e9\u05dc\u05d5\u05dd\u200f!\u202e" },
+    });
+    assert.equal((await openShare(new Client(instance), link.token)).note, "\u05e9\u05dc\u05d5\u05dd\u200f!");
 
     const request = await sara.call(api.requests.create, {
       body: {
@@ -41,6 +52,12 @@ test("names and notes others see keep to one line, without control or direction 
     });
     const opened = await new Client(instance).call(api.requests.open, { params: { token: request.token } });
     assert.deepEqual([opened.owner, opened.name, opened.description], [ONE_LINE, "Tax forms", "Line one\nLine two"]);
+    await sara.call(api.requests.update, {
+      params: { id: request.id },
+      body: { name: "Tax\u2029forms\u0085", description: "Thanks\u2066!", days: null, maxBytes: 1000 },
+    });
+    const updated = await new Client(instance).call(api.requests.open, { params: { token: request.token } });
+    assert.deepEqual([updated.name, updated.description], ["Tax forms", "Thanks!"]);
 
     // A device's name, as Nearby and the administrator see it.
     const [device] = await sara.call(api.devices.list);

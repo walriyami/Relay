@@ -12,7 +12,7 @@ export function cleanName(value: string): string {
     name.length > LIMITS.nameLength ||
     Buffer.byteLength(name) > 255 ||
     // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
-    /[\x00-\x1f\x7f/\\]/.test(name) ||
+    /[\x00-\x1f\x7f-\x9f\u2028\u2029/\\]/.test(name) ||
     // Bidirectional controls can disguise a name (e.g. "…exe.txt" shown as "…txt.exe").
     /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name) ||
     // Keep names valid UTF-8. Lone surrogates make encodeURIComponent throw and are not valid

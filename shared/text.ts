@@ -2,8 +2,13 @@
 // otherwise make a name span several lines, posing as a notice from Relay, or show its letters in
 // a different order from the one stored ("…exe.txt" read as "…txt.exe").
 
-/** Characters that change the direction text is shown in. They're invisible, so they're dropped. */
+/** Invisible characters that change the direction text is shown in, so they're dropped. */
 const DIRECTION = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+/**
+ * Of those, the ones that can reorder a whole run of text: embeddings, overrides and isolates. A
+ * message keeps the single-character marks (LRM, RLM, ALM) that right-to-left writing relies on.
+ */
+const DIRECTION_RUNS = /[\u202a-\u202e\u2066-\u2069]/g;
 /** Control characters, including line breaks, and Unicode's line and paragraph separators. */
 // eslint-disable-next-line no-control-regex -- control characters are exactly what's replaced.
 const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/g;
@@ -22,7 +27,7 @@ export function plainText(value: string): string {
     .normalize("NFC")
     .replace(/\r\n?|[\x85\u2028\u2029]/g, "\n")
     .replace(/\t/g, " ")
-    .replace(DIRECTION, "")
+    .replace(DIRECTION_RUNS, "")
     .replace(CONTROL_BUT_NEWLINE, "")
     .trim();
 }

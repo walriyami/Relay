@@ -4,6 +4,7 @@ import { uuidv7 } from "../shared/ids";
 import { isProxyFailure, reportFailure, reportReachable } from "./lib/connection";
 
 export { api, urls } from "../shared/api";
+export { oneLine } from "../shared/text";
 export { LIMITS, DEFAULTS, NO_LIMITS, LINK_USED_UP, displayName, isDiskLow, missed } from "../shared/model";
 export type * from "../shared/model";
 
