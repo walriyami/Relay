@@ -130,6 +130,67 @@ test("zipLayout keeps ZIP64 sizes and offsets above 4 GiB", async () => {
   assert.equal(second.offset, BigInt(local.length + hugeSize));
 });
 
+test("zipLayout: names stored before the name rules are written as they'd download, each unique in its folder", async () => {
+  const text = Buffer.from("x");
+  const entry = (path: string, kind: "folder" | "text" = "text") => ({
+    path,
+    created: Date.UTC(2026, 0, 1),
+    kind,
+    size: 0,
+    crc32: null,
+  });
+  const entries = [
+    entry("Reports", "folder"),
+    // An override that shows "photo<U+202E>gpj.exe" as "photoexe.jpg", beside the name it cleans to.
+    entry("Reports/photo\u202egpj.exe"),
+    entry("Reports/photogpj.exe"),
+    entry("old", "folder"),
+    entry("Old\u202e", "folder"),
+    entry("Old\u202e/a.txt"),
+    entry("\u200b"),
+    // Names that clean to "." or "..", or hold a backslash, which Windows tools read as a slash.
+    entry(".\u200b.", "folder"),
+    entry(".\u200b./x.txt"),
+    entry("Reports/\u202e."),
+    entry("..\\evil.txt"),
+    // Names that clean to the same name in a folder that's cleaned too.
+    entry("x    /y"),
+    entry("x    /y\u200b"),
+    // Spaces at the ends are taken off a folder's name and its contents' alike.
+    entry("Docs ", "folder"),
+    entry("Docs /a.txt"),
+    // Control characters and a byte-order mark at the ends are cleaned too.
+    entry("\tnotes.txt\t"),
+    entry("\ufeffreport.pdf"),
+  ];
+  const zip = await read(
+    zipLayout(entries, () => ({ data: text })),
+    0,
+  );
+  const result = inspect(zip);
+  assert.equal(result.bad, null);
+  if (result.unzip !== null) assert.equal(result.unzip, 0);
+  assert.deepEqual(result.names, [
+    "Reports/",
+    "Reports/photogpj (2).exe",
+    "Reports/photogpj.exe",
+    "old/",
+    "Old (2)/",
+    "Old (2)/a.txt",
+    "Untitled",
+    "Untitled (2)/",
+    "Untitled (2)/x.txt",
+    "Reports/Untitled",
+    "..-evil.txt",
+    "x/y",
+    "x/y (2)",
+    "Docs/",
+    "Docs/a.txt",
+    "notes.txt",
+    "report.pdf",
+  ]);
+});
+
 test("zipLayout: any range of an archive with a large directory is the same slice of the whole", async () => {
   const texts = Array.from({ length: 50 }, (_, i) => Buffer.from(`text ${i} `.repeat(i)));
   const entries = Array.from({ length: 3000 }, (_, i) => ({

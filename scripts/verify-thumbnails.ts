@@ -1,8 +1,8 @@
 // Verifies that no image can make a preview cost more memory than Relay can spare. Each image is
 // made, then rendered by the real render worker, in a process of its own that reports its memory:
 //   1. images built to exhaust memory or time (a 25,000,000-pixel-wide 16-bit PNG, a 50 MP 4:4:4
-//      progressive JPEG, a JPEG with 2,000 scans, large GIF and AVIF, and a 16 MP AVIF cropped to
-//      64 × 64) are refused from their headers, quickly and cheaply;
+//      progressive JPEG, a JPEG with 2,000 scans, large GIF and AVIF of each kind, and a 16 MP AVIF
+//      cropped to 64 × 64) are refused from their headers, quickly and cheaply;
 //   2. the most costly images still previewed in each format render within the memory budget and
 //      Relay's time limit.
 // HEIC needs an encoder this script doesn't have; pass HEIC files (or any others) to measure them too.
@@ -179,7 +179,12 @@ const refused: Record<string, () => Promise<Buffer>> = {
     flat(7071, 7071).jpeg({ progressive: true, chromaSubsampling: "4:4:4" }).toBuffer(),
   "jpeg-2000-scans.jpg": () => rescanned(2000),
   "gif-50mp.gif": () => flat(7071, 7071).gif().toBuffer(),
-  "avif-12mp.avif": () => flat(4000, 3000).avif({ effort: 0 }).toBuffer(),
+  // An 8-bit 4:2:0 AVIF may be larger than any other kind; just past that, and the other kinds at 12 MP.
+  "avif-14mp-8bit.avif": () => flat(4320, 3240).avif({ effort: 0, chromaSubsampling: "4:2:0" }).toBuffer(),
+  "avif-12mp-8bit-444.avif": () => flat(4000, 3000).avif({ effort: 0 }).toBuffer(),
+  "avif-12mp-10bit.avif": () =>
+    flat(4000, 3000).avif({ effort: 0, bitdepth: 10, chromaSubsampling: "4:2:0" }).toBuffer(),
+  "avif-12mp-8bit-alpha.avif": () => flat(4000, 3000, 4).avif({ effort: 0, chromaSubsampling: "4:2:0" }).toBuffer(),
   // 16 MP: encoding a larger frame takes more memory than the container has.
   "avif-16mp-cropped-to-64x64.avif": async () =>
     withCrop(await flat(4000, 4000).avif({ effort: 0 }).toBuffer(), 64, 64),
@@ -194,6 +199,8 @@ const allowed: Record<string, () => Promise<Buffer>> = {
     noisy(3400, 2540, 8).avif({ effort: 0, lossless: true, bitdepth: 12 }).toBuffer(),
   "avif-8.6mp-12bit-alpha.avif": () =>
     noisy(3400, 2540, 8).ensureAlpha(0.5).avif({ effort: 0, quality: 90, bitdepth: 12 }).toBuffer(),
+  "avif-13mp-8bit.avif": () =>
+    noisy(4192, 3120, 30).avif({ effort: 0, quality: 90, chromaSubsampling: "4:2:0" }).toBuffer(),
 };
 
 type Measured = { code: string; message?: string; ms: number; peakMiB: number; renderMiB: number };

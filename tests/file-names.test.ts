@@ -17,6 +17,9 @@ const HIDING = [
   "photo‮gpj.exe",
   "photo‏.jpg",
   "​ㅤ",
+  // Spaces carrying accents, or hieroglyph format controls, between them.
+  `invoice.pdf${" \u0301".repeat(20)}.exe`,
+  `invoice.pdf${" \u{13430}\u{1343f}".repeat(4)}.exe`,
 ];
 // Real names: a few spaces, right-to-left writing, a Persian non-joiner, a joined emoji.
 const REAL = [
@@ -25,6 +28,10 @@ const REAL = [
   "نا‌مه.txt",
   "\u{1F468}‍\u{1F469}‍\u{1F467}.png",
   "דוח 2024.docx",
+  // Accents typed as separate marks, Indic vowel signs, and emoji with a skin tone.
+  "Cre\u0300me bru\u0302le\u0301e   cafe\u0301.txt",
+  "नमस्ते दुनिया.txt",
+  "\u{1F469}\u{1F3FD}\u200d\u{1F4BB} \u2764\ufe0f notes.txt",
 ];
 
 const status = (promise: Promise<unknown>) =>
@@ -41,6 +48,10 @@ test("a file name can't hide its real ending, and names from elsewhere are clean
   for (const name of REAL) assert.equal(fileNameHides(name), false, name);
   assert.equal(cleanFileName(`invoice.pdf${" ".repeat(40)}.exe`), "invoice.pdf .exe");
   assert.equal(cleanFileName("photo‮gpj.exe"), "photogpj.exe");
+  assert.equal(cleanFileName(`invoice.pdf${" \u0301".repeat(20)}.exe`), "invoice.pdf .exe");
+  // What is left of a name may not be a path's "this folder" or "the folder above".
+  assert.equal(cleanFileName(".\u200b."), "");
+  assert.equal(cleanFileName("\u202e."), "");
   assert.equal(cleanFileName("​ㅤ "), "");
   for (const name of REAL) assert.equal(cleanFileName(name), name.normalize("NFC"));
   // Received over Nearby: every part of the path, and nothing that climbs out of it.
