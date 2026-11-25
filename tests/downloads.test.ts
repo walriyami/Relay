@@ -11,10 +11,10 @@ import sharp, { type AvifOptions } from "sharp";
 import { api, urls } from "../shared/api.ts";
 import { MAX_QUEUED_PER_PERSON, RENDITION_RETRY_MS } from "../server/modules/downloads/thumbnails.ts";
 import { imageSignature } from "../server/modules/downloads/image-signature.ts";
-import { heifLayout } from "../server/modules/downloads/heif-layout.ts";
+import { av1SequenceHeader, heifLayout } from "../server/modules/downloads/heif-layout.ts";
 import { decodeRefusal, heicRefusal, jpegLayout } from "../server/modules/downloads/image-limits.ts";
 import { Client, member, send, start } from "./support/harness.ts";
-import { heic, hevcSps } from "./support/heif.ts";
+import { av1Header, heic, hevcSps } from "./support/heif.ts";
 
 const sha = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 const get = (client: Client, url: string, headers: Record<string, string> = {}, method: "GET" | "HEAD" = "GET") =>
@@ -654,6 +654,22 @@ test("thumbnails: a 12 MP phone AVIF previews, judged by its AV1 stream rather t
   assert.match((await refusal(headless))!, /damaged/);
 });
 
+test("thumbnails: an AV1 sequence header in its full form is read to the frame size aom allows", () => {
+  // Timing, decoder model and operating points come ahead of the size; every field shifts what follows.
+  assert.deepEqual(av1SequenceHeader(av1Header({ width: 4000, height: 3000 })), {
+    width: 4000,
+    height: 3000,
+    eightBit: true,
+  });
+  assert.deepEqual(av1SequenceHeader(av1Header({ width: 640, height: 480, tickZeros: 31, highBitDepth: true })), {
+    width: 640,
+    height: 480,
+    eightBit: false,
+  });
+  // At 32 leading zeros aom stops reading the number and the standard reads on: no one size.
+  assert.throws(() => av1SequenceHeader(av1Header({ width: 64, height: 64, tickZeros: 32 })));
+});
+
 test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the crop it reports", async () => {
   const refusal = (options: Parameters<typeof heic>[0]) => heicRefusal(heifLayout(heic(options)));
   // A phone photo is a grid of tiles; its canvas is in the grid's data, here in `idat` as Apple writes it.
@@ -679,6 +695,9 @@ test("thumbnails: a HEIC is judged by the whole of what libheif decodes, not the
   // Decoders differ in which of two entries for one item they read.
   assert.match(refusal({ twice: "iloc" })!, /damaged/);
   assert.match(refusal({ twice: "iinf" })!, /damaged/);
+  // Byte ranges can be listed in no bytes at all, so how many there may be is bounded.
+  assert.equal(refusal({ ranges: 1000 }), null);
+  assert.match(refusal({ ranges: 100_001 })!, /damaged/);
   assert.match(heicRefusal(heifLayout(heic().subarray(0, 200)))!, /damaged/);
 
   const instance = await start();

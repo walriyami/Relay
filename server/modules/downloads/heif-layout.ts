@@ -160,6 +160,12 @@ function* configurationUnits(data: Buffer, box: Box) {
 type Extent = { start: number; end: number };
 
 /**
+ * NAL units and OBUs walked in all of a file's items, and byte ranges listed for them. A photo's
+ * tiles have a few units each, and one range.
+ */
+const MAX_UNITS = 100_000;
+
+/**
  * Where each item's data is (the `iloc` box): byte ranges in the file or in `idat`. Null for an item
  * whose data is elsewhere (another file, or other items' data), which these limits can't read.
  */
@@ -174,12 +180,16 @@ function itemLocations(data: Buffer, iloc: Box, idat: Box | undefined) {
   const indexSize = version ? more & 15 : 0;
   const count = r.uint(version < 2 ? 2 : 4);
   const items = new Map<number, Extent[] | null>();
+  // With offsets and lengths of no bytes, a range costs nothing to list.
+  let listed = 0;
   for (let n = 0; n < count; n++) {
     const id = r.uint(version < 2 ? 2 : 4);
     const method = version ? r.uint(2) & 15 : 0;
     const external = r.uint(2) !== 0;
     const base = r.uint(baseSize);
     const extentCount = r.uint(2);
+    listed += extentCount;
+    if (listed > MAX_UNITS) throw new RangeError("too many ranges");
     const source =
       external || method > 1
         ? null
@@ -236,7 +246,7 @@ function* obus(data: Buffer) {
  * profile without high bit depth, and not the 4:4:4 sRGB form). Fields are read up to the colour
  * configuration, as aom reads them.
  */
-function av1SequenceHeader(payload: Buffer): { width: number; height: number; eightBit: boolean } {
+export function av1SequenceHeader(payload: Buffer): { width: number; height: number; eightBit: boolean } {
   const bits = new Bits([...payload.subarray(0, 512)]);
   const profile = bits.read(3);
   bits.skip(1); // still_picture
@@ -249,9 +259,10 @@ function av1SequenceHeader(payload: Buffer): { width: number; height: number; ei
       // timing_info
       bits.skip(64);
       if (bits.bit()) {
-        // num_ticks_per_picture_minus_1, uvlc()
+        // num_ticks_per_picture_minus_1, uvlc(). At 32 leading zeros aom stops reading the number
+        // where the standard reads on, so the fields after it would be read differently.
         let zeros = 0;
-        while (!bits.bit()) if (++zeros > 32) throw new RangeError("number too long");
+        while (!bits.bit()) if (++zeros >= 32) throw new RangeError("number too long");
         bits.skip(zeros);
       }
       decoderModel = bits.bit() === 1;
@@ -299,8 +310,6 @@ function av1SequenceHeader(payload: Buffer): { width: number; height: number; ei
 }
 
 const DERIVED_ITEMS = new Set(["grid", "iovl", "iden"]);
-/** NAL units and OBUs walked in all of a file's items. A photo's tiles have a few each. */
-const MAX_UNITS = 100_000;
 
 /**
  * Walks a HEIF file's boxes without decoding it: the largest image it declares or carries, and

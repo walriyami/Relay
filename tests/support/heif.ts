@@ -73,6 +73,75 @@ export function hevcSps(width: number, height: number, subLayers = 0) {
   return Buffer.from([0x42, 0x01, ...payload]);
 }
 
+/**
+ * The payload of an AV1 sequence header (AV1 5.5) in its full form, as a video encoder writes it:
+ * timing information, a decoder model, two operating points and every optional tool, with
+ * `tickZeros` leading zeros in its one variable-length number.
+ */
+export function av1Header(options: { width: number; height: number; tickZeros?: number; highBitDepth?: boolean }) {
+  const bits: number[] = [];
+  const put = (value: number, count: number) => {
+    for (let i = count - 1; i >= 0; i--) bits.push(Math.floor(value / 2 ** i) % 2);
+  };
+  const zeros = options.tickZeros ?? 4;
+  put(0, 3); // seq_profile: Main
+  put(1, 1); // still_picture
+  put(0, 1); // reduced_still_picture_header
+  put(1, 1); // timing_info_present_flag
+  put(1001, 32);
+  put(30000, 32);
+  put(1, 1); // equal_picture_interval
+  put(0, zeros); // num_ticks_per_picture_minus_1, uvlc()
+  put(1, 1);
+  put(0, Math.min(zeros, 32));
+  put(1, 1); // decoder_model_info_present_flag
+  put(9, 5); // buffer_delay_length_minus_1
+  put(1001, 32);
+  put(31, 5);
+  put(31, 5);
+  put(1, 1); // initial_display_delay_present_flag
+  put(1, 5); // operating_points_cnt_minus_1
+  for (let i = 0; i < 2; i++) {
+    put(0x101, 12); // operating_point_idc
+    put(9, 5); // seq_level_idx, so a tier follows
+    put(1, 1);
+    put(1, 1); // decoder_model_present_for_this_op
+    put(0, 10);
+    put(0, 10);
+    put(1, 1);
+    put(1, 1); // initial_display_delay_present_for_this_op
+    put(9, 4);
+  }
+  put(15, 4); // frame_width_bits_minus_1
+  put(15, 4);
+  put(options.width - 1, 16);
+  put(options.height - 1, 16);
+  put(1, 1); // frame_id_numbers_present_flag
+  put(0b1111111, 7);
+  put(0b111, 3);
+  put(0b1111, 4);
+  put(1, 1); // enable_order_hint
+  put(0b11, 2);
+  put(0, 1); // seq_choose_screen_content_tools
+  put(1, 1); // seq_force_screen_content_tools
+  put(0, 1); // seq_choose_integer_mv
+  put(1, 1);
+  put(6, 3); // order_hint_bits_minus_1
+  put(0b111, 3);
+  put(options.highBitDepth ? 1 : 0, 1); // color_config: high_bitdepth
+  put(0, 1); // mono_chrome
+  put(0, 1); // color_description_present_flag
+  put(0, 1); // color_range
+  put(0, 2); // chroma_sample_position
+  put(0, 1); // separate_uv_delta_q
+  put(0, 1); // film_grain_params_present
+  put(1, 1); // trailing bits
+  while (bits.length % 8) bits.push(0);
+  const bytes: number[] = [];
+  for (let i = 0; i < bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8).join(""), 2));
+  return Buffer.from(bytes);
+}
+
 export type HeicOptions = {
   /** The tile's (or the single image's) `ispe`; null for none. 512 × 512 unless given. */
   ispe?: [number, number] | null;
@@ -90,6 +159,8 @@ export type HeicOptions = {
   tilesShareGrid?: boolean;
   /** The first item located, or described, a second time. */
   twice?: "iloc" | "iinf";
+  /** This many more byte ranges in `iloc`, listed for items no image uses. */
+  ranges?: number;
 };
 
 export function heic(options: HeicOptions = {}) {
@@ -148,6 +219,14 @@ export function heic(options: HeicOptions = {}) {
       ),
     ];
     if (options.twice === "iloc") items.push(items[0]);
+    for (let left = options.ranges ?? 0, id = 3000; left > 0; id++) {
+      const extents = Math.min(left, 65_535);
+      left -= extents;
+      // Each the file's first byte: offset 0, length 1.
+      const list = Buffer.alloc(8 * extents);
+      for (let e = 0; e < extents; e++) list[8 * e + 7] = 1;
+      items.push([u16(id), u16(0), u16(0), u16(extents), list]);
+    }
     const infe = (id: number, type: string) => full("infe", 2, 0, u16(id), u16(0), Buffer.from(type, "latin1"), u8(0));
     const entries = [
       ...(grid ? [infe(1, "grid")] : []),
