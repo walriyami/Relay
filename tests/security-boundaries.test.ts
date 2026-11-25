@@ -171,7 +171,7 @@ test("client addresses come only from trusted proxies, given by address, range o
     for (let i = 1; i <= 6; i++) {
       const response = await pickup(waiting, `198.51.100.${i}`);
       assert.equal(response.statusCode, 503);
-      assert.match((response.json() as { error: string }).error, /starting up/);
+      assert.match(response.json<{ error: string }>().error, /starting up/);
     }
     const direct = await waiting.app.inject({
       method: "POST",

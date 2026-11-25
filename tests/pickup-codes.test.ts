@@ -17,8 +17,8 @@ import {
 } from "../server/lib/pickup-code-guard.ts";
 import { normalizeCode, sha256 } from "../server/lib/secrets.ts";
 import { rm } from "node:fs/promises";
-import { HttpError } from "../server/lib/errors.ts";
-import { admin, type ApiError, Client, member, send, start, stop, type Instance } from "./support/harness.ts";
+import type { HttpError } from "../server/lib/errors.ts";
+import { admin, Client, member, send, start, stop, type Instance } from "./support/harness.ts";
 
 const errorOf = (response: { json: () => unknown }) => (response.json() as { error: string }).error;
 
