@@ -93,23 +93,29 @@ class Streams {
     );
   }
 
-  /** Admission never evicts an existing tab: that would rotate every reconnect around the cap. */
+  /**
+   * Admission never evicts an existing tab: that would rotate every reconnect around the cap.
+   * Streams whose credential ended are found by the timer (`beat`); admission revalidates only the
+   * few that would hold this session or browser back. Revalidating every open stream on every
+   * attempt let anyone with a request link make each attempt cost one query per open stream.
+   */
   canAdd(spec: Pick<Stream, "capKey" | "cap" | "browser" | "groups">) {
-    this.recheck();
     // Without shared storage, short probes still renew leases and refresh member views. Never
     // occupy an unbounded share of HTTP/1's six sockets across unrelated guest grants.
     if (!spec.browser) return false;
-    let count = 0;
-    let browserCount = 0;
     const groups = new Map(spec.groups?.map((group) => [group.key, 0]));
-    for (const current of this.open) {
-      if (current.capKey === spec.capKey) count++;
-      if (current.browser === spec.browser) browserCount++;
+    for (const current of this.open)
       for (const group of current.groups ?? [])
         if (groups.has(group.key)) groups.set(group.key, groups.get(group.key)! + 1);
-    }
     if (spec.groups?.some((group) => groups.get(group.key)! >= group.cap)) return false;
-    return count < spec.cap && browserCount < 4;
+    const mine = () => [...this.open].filter((s) => s.capKey === spec.capKey || s.browser === spec.browser);
+    const fits = (streams: Stream[]) =>
+      streams.filter((s) => s.capKey === spec.capKey).length < spec.cap &&
+      streams.filter((s) => s.browser === spec.browser).length < 4;
+    if (fits(mine())) return true;
+    // At most `cap` + 4 streams: a session that just ended in this browser shouldn't hold it back.
+    this.recheckStreams(mine());
+    return fits(mine());
   }
 
   add(stream: Stream) {
@@ -260,13 +266,25 @@ class Streams {
           this.removePolling(presence);
         }
       }
-      for (const stream of [...this.open]) {
-        if (userId && stream.userId !== userId) continue;
+    } catch (error) {
+      // Failed validation cannot leave a possibly revoked subscription receiving private changes.
+      this.closeAll();
+      throw error;
+    }
+    this.recheckStreams(
+      [...this.open].filter((stream) => !userId || stream.userId === userId),
+      hint,
+    );
+  }
+
+  /** Ends those of `streams` whose session or grant is gone. */
+  private recheckStreams(streams: Stream[], hint?: EndHint) {
+    try {
+      for (const stream of streams) {
         const reason = stream.ended(hint?.userId === stream.userId ? hint : undefined);
         if (reason) this.end(stream, reason);
       }
     } catch (error) {
-      // Failed validation cannot leave a possibly revoked subscription receiving private changes.
       this.closeAll();
       throw error;
     }
@@ -410,9 +428,13 @@ function memberStream(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
   );
 }
 
-/** Lasting event streams one request's visitors may hold, together and from one address. */
+/**
+ * Lasting event streams one request's visitors may hold, together and from one address, and all
+ * request visitors on the server together.
+ */
 export const GUEST_STREAMS_PER_REQUEST = 30;
 export const GUEST_STREAMS_PER_ADDRESS = 8;
+export const GUEST_STREAMS_TOTAL = 300;
 
 function guestStream(ctx: Context, req: FastifyRequest<{ Params: { token: string } }>, reply: FastifyReply) {
   const requestId =
@@ -443,7 +465,8 @@ function guestStream(ctx: Context, req: FastifyRequest<{ Params: { token: string
       // Past these, a visitor's page still works by asking again every so often instead.
       groups: [
         { key: `request:${requestId}`, cap: GUEST_STREAMS_PER_REQUEST },
-        { key: `address:${addressKey(req.ip)}`, cap: GUEST_STREAMS_PER_ADDRESS },
+        { key: `address:${requestId}:${addressKey(req.ip)}`, cap: GUEST_STREAMS_PER_ADDRESS },
+        { key: "guests", cap: GUEST_STREAMS_TOTAL },
       ],
       browser: browserOf(req),
       ended,
