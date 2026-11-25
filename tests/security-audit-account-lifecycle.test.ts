@@ -412,13 +412,14 @@ test("account lifecycle: guest transfer authority ends with grant, request or ow
           payload: { destination: { kind: "save" } },
         });
         const state = instance.ctx.db.value("SELECT state FROM transfers WHERE id = ?", transfer.id);
+        // With no working credential left, the guest is refused before the body is read.
         record({
           case: `guest transfer completion after ${revocation}`,
-          expected: 404,
+          expected: 401,
           observed: response.statusCode,
           unchanged: state !== "complete",
         });
-        assert.equal(response.statusCode, 404, response.body);
+        assert.equal(response.statusCode, 401, response.body);
         assert.notEqual(state, "complete");
       } finally {
         await instance.close();

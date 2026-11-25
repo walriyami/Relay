@@ -414,6 +414,7 @@ export type Health = {
   problems: HealthProblem[];
   /** Which build is live, so a deploy can be checked from outside (server/build-info.ts). */
   version: string;
+  /** The commit's first 7 characters, as Admin shows it; null for a development copy. */
   commit: string | null;
 };
 
@@ -610,9 +611,10 @@ export type ChangeEvent = { topics: Topic[] };
  * The first event on every stream. After it the server sends a `beat` event at least every
  * `beatMs`, so a stream that goes quiet for longer has been cut somewhere on the way. `changes` is
  * where changes stood when the stream opened: a view whose last answer carried the same stamp, or
- * a later one, has missed nothing (see `headers.changes`).
+ * a later one, has missed nothing (see `headers.changes`). Only a member's stream carries it, since
+ * the count moves with everyone's activity.
  */
-export type StreamReady = { beatMs: number; changes: ChangeStamp };
+export type StreamReady = { beatMs: number; changes?: ChangeStamp };
 /** `<boot>.<count>`: publishes counted since the server started. Compare only within one boot. */
 export type ChangeStamp = `${string}.${number}`;
 /**

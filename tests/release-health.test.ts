@@ -6,8 +6,8 @@ import { api } from "../shared/api.ts";
 import { start, admin, member, Client, send } from "./support/harness.ts";
 import { build } from "../server/build-info.ts";
 
-/** What /api/health reports about the running code; see tests/build-info.test.ts. */
-const release = { version: build.version, commit: build.commit };
+/** What /api/health reports about the running code, its commit shortened as Admin shows it; see tests/build-info.test.ts. */
+const release = { version: build.version, commit: build.commit?.slice(0, 7) ?? null };
 
 test("admin-only integrity checks expose degradation without taking healthy content offline", async () => {
   const instance = await start();

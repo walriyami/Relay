@@ -60,6 +60,9 @@ export function createHealth(ctx: Context) {
       else ctx.log.warn(detail, `Relay is ${status}`);
       last = status;
     }
-    return { ok: status !== "unavailable", status, problems: list, version: build.version, commit: build.commit };
+    // The route is public, so it names the build only as briefly as Admin does: enough to tell which
+    // deploy is live from outside.
+    const commit = build.commit?.slice(0, 7) ?? null;
+    return { ok: status !== "unavailable", status, problems: list, version: build.version, commit };
   };
 }

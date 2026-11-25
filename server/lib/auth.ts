@@ -123,30 +123,63 @@ type GrantRow = {
   expires: number;
 };
 
-/** A guest grant is usable only while its request is open and its owner is active. */
-function grantFromToken(ctx: Context, requestId: string, token: string): Grant | null {
+/** Request ids are UUIDs, and grant tokens 32 random bytes in base64url (`randomToken`). */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const GRANT_TOKEN = /^[\w-]{43}$/;
+/**
+ * The most guest cookies one request has looked up. A browser keeps one for each request link it
+ * opened until that request closes, so this leaves room for many open at once, while a stranger
+ * sending hundreds of made-up ones costs Relay no more than this.
+ */
+export const MAX_GUEST_COOKIES = 32;
+
+/**
+ * The guest grants this request's cookies hold, in one lookup. Only well-formed cookies count, the
+ * newest `MAX_GUEST_COOKIES` of them: browsers send the oldest first. A grant is usable only while
+ * its request is open and its owner is active.
+ */
+function guestGrants(ctx: Context, req: FastifyRequest): Grant[] {
+  // The helper forwards no cookies; a local request is its session alone.
+  if (isLocal(req)) return [];
+  const prefix = guestCookiePrefix(ctx, req);
+  const held: { requestId: string; token: string }[] = [];
+  for (const [name, token] of Object.entries(req.cookies ?? {})) {
+    if (!name.startsWith(prefix) || !token || !GRANT_TOKEN.test(token)) continue;
+    const requestId = name.slice(prefix.length);
+    if (REQUEST_ID.test(requestId)) held.push({ requestId, token });
+  }
+  if (!held.length) return [];
+  const looked = held
+    .slice(-MAX_GUEST_COOKIES)
+    .map(({ requestId, token }) => ({ requestId, tokenHash: sha256(token) }));
   const now = Date.now();
-  const row = ctx.db.get<GrantRow>(
+  const rows = ctx.db.all<GrantRow>(
     `SELECT g.token_hash, g.request_id, r.owner, g.item, g.csrf, g.expires
      FROM guest_grants g JOIN requests r ON r.id = g.request_id JOIN users u ON u.id = r.owner
-     WHERE g.token_hash = ? AND g.request_id = ? AND g.expires > ?
+     WHERE g.token_hash IN (${looked.map(() => "?").join(",")}) AND g.expires > ?
        AND r.closed IS NULL AND r.expires > ? AND u.disabled = 0`,
-    sha256(token),
-    requestId,
+    ...looked.map((cookie) => cookie.tokenHash),
     now,
     now,
   );
-  return row
-    ? {
-        kind: "grant",
-        tokenHash: row.token_hash,
-        requestId: row.request_id,
-        owner: row.owner,
-        itemId: row.item,
-        csrf: row.csrf,
-        expires: row.expires,
-      }
-    : null;
+  const found = new Map(rows.map((row) => [row.token_hash, row]));
+  // In the cookies' order; a token counts only under its own request's name.
+  return looked.flatMap(({ requestId, tokenHash }) => {
+    const row = found.get(tokenHash);
+    return row && row.request_id === requestId
+      ? [
+          {
+            kind: "grant" as const,
+            tokenHash: row.token_hash,
+            requestId: row.request_id,
+            owner: row.owner,
+            itemId: row.item,
+            csrf: row.csrf,
+            expires: row.expires,
+          },
+        ]
+      : [];
+  });
 }
 
 /**
@@ -160,17 +193,18 @@ export function currentMember(ctx: Context, req: FastifyRequest): Member | null 
   return memberFromToken(ctx, req.cookies?.[sessionCookie(ctx, req)]);
 }
 
-/** Read credentials afresh after asynchronous work: revocation can happen during an await. */
+/**
+ * Read credentials afresh after asynchronous work: revocation can happen during an await. Guest
+ * grants are looked up when first asked for, so routes that never use them don't pay for them.
+ */
 export function currentAuth(ctx: Context, req: FastifyRequest): Auth {
-  const grants: Grant[] = [];
-  const prefix = guestCookiePrefix(ctx, req);
-  // The helper forwards no cookies; a local request is its session alone.
-  for (const [name, value] of isLocal(req) ? [] : Object.entries(req.cookies)) {
-    if (!value || !name.startsWith(prefix)) continue;
-    const grant = grantFromToken(ctx, name.slice(prefix.length), value);
-    if (grant) grants.push(grant);
-  }
-  return { member: currentMember(ctx, req), grants };
+  let grants: Grant[] | undefined;
+  return {
+    member: currentMember(ctx, req),
+    get grants() {
+      return (grants ??= guestGrants(ctx, req));
+    },
+  };
 }
 
 /** Everything the request's credentials authenticate. Computed once per request. */
@@ -218,7 +252,10 @@ export function checkCsrf(ctx: Context, req: FastifyRequest, route: { csrf?: boo
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
   const origin = req.headers.origin;
   if (origin && origin !== requestOrigin(ctx, req)) fail(403, "Cross-origin requests are not allowed.");
-  if (req.headers["sec-fetch-site"] === "cross-site") fail(403, "Cross-site requests are not allowed.");
+  // Node joins a repeated header with commas; any cross-site value refuses.
+  const site = req.headers["sec-fetch-site"];
+  if (typeof site === "string" && site.split(",").some((value) => value.trim().toLowerCase() === "cross-site"))
+    fail(403, "Cross-site requests are not allowed.");
   if (route.csrf === false) return;
   const auth = authOf(ctx, req);
   // CSRF protects ambient credentials; a request carrying none is left to the route's auth check.
