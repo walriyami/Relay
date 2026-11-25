@@ -139,6 +139,15 @@ export function livePickupCode(
   });
 }
 
+/**
+ * The target's code as last issued, working or not, without issuing a new one. Lists show it so
+ * the owner's screen can ask for the working code (`currentOwnedPickupCode`) only when it shows it.
+ */
+export function lastPickupCode(ctx: Pick<Context, "db" | "secrets">, kind: PickupCodeKind, targetId: string) {
+  const row = liveRow(ctx.db, kind, targetId);
+  return row ? codeAt(ctx.secrets, kind, targetId, row) : null;
+}
+
 /** The recipient a working code names right now, if any. */
 export function findPickupCode(db: Database, codeHash: string, now = Date.now()) {
   return db.get<{ kind: PickupCodeKind; target_id: string }>(

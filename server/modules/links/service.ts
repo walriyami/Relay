@@ -9,7 +9,7 @@ import { randomToken, sha256, verifyPassword } from "../../lib/secrets.ts";
 import { wideNetworkOf } from "../auth/limits.ts";
 import { FailureCounter } from "../../lib/failures.ts";
 import { allowedLinkDays } from "../auth/member-limits.ts";
-import { issuePickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
+import { issuePickupCode, lastPickupCode, livePickupCode } from "../../lib/pickup-codes.ts";
 import { DAY_MS } from "../../lib/time.ts";
 
 /** A browser keeps its visitor cookie this long; it only tells one person from another. */
@@ -68,7 +68,12 @@ export function toLinks(ctx: Context, rows: LinkRow[], now = Date.now()): Link[]
     id: row.id,
     itemId: row.item,
     token: ctx.secrets.linkToken(row.id),
-    code: livePickupCode(ctx, "share", row.id, isAvailable(row, now) && !row.owner_disabled, now)?.code ?? "",
+    // Listing doesn't issue codes: a link's share screen asks for the working one when it shows it.
+    // Only a link whose last code was freed for reuse (a month unused) gets one here, to ask with.
+    code:
+      (isAvailable(row, now) && !row.owner_disabled
+        ? (lastPickupCode(ctx, "share", row.id) ?? livePickupCode(ctx, "share", row.id, true, now)?.code)
+        : livePickupCode(ctx, "share", row.id, false, now)?.code) ?? "",
     created: row.created,
     expires: effectiveLinkExpiry(row.expires, summaries.get(row.item)?.expires ?? null),
     revoked: !!row.revoked,
