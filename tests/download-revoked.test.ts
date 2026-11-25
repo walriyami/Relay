@@ -51,6 +51,8 @@ function begin(url: string, client: Client, headers: Record<string, string> = {}
 
 /** Reads the rest at once: how many more bytes came, and whether the body reached its Content-Length. */
 function finish(res: IncomingMessage) {
+  // A download cut while the test was reading another one may already have closed.
+  if (res.closed) return Promise.resolve({ bytes: 0, complete: res.complete });
   return new Promise<{ bytes: number; complete: boolean }>((resolve) => {
     let bytes = 0;
     res.on("data", (chunk: Buffer) => (bytes += chunk.length));
