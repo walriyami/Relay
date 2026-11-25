@@ -4,6 +4,8 @@ import type { Auth, Context, Member } from "../context.ts";
 import { authOf, invalidateRequestAuth, requireAdmin, requireMember } from "./auth.ts";
 import { fail } from "./errors.ts";
 import { compressed } from "./compress.ts";
+import { sha256 } from "./secrets.ts";
+import { wideNetworkOf } from "../modules/auth/limits.ts";
 
 export type Handler<E extends Endpoint> = (call: {
   req: FastifyRequest;
@@ -88,23 +90,41 @@ export const DEFAULT_BODY_BYTES = 1024 * 1024;
 /**
  * Larger bodies that callers without a session may have Relay read and parse at once. Parsing one
  * near the 32 MiB limit takes several times that in memory, and anyone who opens a request link
- * gets a grant; members are trusted, like everywhere else.
+ * gets a grant; members are trusted, like everywhere else. One request link, and one network (an
+ * IPv4 /24 or IPv6 /48), may hold only some of the places, so a single visitor can't take them all
+ * and turn everyone else away.
  */
 export const MAX_LARGE_GUEST_BODIES = 4;
-const largeGuestBodies = new WeakMap<Context, number>();
+export const MAX_LARGE_GUEST_BODIES_EACH = 2;
+const largeGuestBodies = new WeakMap<Context, Map<string, number>>();
 
 /** Takes one of the guests' large-body places until the reply is sent, or refuses when none is free. */
 function holdLargeBody(ctx: Context, req: FastifyRequest, reply: FastifyReply) {
   const declared = Number(req.headers["content-length"] ?? Infinity);
   if (declared <= DEFAULT_BODY_BYTES || authOf(ctx, req).member) return;
-  const held = largeGuestBodies.get(ctx) ?? 0;
-  if (held >= MAX_LARGE_GUEST_BODIES) {
+  let held = largeGuestBodies.get(ctx);
+  if (!held) largeGuestBodies.set(ctx, (held = new Map<string, number>()));
+  const token = (req.params as { token?: unknown } | undefined)?.token;
+  const keys = [
+    "all",
+    `network:${wideNetworkOf(req.ip)}`,
+    ...(typeof token === "string" ? [`link:${sha256(token)}`] : []),
+  ];
+  const full = (key: string) =>
+    (held.get(key) ?? 0) >= (key === "all" ? MAX_LARGE_GUEST_BODIES : MAX_LARGE_GUEST_BODIES_EACH);
+  if (keys.some(full)) {
     reply.header("Retry-After", "5");
     fail(503, "Relay is busy receiving other uploads. Try again in a moment.");
   }
-  largeGuestBodies.set(ctx, held + 1);
+  for (const key of keys) held.set(key, (held.get(key) ?? 0) + 1);
   // Sent, failed or cut off, the reply closes once.
-  reply.raw.once("close", () => largeGuestBodies.set(ctx, (largeGuestBodies.get(ctx) ?? 1) - 1));
+  reply.raw.once("close", () => {
+    for (const key of keys) {
+      const left = (held.get(key) ?? 1) - 1;
+      if (left > 0) held.set(key, left);
+      else held.delete(key);
+    }
+  });
 }
 
 /**

@@ -27,7 +27,9 @@ export function StorageSummary({ me }: { me: Me }) {
       toast(
         response.status === 413
           ? "Your notes are too large for one ZIP. Download items one at a time from Files."
-          : "The ZIP couldn’t be prepared. Try again in a moment.",
+          : response.status === 503
+            ? "Relay is busy preparing other downloads. Try again in a moment."
+            : "The ZIP couldn’t be prepared. Try again in a moment.",
         { tone: "error" },
       );
     } catch {

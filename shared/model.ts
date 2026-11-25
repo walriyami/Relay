@@ -394,6 +394,11 @@ export type PendingInvite = {
 
 export type AdminMember = User & {
   disabled: boolean;
+  /**
+   * When removing them stopped part way because some files couldn't be deleted. They stay
+   * suspended, and no longer an administrator, until removed again or their suspension is lifted.
+   */
+  removalStopped: Time | null;
   created: Time;
   usage: Usage;
   /** Devices holding a session now: the ones a suspension or password reset signs out. */
@@ -672,8 +677,20 @@ export type ActivityEvent =
     }
   /** A new member: with an invitation, or by signing in with Walriyami (`walriyami`). */
   | { kind: "joined"; userId: Id; username: string; note: string | null; walriyami?: boolean }
-  /** Someone opened a link, or downloaded from it, for the first time. `item` is its name then. */
-  | { kind: "link"; linkId: Id; itemId: Id; item: string; action: "opened" | "downloaded"; device: string };
+  /**
+   * Someone opened a link, or downloaded from it, for the first time. `item` is its name then. People
+   * doing the same within an hour of the last share one entry: `browsers` of them (absent for one),
+   * the latest on `device`.
+   */
+  | {
+      kind: "link";
+      linkId: Id;
+      itemId: Id;
+      item: string;
+      action: "opened" | "downloaded";
+      device: string;
+      browsers?: number;
+    };
 export type ActivityKind = ActivityEvent["kind"];
 /**
  * `self`: the device reading the feed caused it. `news`: worth the bell's badge on this device: not

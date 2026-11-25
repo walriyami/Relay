@@ -28,8 +28,8 @@ import { recordHistory, usernameOf } from "../history/index.ts";
 import { limitsOf, setLimits } from "./settings.ts";
 import { build } from "../../build-info.ts";
 
-type MemberRow = UserRow & { disabled: number; created: number };
-const MEMBER_COLUMNS = `${USER_COLUMNS}, disabled, created`;
+type MemberRow = UserRow & { disabled: number; created: number; removal_stopped: number | null };
+const MEMBER_COLUMNS = `${USER_COLUMNS}, disabled, created, removal_stopped`;
 
 function checkExpectedLimits(current: LimitRow, expected: MemberLimits | undefined) {
   if (!expected) fail(400, "Include the limits shown when you opened this editor.");
@@ -55,6 +55,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       .map((row): AdminMember => ({
         ...toUser(row),
         disabled: !!row.disabled,
+        removalStopped: row.removal_stopped,
         created: row.created,
         usage: usageOf(ctx, row.id, free),
         signedInDevices: row.signed_in,
@@ -239,7 +240,13 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       if (disabled !== undefined) {
         if (disabled !== !!target.disabled)
           recordHistory(ctx, { kind: disabled ? "suspended" : "restored", username: target.username, by }, target.id);
-        ctx.db.run("UPDATE users SET disabled = ? WHERE id = ?", disabled ? 1 : 0, target.id);
+        // Lifting the suspension keeps them as they are now: a removal that stopped is let go.
+        ctx.db.run(
+          "UPDATE users SET disabled = ?, removal_stopped = CASE WHEN ? THEN removal_stopped END WHERE id = ?",
+          disabled ? 1 : 0,
+          disabled ? 1 : 0,
+          target.id,
+        );
         if (disabled) ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       }
       return limits ? applyMemberLimits(ctx, target.id, limits, Date.now()) : { links: 0, items: 0, requests: 0 };
@@ -310,20 +317,25 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       // suspended administrator counted as one, and two removals can't take the last two.
       ctx.db.tx(() => {
         if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
-        ctx.db.run("UPDATE users SET disabled = 1, admin = 0 WHERE id = ?", target.id);
+        // Marked as stopping part way from the start, so a restart in the middle shows it too.
+        ctx.db.run("UPDATE users SET disabled = 1, admin = 0, removal_stopped = ? WHERE id = ?", Date.now(), target.id);
         ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       });
       streamsOf(ctx).recheck();
       for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM requests WHERE owner = ?", target.id))
         ctx.transfers.cancelForRequest(id);
+      // A removal that stops part way leaves them suspended rather than coming back: some of their
+      // files may already be gone, and the administrator meant them to go. The members list says so
+      // until they're removed after all.
       const suspended = () =>
-        ctx.db.tx(() =>
+        ctx.db.tx(() => {
+          ctx.db.run("UPDATE users SET removal_stopped = ? WHERE id = ?", Date.now(), target.id);
           recordHistory(
             ctx,
             { kind: "suspended", username: target.username, by: usernameOf(ctx, administrator.userId) },
             target.id,
-          ),
-        );
+          );
+        });
       const failures: unknown[] = [];
       for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", target.id)) {
         try {

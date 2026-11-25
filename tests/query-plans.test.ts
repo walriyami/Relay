@@ -103,7 +103,7 @@ test("library, usage and admin pages read only what they show", async () => {
     // attention (damaged copies, unfinished uploads, Trash, open transfers).
     const allowed = [
       /^SCAN (users|u)\b/,
-      /^SCAN \w+ USING (COVERING )?INDEX (blobs_degraded|nodes_pending|items_trashed|transfers_open)\b/,
+      /^SCAN \w+ USING (COVERING )?INDEX (blobs_degraded|nodes_pending|items_trashed|transfers_open|transfers_open_principal)\b/,
       // The admin overview's totals of stored copies: one pass, however many files share them.
       /^SCAN blobs {2}<- {2}SELECT count\(\*\) AS total, ifnull\(sum\(size\), 0\) AS storedBytes/,
       // The admin's count of items outside Trash, from the narrow owner index.

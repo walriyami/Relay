@@ -337,9 +337,17 @@ test("telling an owner about a link's first download costs the same however much
           .all(...Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => null))
           .map((row) => `${String(row.detail)}  <-  ${sql.replace(/\s+/g, " ")}`),
       );
-    // Reading the entry just recorded, by its id, is the one way in that costs the same for every owner.
+    // Reading the entry just recorded, by its id, and the link's own latest entry (which a download
+    // within the hour joins) are the ways in that cost the same for every owner.
     const readsActivity = (plan: string[]) =>
-      plan.filter((step) => /^(SCAN|SEARCH) activity\b/.test(step) && !/\(id=\?\) {2}<-/.test(step));
+      plan.filter(
+        (step) =>
+          /^(SCAN|SEARCH) activity\b/.test(step) &&
+          !/\(id=\?\) {2}<-/.test(step) &&
+          !/^SEARCH activity USING INDEX activity_link_entry \(<expr>=\? AND <expr>=\? AND created>\?\) {2}<-/.test(
+            step,
+          ),
+      );
 
     // Without notifications, a first download reads no more than its own entry.
     await download();

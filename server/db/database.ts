@@ -85,6 +85,8 @@ export class Database {
     try {
       this.initialize(schema);
       this.checkStoredTypes();
+      this.checkHeldTotals();
+      this.checkLinkTotals();
     } catch (error) {
       this.sqlite.close();
       if (isDamage(error)) throw new DatabaseDamaged(String((error as Error).message));
@@ -118,6 +120,93 @@ export class Database {
       );
     });
     this.rebuiltStoredTypes = true;
+  }
+
+  /** Members and requests whose held totals were corrected at startup. */
+  correctedHeldTotals = 0;
+
+  /**
+   * The totals of what unfinished uploads hold (users.reserved_bytes and the rest, kept by the
+   * held_* triggers) are worked out again from the uploads themselves, and any that differ are
+   * corrected: when the columns are new to this database, or anything ever changed one without the
+   * other. requests.held_entries and held_bytes are checked the same way against their submissions.
+   */
+  private checkHeldTotals() {
+    type Totals = { reserved: number; visitorUnsent: number; unsentMember: number; unsentVisitor: number };
+    const expected = new Map<string, Totals>();
+    const add = (owner: string, key: keyof Totals, bytes: number) => {
+      const totals = expected.get(owner) ?? { reserved: 0, visitorUnsent: 0, unsentMember: 0, unsentVisitor: 0 };
+      totals[key] += bytes;
+      expected.set(owner, totals);
+    };
+    for (const row of this.all<{ owner: string; bytes: number }>(
+      "SELECT owner, sum(size) AS bytes FROM nodes WHERE state = 'pending' GROUP BY owner",
+    ))
+      add(row.owner, "reserved", row.bytes);
+    for (const row of this.all<{ owner: string; bytes: number }>(
+      `SELECT t.owner, sum(n.size - u.offset) AS bytes FROM nodes n JOIN uploads u ON u.node = n.id
+       JOIN transfers t ON t.id = u.transfer WHERE n.state = 'pending' AND t.principal LIKE 'grant:%' GROUP BY t.owner`,
+    ))
+      add(row.owner, "visitorUnsent", row.bytes);
+    for (const row of this.all<{ owner: string; visitor: number; bytes: number }>(
+      `SELECT t.owner, t.principal LIKE 'grant:%' AS visitor, sum(u.size - u.offset) AS bytes
+       FROM transfers t JOIN uploads u ON u.transfer = t.id
+       WHERE t.state = 'open' AND u.completed IS NULL AND u.node IS NOT NULL GROUP BY t.owner, visitor`,
+    ))
+      add(row.owner, row.visitor ? "unsentVisitor" : "unsentMember", row.bytes);
+    const stored = this.all<{ id: string } & Totals>(
+      `SELECT id, reserved_bytes AS reserved, reserved_visitor_unsent AS visitorUnsent,
+         unsent_member AS unsentMember, unsent_visitor AS unsentVisitor FROM users`,
+    );
+    const wrong = stored.filter((row) => {
+      const want = expected.get(row.id);
+      return (
+        row.reserved !== (want?.reserved ?? 0) ||
+        row.visitorUnsent !== (want?.visitorUnsent ?? 0) ||
+        row.unsentMember !== (want?.unsentMember ?? 0) ||
+        row.unsentVisitor !== (want?.unsentVisitor ?? 0)
+      );
+    });
+    const requests = this.all<{ id: string; entries: number; bytes: number }>(
+      `SELECT r.id, coalesce(h.entries, 0) AS entries, coalesce(h.bytes, 0) AS bytes FROM requests r
+       LEFT JOIN (SELECT i.request_id, count(*) AS entries, sum(n.size) AS bytes FROM items i
+         JOIN nodes n ON n.item = i.id WHERE i.request_id IS NOT NULL GROUP BY i.request_id) h ON h.request_id = r.id
+       WHERE r.held_entries <> coalesce(h.entries, 0) OR r.held_bytes <> coalesce(h.bytes, 0)`,
+    );
+    if (!wrong.length && !requests.length) return;
+    this.tx(() => {
+      for (const row of requests)
+        this.run("UPDATE requests SET held_entries = ?, held_bytes = ? WHERE id = ?", row.entries, row.bytes, row.id);
+      for (const row of wrong) {
+        const want = expected.get(row.id);
+        this.run(
+          `UPDATE users SET reserved_bytes = ?, reserved_visitor_unsent = ?, unsent_member = ?, unsent_visitor = ?
+           WHERE id = ?`,
+          want?.reserved ?? 0,
+          want?.visitorUnsent ?? 0,
+          want?.unsentMember ?? 0,
+          want?.unsentVisitor ?? 0,
+          row.id,
+        );
+      }
+    });
+    this.correctedHeldTotals = wrong.length + requests.length;
+  }
+
+  /**
+   * links.visitors, downloads and last_visit (kept by the link_visits triggers) count everyone a link
+   * ever let in, so they never fall below what its visits add up to. Any that do, as when the columns
+   * are new to this database, are raised to it.
+   */
+  private checkLinkTotals() {
+    this.run(
+      `UPDATE links SET visitors = max(links.visitors, v.visitors), downloads = max(links.downloads, v.downloads),
+         last_visit = max(ifnull(links.last_visit, 0), v.last)
+       FROM (SELECT link, count(*) AS visitors, sum(downloads) AS downloads, max(last) AS last
+             FROM link_visits GROUP BY link) AS v
+       WHERE links.id = v.link
+         AND (links.visitors < v.visitors OR links.downloads < v.downloads OR ifnull(links.last_visit, 0) < v.last)`,
+    );
   }
 
   /** Notes storage failures so health can report them; every statement passes through here. */

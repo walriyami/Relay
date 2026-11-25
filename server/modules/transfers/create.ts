@@ -22,9 +22,12 @@ const NAME_TAKEN = "A file or folder with that name already exists there.";
 
 export { bytesLabel };
 
-/** Open sends one request-link visitor may hold: per visit, and from one address across visits. */
+/**
+ * Open sends one request-link visitor may hold: per visit, and from one network (an IPv4 /24 or
+ * IPv6 /56, as the visit records it) across visits.
+ */
 const OPEN_PER_GRANT = 3;
-const OPEN_PER_ADDRESS = 10;
+export const OPEN_PER_NETWORK = 10;
 
 /** NUL, and half of a surrogate pair on its own: characters a text can't be stored with. */
 const UNSTORABLE = /\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -155,15 +158,17 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           OPEN_PER_GRANT
         )
           fail(429, "Finish or cancel an open transfer before sending more files.");
-        // A new visit (another /start) is a new grant, so its own count alone is easy to reset.
+        // A new visit (another /start) is a new grant, so its own count alone is easy to reset. Visits
+        // from before networks were recorded count with others from their address.
         if (
           ctx.db.value<number>(
-            `SELECT count(*) FROM transfers t JOIN guest_grants g ON g.token_hash = substr(t.principal, 7)
-             JOIN guest_grants mine ON mine.token_hash = ?
-             WHERE t.state = 'open' AND t.principal LIKE 'grant:%'
-               AND g.request_id = mine.request_id AND g.address = mine.address`,
+            `SELECT count(*) FROM guest_grants mine
+             JOIN guest_grants g ON g.request_id = mine.request_id AND g.network IS mine.network
+               AND (mine.network IS NOT NULL OR g.address = mine.address)
+             JOIN transfers t ON t.principal = 'grant:' || g.token_hash AND t.state = 'open'
+             WHERE mine.token_hash = ?`,
             options.principal.tokenHash,
-          )! >= OPEN_PER_ADDRESS
+          )! >= OPEN_PER_NETWORK
         )
           fail(429, "Too many sends to this request are still open from your network. Try again once they finish.");
       }

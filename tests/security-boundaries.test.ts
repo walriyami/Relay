@@ -172,6 +172,10 @@ test("client addresses come only from trusted proxies, given by address, range o
       const response = await pickup(waiting, `198.51.100.${i}`);
       assert.equal(response.statusCode, 503);
       assert.match(response.json<{ error: string }>().error, /starting up/);
+      // Refused before the usual hook, it still carries Relay's own headers.
+      assert.match(String(response.headers["content-security-policy"]), /frame-ancestors 'none'/);
+      assert.equal(response.headers["x-content-type-options"], "nosniff");
+      assert.equal(response.headers["cache-control"], "no-store");
     }
     const direct = await waiting.app.inject({
       method: "POST",
@@ -338,5 +342,25 @@ test("a named proxy that moves is followed at once, and a resolver hiccup doesn'
     assert.equal(proxy.awaitingProxy("192.0.2.6"), true);
   } finally {
     proxy.stop();
+  }
+});
+
+test("the rate limiter's refusal carries Relay's own headers and isn't cached", async () => {
+  const instance = await start();
+  try {
+    // Twenty starts a minute from one address on a request page. (The limit on everything an address
+    // asks is checked at the same point of each route, so this stands for both.)
+    const url = api.requests.start.path.replace(":token", "x".repeat(43));
+    const ask = () =>
+      instance.app.inject({ method: "POST", url, remoteAddress: "198.51.100.7", headers: { host: "relay.test" } });
+    for (let i = 0; i < 20; i++) await ask();
+    const refused = await ask();
+    assert.equal(refused.statusCode, 429);
+    assert.match(String(refused.headers["content-security-policy"]), /frame-ancestors 'none'/);
+    assert.equal(refused.headers["x-frame-options"], "DENY");
+    assert.equal(refused.headers["cache-control"], "no-store");
+    assert.ok(refused.headers["retry-after"]);
+  } finally {
+    await instance.close();
   }
 });

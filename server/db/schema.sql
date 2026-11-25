@@ -27,8 +27,21 @@ CREATE TABLE users (
   prefs TEXT NOT NULL DEFAULT '{}',
   -- Maintained by triggers on nodes: logical bytes of ready file and text nodes.
   bytes_used INTEGER NOT NULL DEFAULT 0,
+  -- What unfinished uploads hold, kept by the held_* triggers below so room checks read a few rows
+  -- instead of adding up every unfinished file (see server/modules/transfers/room.ts). At startup
+  -- Relay recomputes them from the uploads and corrects any that differ.
+  -- `reserved_bytes`: the declared size of this member's pending files.
+  reserved_bytes INTEGER NOT NULL DEFAULT 0,
+  -- Of pending files sent by request-link visitors to this member, the bytes not yet saved.
+  reserved_visitor_unsent INTEGER NOT NULL DEFAULT 0,
+  -- Bytes still to arrive in open transfers to this member: their own, and visitors'.
+  unsent_member INTEGER NOT NULL DEFAULT 0,
+  unsent_visitor INTEGER NOT NULL DEFAULT 0,
   -- Activity up to this time has been seen on some device of the account.
   activity_seen INTEGER NOT NULL DEFAULT 0,
+  -- When removing this member stopped part way (they stay suspended, with what couldn't be
+  -- deleted), until they are removed after all or their suspension is lifted.
+  removal_stopped INTEGER,
   created INTEGER NOT NULL
 ) STRICT;
 
@@ -144,7 +157,12 @@ CREATE TABLE requests (
   max_bytes INTEGER NOT NULL,
   creation_fingerprint TEXT NOT NULL,
   -- When a guest last finished a submission, so the owner's open tabs can say so.
-  last_received INTEGER
+  last_received INTEGER,
+  -- The entries (files, folders and texts) and bytes in this request's submissions, unfinished files
+  -- included: kept by the request_held_* triggers so a visitor's page doesn't count every file.
+  -- Corrected at startup like users.reserved_bytes.
+  held_entries INTEGER NOT NULL DEFAULT 0,
+  held_bytes INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX requests_owner ON requests(owner, created);
 
@@ -297,6 +315,8 @@ CREATE TABLE tabs (
 ) STRICT;
 -- The sweep removes tabs whose lease ended a day ago, closed or not.
 CREATE INDEX tabs_lease ON tabs(lease_expires);
+-- A request-link visit's pages, which are limited (see closeTab) and keep the visit in use.
+CREATE INDEX tabs_principal ON tabs(principal);
 
 CREATE TABLE guest_grants (
   token_hash TEXT PRIMARY KEY,
@@ -306,10 +326,14 @@ CREATE TABLE guest_grants (
   item TEXT REFERENCES items(id) ON DELETE SET NULL,
   created INTEGER NOT NULL,
   expires INTEGER NOT NULL,
-  -- The visitor's address group (see addressKey), so starting a new visit can't reset per-visitor limits.
-  address TEXT
+  -- The visitor's address group (see addressKey) and network (an IPv4 /24 or IPv6 /56, see
+  -- codeNetworkOf), so starting a new visit can't reset per-visitor limits. Visits made before
+  -- 2026-11 have no network, and count by their address alone.
+  address TEXT,
+  network TEXT
 ) STRICT;
-CREATE INDEX guest_grants_request ON guest_grants(request_id);
+-- A request's visits from one network and from one address: limited, and the oldest idle one makes room.
+CREATE INDEX guest_grants_request ON guest_grants(request_id, network, address, created);
 CREATE INDEX guest_grants_item ON guest_grants(item) WHERE item IS NOT NULL;
 CREATE INDEX guest_grants_expires ON guest_grants(expires);
 
@@ -328,6 +352,8 @@ CREATE TABLE transfers (
   finished INTEGER
 ) STRICT;
 CREATE INDEX transfers_open ON transfers(tab) WHERE state = 'open';
+-- A visit's open sends, counted against its limits and keeping the visit in use.
+CREATE INDEX transfers_open_principal ON transfers(principal) WHERE state = 'open';
 -- Every transfer of a tab, for deleting the tab once none is left.
 CREATE INDEX transfers_tab ON transfers(tab);
 CREATE INDEX transfers_item ON transfers(item);
@@ -349,6 +375,155 @@ CREATE INDEX uploads_active ON uploads(id) WHERE completed IS NULL;
 -- Deleting a node clears its upload's reference; without this, every node deleted scans uploads.
 CREATE INDEX uploads_node ON uploads(node) WHERE node IS NOT NULL;
 
+-- The held_* triggers keep users.reserved_bytes, reserved_visitor_unsent, unsent_member and
+-- unsent_visitor. For an upload U of transfer T, credited to T's owner:
+--   reserved_visitor_unsent counts node.size - U.offset while U's node is pending and T is a visitor's;
+--   unsent_member / unsent_visitor count U.size - U.offset while U is unfinished, still has its node,
+--   and T is open (a member's or a visitor's).
+-- Each trigger takes away the old share of the row it changes and adds the new one. A node or
+-- transfer about to be deleted gives up its uploads' shares first; once it is gone they count for
+-- nothing, so the uploads that cascade after it change nothing more.
+-- requests.held_entries and held_bytes. An item about to be deleted takes its nodes off its request
+-- first; the nodes that cascade after it no longer find their item, so they change nothing more.
+CREATE TRIGGER request_held_nodes_insert AFTER INSERT ON nodes BEGIN
+  UPDATE requests SET held_entries = held_entries + 1, held_bytes = held_bytes + NEW.size
+    WHERE id = (SELECT request_id FROM items WHERE id = NEW.item);
+END;
+CREATE TRIGGER request_held_nodes_delete AFTER DELETE ON nodes BEGIN
+  UPDATE requests SET held_entries = held_entries - 1, held_bytes = held_bytes - OLD.size
+    WHERE id = (SELECT request_id FROM items WHERE id = OLD.item);
+END;
+CREATE TRIGGER request_held_nodes_update AFTER UPDATE OF item, size ON nodes
+WHEN OLD.item IS NOT NEW.item OR OLD.size IS NOT NEW.size BEGIN
+  UPDATE requests SET held_entries = held_entries - 1, held_bytes = held_bytes - OLD.size
+    WHERE id = (SELECT request_id FROM items WHERE id = OLD.item);
+  UPDATE requests SET held_entries = held_entries + 1, held_bytes = held_bytes + NEW.size
+    WHERE id = (SELECT request_id FROM items WHERE id = NEW.item);
+END;
+CREATE TRIGGER request_held_items_before_delete BEFORE DELETE ON items WHEN OLD.request_id IS NOT NULL BEGIN
+  UPDATE requests SET
+      held_entries = held_entries - (SELECT count(*) FROM nodes WHERE item = OLD.id),
+      held_bytes = held_bytes - (SELECT ifnull(sum(size), 0) FROM nodes WHERE item = OLD.id)
+    WHERE id = OLD.request_id;
+END;
+CREATE TRIGGER request_held_items_update AFTER UPDATE OF request_id ON items
+WHEN OLD.request_id IS NOT NEW.request_id BEGIN
+  UPDATE requests SET
+      held_entries = held_entries - (SELECT count(*) FROM nodes WHERE item = OLD.id),
+      held_bytes = held_bytes - (SELECT ifnull(sum(size), 0) FROM nodes WHERE item = OLD.id)
+    WHERE id = OLD.request_id;
+  UPDATE requests SET
+      held_entries = held_entries + (SELECT count(*) FROM nodes WHERE item = NEW.id),
+      held_bytes = held_bytes + (SELECT ifnull(sum(size), 0) FROM nodes WHERE item = NEW.id)
+    WHERE id = NEW.request_id;
+END;
+
+CREATE TRIGGER held_nodes_insert AFTER INSERT ON nodes WHEN NEW.state = 'pending' AND NEW.size <> 0 BEGIN
+  UPDATE users SET reserved_bytes = reserved_bytes + NEW.size WHERE id = NEW.owner;
+END;
+CREATE TRIGGER held_nodes_delete AFTER DELETE ON nodes WHEN OLD.state = 'pending' AND OLD.size <> 0 BEGIN
+  UPDATE users SET reserved_bytes = reserved_bytes - OLD.size WHERE id = OLD.owner;
+END;
+CREATE TRIGGER held_nodes_before_delete BEFORE DELETE ON nodes WHEN OLD.state = 'pending' BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (
+      SELECT sum(OLD.size - u.offset) FROM uploads u JOIN transfers t ON t.id = u.transfer
+      WHERE u.node = OLD.id AND t.principal LIKE 'grant:%' AND t.owner = users.id)
+    WHERE id IN (SELECT t.owner FROM uploads u JOIN transfers t ON t.id = u.transfer
+      WHERE u.node = OLD.id AND t.principal LIKE 'grant:%');
+END;
+CREATE TRIGGER held_nodes_update AFTER UPDATE OF state, size, owner ON nodes
+WHEN OLD.state IS NOT NEW.state OR OLD.size IS NOT NEW.size OR OLD.owner IS NOT NEW.owner BEGIN
+  UPDATE users SET reserved_bytes = reserved_bytes - OLD.size WHERE id = OLD.owner AND OLD.state = 'pending';
+  UPDATE users SET reserved_bytes = reserved_bytes + NEW.size WHERE id = NEW.owner AND NEW.state = 'pending';
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent
+      - (CASE WHEN OLD.state = 'pending' THEN (
+          SELECT ifnull(sum(OLD.size - u.offset), 0) FROM uploads u JOIN transfers t ON t.id = u.transfer
+          WHERE u.node = OLD.id AND t.principal LIKE 'grant:%' AND t.owner = users.id) ELSE 0 END)
+      + (CASE WHEN NEW.state = 'pending' THEN (
+          SELECT ifnull(sum(NEW.size - u.offset), 0) FROM uploads u JOIN transfers t ON t.id = u.transfer
+          WHERE u.node = NEW.id AND t.principal LIKE 'grant:%' AND t.owner = users.id) ELSE 0 END)
+    WHERE id IN (SELECT t.owner FROM uploads u JOIN transfers t ON t.id = u.transfer
+      WHERE u.node = NEW.id AND t.principal LIKE 'grant:%');
+END;
+CREATE TRIGGER held_uploads_insert AFTER INSERT ON uploads BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent + (SELECT size - NEW.offset FROM nodes WHERE id = NEW.node)
+    WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = NEW.node
+      WHERE t.id = NEW.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
+  UPDATE users SET
+      unsent_member = unsent_member + (SELECT CASE WHEN principal LIKE 'grant:%' THEN 0 ELSE NEW.size - NEW.offset END FROM transfers WHERE id = NEW.transfer),
+      unsent_visitor = unsent_visitor + (SELECT CASE WHEN principal LIKE 'grant:%' THEN NEW.size - NEW.offset ELSE 0 END FROM transfers WHERE id = NEW.transfer)
+    WHERE NEW.completed IS NULL AND NEW.node IS NOT NULL
+      AND id = (SELECT owner FROM transfers WHERE id = NEW.transfer AND state = 'open');
+END;
+CREATE TRIGGER held_uploads_delete AFTER DELETE ON uploads BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (SELECT size - OLD.offset FROM nodes WHERE id = OLD.node)
+    WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = OLD.node
+      WHERE t.id = OLD.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
+  UPDATE users SET
+      unsent_member = unsent_member - (SELECT CASE WHEN principal LIKE 'grant:%' THEN 0 ELSE OLD.size - OLD.offset END FROM transfers WHERE id = OLD.transfer),
+      unsent_visitor = unsent_visitor - (SELECT CASE WHEN principal LIKE 'grant:%' THEN OLD.size - OLD.offset ELSE 0 END FROM transfers WHERE id = OLD.transfer)
+    WHERE OLD.completed IS NULL AND OLD.node IS NOT NULL
+      AND id = (SELECT owner FROM transfers WHERE id = OLD.transfer AND state = 'open');
+END;
+CREATE TRIGGER held_uploads_update AFTER UPDATE OF node, transfer, size, offset, completed ON uploads
+WHEN OLD.node IS NOT NEW.node OR OLD.transfer IS NOT NEW.transfer OR OLD.size IS NOT NEW.size
+  OR OLD.offset IS NOT NEW.offset OR (OLD.completed IS NULL) IS NOT (NEW.completed IS NULL) BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (SELECT size - OLD.offset FROM nodes WHERE id = OLD.node)
+    WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = OLD.node
+      WHERE t.id = OLD.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent + (SELECT size - NEW.offset FROM nodes WHERE id = NEW.node)
+    WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = NEW.node
+      WHERE t.id = NEW.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
+  UPDATE users SET
+      unsent_member = unsent_member - (SELECT CASE WHEN principal LIKE 'grant:%' THEN 0 ELSE OLD.size - OLD.offset END FROM transfers WHERE id = OLD.transfer),
+      unsent_visitor = unsent_visitor - (SELECT CASE WHEN principal LIKE 'grant:%' THEN OLD.size - OLD.offset ELSE 0 END FROM transfers WHERE id = OLD.transfer)
+    WHERE OLD.completed IS NULL AND OLD.node IS NOT NULL
+      AND id = (SELECT owner FROM transfers WHERE id = OLD.transfer AND state = 'open');
+  UPDATE users SET
+      unsent_member = unsent_member + (SELECT CASE WHEN principal LIKE 'grant:%' THEN 0 ELSE NEW.size - NEW.offset END FROM transfers WHERE id = NEW.transfer),
+      unsent_visitor = unsent_visitor + (SELECT CASE WHEN principal LIKE 'grant:%' THEN NEW.size - NEW.offset ELSE 0 END FROM transfers WHERE id = NEW.transfer)
+    WHERE NEW.completed IS NULL AND NEW.node IS NOT NULL
+      AND id = (SELECT owner FROM transfers WHERE id = NEW.transfer AND state = 'open');
+END;
+CREATE TRIGGER held_transfers_before_delete BEFORE DELETE ON transfers BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (
+      SELECT ifnull(sum(n.size - u.offset), 0) FROM uploads u JOIN nodes n ON n.id = u.node
+      WHERE u.transfer = OLD.id AND n.state = 'pending')
+    WHERE id = OLD.owner AND OLD.principal LIKE 'grant:%';
+  UPDATE users SET
+      unsent_member = unsent_member - (CASE WHEN OLD.principal LIKE 'grant:%' THEN 0 ELSE (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = OLD.id AND completed IS NULL AND node IS NOT NULL) END),
+      unsent_visitor = unsent_visitor - (CASE WHEN OLD.principal LIKE 'grant:%' THEN (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = OLD.id AND completed IS NULL AND node IS NOT NULL) ELSE 0 END)
+    WHERE id = OLD.owner AND OLD.state = 'open';
+END;
+CREATE TRIGGER held_transfers_visitor AFTER UPDATE OF principal, owner ON transfers
+WHEN OLD.principal IS NOT NEW.principal OR OLD.owner IS NOT NEW.owner BEGIN
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (
+      SELECT ifnull(sum(n.size - u.offset), 0) FROM uploads u JOIN nodes n ON n.id = u.node
+      WHERE u.transfer = OLD.id AND n.state = 'pending')
+    WHERE id = OLD.owner AND OLD.principal LIKE 'grant:%';
+  UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent + (
+      SELECT ifnull(sum(n.size - u.offset), 0) FROM uploads u JOIN nodes n ON n.id = u.node
+      WHERE u.transfer = NEW.id AND n.state = 'pending')
+    WHERE id = NEW.owner AND NEW.principal LIKE 'grant:%';
+END;
+CREATE TRIGGER held_transfers_open AFTER UPDATE OF state, principal, owner ON transfers
+WHEN (OLD.state = 'open') IS NOT (NEW.state = 'open') OR OLD.principal IS NOT NEW.principal OR OLD.owner IS NOT NEW.owner BEGIN
+  UPDATE users SET
+      unsent_member = unsent_member - (CASE WHEN OLD.principal LIKE 'grant:%' THEN 0 ELSE (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = OLD.id AND completed IS NULL AND node IS NOT NULL) END),
+      unsent_visitor = unsent_visitor - (CASE WHEN OLD.principal LIKE 'grant:%' THEN (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = OLD.id AND completed IS NULL AND node IS NOT NULL) ELSE 0 END)
+    WHERE id = OLD.owner AND OLD.state = 'open';
+  UPDATE users SET
+      unsent_member = unsent_member + (CASE WHEN NEW.principal LIKE 'grant:%' THEN 0 ELSE (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = NEW.id AND completed IS NULL AND node IS NOT NULL) END),
+      unsent_visitor = unsent_visitor + (CASE WHEN NEW.principal LIKE 'grant:%' THEN (
+        SELECT ifnull(sum(size - offset), 0) FROM uploads WHERE transfer = NEW.id AND completed IS NULL AND node IS NOT NULL) ELSE 0 END)
+    WHERE id = NEW.owner AND NEW.state = 'open';
+END;
+
 -- Public links show an item's current contents while the link is valid. A link can be kept until
 -- turned off (expires NULL), locked with a password, limited to a number of people, and carry a
 -- short note for whoever opens it. `password_hash` is a scrypt hash; the password is never kept.
@@ -364,7 +539,12 @@ CREATE TABLE links (
   revoked INTEGER,
   password_hash TEXT,
   visitor_limit INTEGER CHECK (visitor_limit IS NULL OR visitor_limit >= 1),
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  -- Kept by the link_visits triggers: the people let in, their downloads, and the last time one was
+  -- here. They count everyone ever let in, so forgetting old visits (see link_visits) keeps them.
+  visitors INTEGER NOT NULL DEFAULT 0,
+  downloads INTEGER NOT NULL DEFAULT 0,
+  last_visit INTEGER
 ) STRICT;
 CREATE INDEX links_owner ON links(owner, created);
 CREATE INDEX links_item ON links(item);
@@ -373,7 +553,9 @@ CREATE INDEX links_item ON links(item);
 -- cookie and the link id, so rows can't be matched across links. Nothing identifying is stored:
 -- `device` is a coarse label such as "Safari on iPhone". `unlocked` holds the password hash the
 -- visitor last unlocked with; changing or removing the password makes it stale. The owner's own
--- views are never recorded.
+-- views are never recorded. `network` is an HMAC of the visitor's network (IPv4 /24, IPv6 /48) and
+-- the link id, to count new people per network; visits before 2026-11 have none. A link without a
+-- limit keeps its most recently active visits only (see VISITS_KEPT in links/service.ts).
 CREATE TABLE link_visits (
   id TEXT PRIMARY KEY,
   link TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
@@ -384,8 +566,24 @@ CREATE TABLE link_visits (
   downloads INTEGER NOT NULL DEFAULT 0,
   last_download INTEGER,
   unlocked TEXT,
+  network TEXT,
   UNIQUE (link, visitor)
 ) STRICT;
+CREATE INDEX link_visits_last ON link_visits(link, last, id);
+CREATE INDEX link_visits_network ON link_visits(link, network, first);
+
+-- links.visitors, downloads and last_visit. Deleting a visit leaves them: they count everyone ever let in.
+CREATE TRIGGER link_visits_insert AFTER INSERT ON link_visits BEGIN
+  UPDATE links SET visitors = visitors + 1, downloads = downloads + NEW.downloads,
+      last_visit = max(ifnull(last_visit, 0), NEW.last)
+    WHERE id = NEW.link;
+END;
+CREATE TRIGGER link_visits_update AFTER UPDATE OF downloads, last ON link_visits BEGIN
+  UPDATE links SET downloads = downloads + NEW.downloads - OLD.downloads,
+      last_visit = max(ifnull(last_visit, 0), NEW.last)
+    WHERE id = NEW.link;
+END;
+
 -- Whether a link has been downloaded before, however many people only opened it.
 CREATE INDEX link_visits_downloaded ON link_visits(link) WHERE downloads > 0;
 
@@ -420,7 +618,11 @@ CREATE TABLE activity (
   data TEXT NOT NULL
 ) STRICT;
 CREATE INDEX activity_owner ON activity(owner, created);
+CREATE INDEX activity_owner_kind ON activity(owner, kind, created);
 CREATE INDEX activity_created ON activity(created);
+-- A link's latest entry for opening or downloading, which others within the hour join.
+CREATE INDEX activity_link_entry ON activity(json_extract(data, '$.linkId'), json_extract(data, '$.action'), created)
+  WHERE kind = 'link';
 
 -- Hourly usage per member, for their Usage page and for Admin. `hour` counts whole hours since the
 -- epoch (UTC). Bytes: `uploaded` by the member, `received` from guests through their requests,

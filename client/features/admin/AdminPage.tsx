@@ -177,7 +177,9 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
                   </strong>
                   {u.id === me.user.id && <span className="muted"> (you)</span>}
                   {u.admin && <span className="pill">Administrator</span>}
-                  {u.disabled && <span className="pill danger">Suspended</span>}
+                  {u.disabled && (
+                    <span className="pill danger">{u.removalStopped ? "Removal didn’t finish" : "Suspended"}</span>
+                  )}
                   {u.walriyami && <span className="pill">Walriyami</span>}
                 </span>
                 <span className="muted">
@@ -784,7 +786,11 @@ function RemoveMember({ member, onRemoved }: { member: AdminMember; onRemoved: (
     <div className="setting-row danger-zone">
       <span className="setting-label">
         <strong>Remove member</strong>
-        <span className="field-hint">Deletes their account, files and links, and frees their space.</span>
+        <span className="field-hint">
+          {member.removalStopped
+            ? `Removing them stopped ${ago(member.removalStopped)} before everything of theirs was deleted. They’re suspended until you remove them again.`
+            : "Deletes their account, files and links, and frees their space."}
+        </span>
       </span>
       <Button className="danger-text" icon={<UserMinus size={16} />} busy={busy} onClick={() => void remove()}>
         Remove member…

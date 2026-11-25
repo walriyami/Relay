@@ -8,7 +8,7 @@ import { LIMITS, type StreamReady } from "../shared/model.ts";
 import { build } from "../server/build-info.ts";
 import { MAX_GUEST_COOKIES } from "../server/lib/auth.ts";
 import { randomToken } from "../server/lib/secrets.ts";
-import { MAX_LARGE_GUEST_BODIES } from "../server/lib/http.ts";
+import { MAX_LARGE_GUEST_BODIES, MAX_LARGE_GUEST_BODIES_EACH } from "../server/lib/http.ts";
 import { Client, admin, member, start, type Instance } from "./support/harness.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
@@ -19,7 +19,7 @@ import { eventually, listen, Stream } from "./support/event-stream.ts";
 function postUnfinished(
   address: string,
   path: string,
-  { cookie = "", csrf = "", size = LIMITS.manifestBytes - 1024 } = {},
+  { cookie = "", csrf = "", size = LIMITS.manifestBytes - 1024, from = "" } = {},
 ) {
   const { hostname, port } = new URL(address);
   const socket = connect(Number(port), hostname);
@@ -42,6 +42,8 @@ function postUnfinished(
       `Content-Length: ${size}`,
       ...(cookie ? [`Cookie: ${cookie}`] : []),
       ...(csrf ? [`X-Relay-CSRF: ${csrf}`] : []),
+      // Relay takes the loopback proxy's word for where a request comes from.
+      ...(from ? [`X-Forwarded-For: ${from}`] : []),
       "",
       `{"id":"${crypto.randomUUID()}","files":[`,
     ].join("\r\n"),
@@ -114,36 +116,60 @@ test("a request link's guests can have only a few large manifests read at once",
   const held: ReturnType<typeof postUnfinished>[] = [];
   try {
     const owner = await member(instance, "xena");
-    const request = await openRequest(owner);
-    const visitor = await guestOf(instance, request.token);
+    const links: { token: string; path: string; visitor: Client; credential: { cookie: string; csrf: string } }[] = [];
+    for (let i = 0; i < 4; i++) {
+      const request = await openRequest(owner);
+      const visitor = await guestOf(instance, request.token);
+      links.push({
+        token: request.token,
+        path: `/api/r/${request.token}/transfers`,
+        visitor,
+        credential: { cookie: cookieHeader(visitor), csrf: visitor.csrf },
+      });
+    }
     const address = await listen(instance);
-    const path = `/api/r/${request.token}/transfers`;
-    const credential = { cookie: cookieHeader(visitor), csrf: visitor.csrf };
 
     // What Relay answers within a moment, or "waited" while it waits for the body.
-    const promptly = async (path: string, credential: { cookie: string; csrf: string }) => {
+    const promptly = async (path: string, credential: { cookie: string; csrf: string; from?: string }) => {
       const { socket, answer } = postUnfinished(address, path, credential);
       const got = await Promise.race([answer, new Promise<string>((resolve) => setTimeout(resolve, 200, "waited"))]);
       socket.destroy();
       return got;
     };
+    const unfinished = (link: (typeof links)[number], from: string) =>
+      held.push(postUnfinished(address, link.path, { ...link.credential, from }));
+    const [first, second, third, fourth] = links;
 
-    // These are admitted, and Relay waits for the rest of their bodies.
-    for (let i = 0; i < MAX_LARGE_GUEST_BODIES; i++) held.push(postUnfinished(address, path, credential));
+    // One link, or one network, may hold only its share of the places: Relay waits for these bodies...
+    for (let i = 0; i < MAX_LARGE_GUEST_BODIES_EACH; i++) unfinished(first, "198.51.100.1");
     let busy = "";
-    await eventually(async () => statusOf((busy = await promptly(path, credential))) === 503);
+    await eventually(
+      async () => statusOf((busy = await promptly(first.path, { ...first.credential, from: "203.0.113.1" }))) === 503,
+    );
     assert.match(busy, /\r\nretry-after: 5\r\n/i);
+    // ...the same network on another link is refused too, and another network on another link is not.
+    assert.equal(statusOf(await promptly(second.path, { ...second.credential, from: "198.51.100.2" })), 503);
+    assert.equal(await promptly(second.path, { ...second.credential, from: "203.0.113.1" }), "waited");
+    // Once every place is taken, nobody else is read.
+    unfinished(second, "203.0.113.1");
+    unfinished(third, "192.0.2.1");
+    assert.equal(MAX_LARGE_GUEST_BODIES, 2 * MAX_LARGE_GUEST_BODIES_EACH);
+    await eventually(
+      async () => statusOf(await promptly(fourth.path, { ...fourth.credential, from: "233.252.0.1" })) === 503,
+    );
     // A small one never waits for them, and neither does a member's large one.
-    await visitor.call(api.requests.transfer, {
-      params: { token: request.token },
-      body: { id: crypto.randomUUID(), tab: visitor.tab, folders: [], files: [{ path: "a.pdf", size: 3 }] },
+    await fourth.visitor.call(api.requests.transfer, {
+      params: { token: fourth.token },
+      body: { id: crypto.randomUUID(), tab: fourth.visitor.tab, folders: [], files: [{ path: "a.pdf", size: 3 }] },
     });
     const owned = { cookie: cookieHeader(owner), csrf: owner.csrf };
     assert.equal(await promptly(api.transfers.create.path, owned), "waited");
 
     // Their places free up when they're cut off.
     for (const { socket } of held) socket.destroy();
-    await eventually(async () => (await promptly(path, credential)) === "waited");
+    await eventually(
+      async () => (await promptly(first.path, { ...first.credential, from: "198.51.100.1" })) === "waited",
+    );
   } finally {
     for (const { socket } of held) socket.destroy();
     await instance.close();

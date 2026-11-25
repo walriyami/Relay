@@ -182,6 +182,10 @@ export class Secrets {
   linkToken(linkId: string) {
     return this.mac("link", linkId).toString("base64url");
   }
+  /** Tells a link's visitors' networks apart without storing them, nor matching them across links. */
+  linkVisitNetwork(linkId: string, network: string) {
+    return this.mac("link-visit-network", `${linkId}\n${network}`).toString("base64url").slice(0, 22);
+  }
   requestToken(requestId: string) {
     return this.mac("request", requestId).toString("base64url");
   }

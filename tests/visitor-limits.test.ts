@@ -8,6 +8,8 @@ import { api, urls } from "../shared/api.ts";
 import { DEFAULTS, LIMITS } from "../shared/model.ts";
 import { GUEST_STREAMS_PER_ADDRESS } from "../server/modules/auth/streams.ts";
 import { UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
+import { OPEN_PER_NETWORK } from "../server/modules/transfers/create.ts";
+import { VISITS_PER_ADDRESS, VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
 import { receiversOf } from "../server/modules/transfers/receivers.ts";
 import { DISK_HEADROOM } from "../server/modules/transfers/room.ts";
 import { ApiError, Client, admin, member, patchUpload, start, type Instance } from "./support/harness.ts";
@@ -142,14 +144,87 @@ test("starting new visits doesn't reset how many sends one network may hold open
     const request = await owner.call(api.requests.create, {
       body: { id: crypto.randomUUID(), name: "Open", description: "", days: 5, maxBytes: 1000 },
     });
-    for (let i = 0; i < 10; i++)
-      await sendTo(await visit(instance, request.token), request.token, [{ path: "a", size: 1 }]);
-    const refused = await sendTo(await visit(instance, request.token), request.token, [{ path: "a", size: 1 }]).catch(
-      (error: ApiError) => error,
-    );
-    assert.equal((refused as ApiError).status, 429);
-    const elsewhere = await visit(instance, request.token, "203.0.113.9");
-    assert.ok(await sendTo(elsewhere, request.token, [{ path: "a", size: 1 }]), "another network still can");
+    const one = (address: string) =>
+      visit(instance, request.token, address).then((guest) =>
+        status(sendTo(guest, request.token, [{ path: "a", size: 1 }])),
+      );
+    // Each from its own address in one IPv4 /24, and in one IPv6 /56.
+    for (let i = 1; i <= OPEN_PER_NETWORK; i++) assert.equal(await one(`198.51.100.${i}`), 200);
+    assert.equal(await one("198.51.100.200"), 429, "the next address along is the same network");
+    for (let i = 1; i <= OPEN_PER_NETWORK; i++) assert.equal(await one(`2001:db8:0:${i}::1`), 200);
+    assert.equal(await one("2001:db8:0:ff::1"), 429, "so is another /64 in the same /56");
+    assert.equal(await one("198.51.101.1"), 200, "another network still can");
+    assert.equal(await one("2001:db8:0:100::1"), 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("visits without a cookie don't pile up: one device cycles through its own, and those sending stay", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "piling-owner");
+    const create = (name: string) =>
+      owner.call(api.requests.create, {
+        body: { id: crypto.randomUUID(), name, description: "", days: 5, maxBytes: 1000 },
+      });
+    const file = [{ path: "a", size: 1 }];
+    const visits = (requestId: string, column: "address" | "network", value: string) =>
+      instance.ctx.db.value<number>(
+        `SELECT count(*) FROM guest_grants WHERE request_id = ? AND ${column} = ?`,
+        requestId,
+        value,
+      );
+
+    // One device starting visit after visit forgets its own oldest, not its neighbour's.
+    const piles = await create("Piles");
+    const neighbour = await visit(instance, piles.token, "198.51.100.50");
+    const busy = await visit(instance, piles.token, "198.51.100.7");
+    await sendTo(busy, piles.token, file);
+    for (let i = 0; i < VISITS_PER_ADDRESS + 2; i++) await visit(instance, piles.token, "198.51.100.7");
+    assert.equal(visits(piles.id, "address", "198.51.100.7"), VISITS_PER_ADDRESS);
+    assert.equal(await status(sendTo(busy, piles.token, file)), 200, "its visit with a send open stays");
+    assert.equal(await status(sendTo(neighbour, piles.token, file)), 200, "its neighbour's stays");
+
+    // A network full of many devices' visits forgets its oldest that isn't sending; a cancelled
+    // send doesn't keep a visit.
+    const crowd = await create("Crowd");
+    const idle = await visit(instance, crowd.token, "198.51.100.1");
+    const sending = await visit(instance, crowd.token, "198.51.100.2");
+    await sendTo(sending, crowd.token, file);
+    const cancelled = await visit(instance, crowd.token, "198.51.100.3");
+    await cancelled.call(api.transfers.cancel, { params: { id: (await sendTo(cancelled, crowd.token, file)).id } });
+    for (let i = 4; i < VISITS_PER_NETWORK + 10; i++) await visit(instance, crowd.token, `198.51.100.${i}`);
+    assert.equal(visits(crowd.id, "network", "198.51.100.0/24"), VISITS_PER_NETWORK);
+    assert.equal(await status(sendTo(idle, crowd.token, file)), 401);
+    assert.equal(await status(sendTo(cancelled, crowd.token, file)), 401);
+    assert.equal(await status(sendTo(sending, crowd.token, file)), 200);
+    // Coming back is simply a new visit, and another network is untouched.
+    await idle.call(api.requests.start, { params: { token: crowd.token } });
+    assert.equal(await status(sendTo(idle, crowd.token, file)), 200);
+    await visit(instance, crowd.token, "203.0.113.1");
+    assert.equal(visits(crowd.id, "network", "203.0.113.0/24"), 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("closing pages a visit never used leaves only a few records", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "closing-tabs-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Tabs", description: "", days: 5, maxBytes: 1000 },
+    });
+    const guest = await visit(instance, request.token);
+    for (let i = 0; i < 40; i++)
+      await guest.call(api.transfers.closeTab, { params: { id: crypto.randomUUID().replaceAll("-", "") } });
+    const recorded = instance.ctx.db.value<number>("SELECT count(*) FROM tabs WHERE principal LIKE 'grant:%'")!;
+    assert.ok(recorded > 0 && recorded <= 8, `${recorded} tabs recorded`);
+    // A member's are kept: closing first still refuses a send that was on its way.
+    const tab = crypto.randomUUID().replaceAll("-", "");
+    await owner.call(api.transfers.closeTab, { params: { id: tab } });
+    assert.equal(instance.ctx.db.value("SELECT closed IS NOT NULL FROM tabs WHERE id = ?", tab), 1);
   } finally {
     await instance.close();
   }
@@ -332,12 +407,15 @@ test("one network can hold only a few visitors' live-update streams per request;
       return stream.events[0].split("\n")[0];
     };
     for (let i = 0; i < GUEST_STREAMS_PER_ADDRESS; i++) assert.equal(await open(request.token), "event: ready");
-    // Asking again past the cap costs no query per open stream.
+    // Asking again past the cap costs no query per open stream, and leaves no record of the page.
+    const tabs = () => instance.ctx.db.value<number>("SELECT count(*) FROM tabs");
+    const before = tabs();
     const get = t.mock.method(instance.ctx.db, "get");
     assert.equal(await open(request.token), "event: limited");
     const grantChecks = get.mock.calls.filter((call) => String(call.arguments[0]).includes("JOIN requests r")).length;
     assert.ok(grantChecks <= 1, `${grantChecks} grant checks for one refused stream`);
     get.mock.restore();
+    assert.equal(tabs(), before, "a refused stream adds no tab");
     // The same network still gets live updates on another request.
     assert.equal(await open((await create("Other")).token), "event: ready");
   } finally {

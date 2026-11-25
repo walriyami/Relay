@@ -9,6 +9,7 @@ import { cleanFileName } from "../../../shared/text.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
 import { addressKey, perAddress } from "../auth/limits.ts";
+import { codeNetworkOf } from "../../lib/pickup-code-guard.ts";
 import { autoName } from "../library/summary.ts";
 import { ensureTransferAvailability } from "../transfers/availability.ts";
 import { visitorStorageRoom } from "../transfers/room.ts";
@@ -52,7 +53,23 @@ export function used(ctx: Context, requestId: string) {
   )!;
 }
 
-/** What the request can still accept: its size limit, and the fixed entry guard against empty-file floods. */
+/**
+ * What the request can still accept, for its visitors: its size limit, and the fixed entry guard
+ * against empty-file floods. Read from the totals the request_held_* triggers keep (schema.sql), so
+ * a visitor's page view or send costs the same however many files the request holds.
+ */
+export function room(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes">) {
+  const held = ctx.db.get<{ entries: number; bytes: number }>(
+    "SELECT held_entries AS entries, held_bytes AS bytes FROM requests WHERE id = ?",
+    request.id,
+  ) ?? { entries: 0, bytes: 0 };
+  return {
+    bytes: Math.max(0, request.max_bytes - held.bytes),
+    entries: Math.max(0, LIMITS.requestEntries - held.entries),
+  };
+}
+
+/** What the request can still accept, with how its bytes divide, for the owner's list. */
 export function remaining(ctx: Context, request: Pick<OpenRow, "id" | "max_bytes">) {
   const held = used(ctx, request.id);
   return {
@@ -96,10 +113,49 @@ function submissionName(
   return name.join("").trim();
 }
 
+/**
+ * Visits (grants) one address and one network may keep to one request. Each lasts as long as the
+ * request, so without a limit every cookie-less `/start` would add a row for up to a year.
+ */
+export const VISITS_PER_ADDRESS = 16;
+export const VISITS_PER_NETWORK = 64;
+
+/**
+ * Makes room for one more visit from `address` by forgetting an idle one: a visit with no send
+ * open, which a visitor's page needs only to send. It forgets the address's own oldest first, so
+ * one device starting visits over and over cycles through its own and leaves its neighbours' be;
+ * only a network full of several addresses' visits gives up its oldest. A network may keep only 10
+ * sends open, far fewer than either limit, so there is always an idle visit, and a visitor whose
+ * visit was forgotten is given a new one when they next send, as their page asks before each send.
+ */
+function makeRoomForVisit(ctx: Context, requestId: string, network: string, address: string) {
+  const count = (sql: string, limit: number, ...args: string[]) =>
+    ctx.db.value<number>(`SELECT count(*) FROM (SELECT 1 FROM guest_grants WHERE ${sql} LIMIT ?)`, ...args, limit)!;
+  const ownFull =
+    count("request_id = ? AND network = ? AND address = ?", VISITS_PER_ADDRESS, requestId, network, address) >=
+    VISITS_PER_ADDRESS;
+  if (!ownFull && count("request_id = ? AND network = ?", VISITS_PER_NETWORK, requestId, network) < VISITS_PER_NETWORK)
+    return;
+  const idle = ctx.db.value<string>(
+    `SELECT g.token_hash FROM guest_grants g
+     WHERE g.request_id = ? AND g.network = ? AND (? = 0 OR g.address = ?)
+       AND NOT EXISTS (SELECT 1 FROM transfers t WHERE t.principal = 'grant:' || g.token_hash AND t.state = 'open')
+     ORDER BY g.address = ? DESC, g.created LIMIT 1`,
+    requestId,
+    network,
+    ownFull ? 1 : 0,
+    address,
+    address,
+  );
+  if (idle === undefined)
+    fail(429, "Too many people on your network are sending to this request. Try again in a few minutes.");
+  ctx.db.run("DELETE FROM guest_grants WHERE token_hash = ?", idle);
+}
+
 export function registerGuests(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.requests.open, ({ params }): PublicRequest => {
     const request = openRequest(ctx, params.token);
-    const left = remaining(ctx, request);
+    const left = room(ctx, request);
     // The request's own room is only part of it: the server and the owner's storage must take the
     // bytes too, or a visitor is told there is room and then refused at the first byte.
     const storage = visitorStorageRoom(ctx, request.owner);
@@ -133,15 +189,22 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       }
       const token = randomToken();
       const csrf = randomToken();
-      ctx.db.run(
-        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address) VALUES(?, ?, ?, ?, ?, ?)",
-        sha256(token),
-        request.id,
-        csrf,
-        Date.now(),
-        request.expires,
-        addressKey(req.ip),
-      );
+      const address = addressKey(req.ip);
+      const network = codeNetworkOf(req.ip);
+      ctx.db.tx(() => {
+        makeRoomForVisit(ctx, request.id, network, address);
+        ctx.db.run(
+          `INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address, network)
+           VALUES(?, ?, ?, ?, ?, ?, ?)`,
+          sha256(token),
+          request.id,
+          csrf,
+          Date.now(),
+          request.expires,
+          address,
+          network,
+        );
+      });
       reply.setCookie(cookie, token, options);
       return { csrf };
     },
@@ -173,7 +236,7 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
           // Worked out from the plan the create makes anyway, so a long list is planned once.
           itemName: (plan) => submissionName(request.name, sender, input.text, plan),
           sender,
-          limit: remaining(ctx, request),
+          limit: room(ctx, request),
         },
       );
       ctx.events.publish(request.owner, "requests");

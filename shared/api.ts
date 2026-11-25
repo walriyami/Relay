@@ -440,8 +440,14 @@ export const api = {
     /** The people a link let in, most recent first. */
     visits: endpoint<M.LinkVisit[]>()("GET", "/api/links/:id/visits", { auth: "member" }),
     revoke: ok("DELETE", "/api/links/:id", { auth: "member" }),
-    /** Lets this browser in: sets its visitor cookie, and counts it toward a limit. */
-    open: endpoint<M.ShareOpen>()("GET", "/api/s/:token", { auth: "public" }),
+    /**
+     * Lets this browser in: sets its visitor cookie, and counts it toward a limit. A browser without
+     * the cookie is first redirected back here with `again`, carrying the new cookie.
+     */
+    open: endpoint<M.ShareOpen>()("GET", "/api/s/:token", {
+      auth: "public",
+      query: z.object({ again: z.optional(z.literal("1")) }),
+    }),
     /** Unlocks a password-protected link for this browser. */
     unlock: endpoint<M.PublicShare>()("POST", "/api/s/:token/unlock", {
       auth: "public",

@@ -290,6 +290,9 @@ export function removeUpload(ctx: Context, receivers: Receivers, upload: UploadR
   publishItemChange(ctx, upload.owner, upload.item);
 }
 
+/** Once one request-link visit has this many pages on record, closing one Relay never saw adds none. */
+const GUEST_TABS = 8;
+
 export function closeTab(
   ctx: Context,
   receivers: Receivers,
@@ -299,10 +302,19 @@ export function closeTab(
 ) {
   const row = ctx.db.get<{ principal: string }>("SELECT principal FROM tabs WHERE id = ?", tab);
   if (!row) {
+    // Closed before it was ever used: kept, closed, so a create still on its way is refused. A
+    // request-link visit may keep only a few of these, so made-up names can't pile up rows.
+    const key = principalKey(caller);
+    if (
+      caller.kind === "grant" &&
+      ctx.db.value<number>("SELECT count(*) FROM (SELECT 1 FROM tabs WHERE principal = ? LIMIT ?)", key, GUEST_TABS)! >=
+        GUEST_TABS
+    )
+      return;
     ctx.db.run(
       "INSERT INTO tabs(id, principal, lease_expires, closed) VALUES(?, ?, ?, ?)",
       tab,
-      principalKey(caller),
+      key,
       Date.now(),
       Date.now(),
     );

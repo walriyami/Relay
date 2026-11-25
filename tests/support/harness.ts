@@ -111,12 +111,15 @@ export class Client {
     };
     let url: string = endpoint.path;
     for (const [key, value] of Object.entries(params ?? {})) url = url.replace(`:${key}`, encodeURIComponent(value));
-    const res = await this.raw({
+    let res = await this.raw({
       method: endpoint.method,
       url,
       query: query ? Object.fromEntries(Object.entries(query).map(([k, v]) => [k, String(v)])) : undefined,
       ...(body !== undefined ? { payload: body as object } : {}),
     });
+    // Follows a redirect of a GET once, carrying the cookies it set, as fetch does.
+    if (endpoint.method === "GET" && res.statusCode === 307 && typeof res.headers.location === "string")
+      res = await this.raw({ method: "GET", url: res.headers.location });
     const data = res.body ? res.json<{ error?: string }>() : undefined;
     if (res.statusCode >= 400) throw new ApiError(res.statusCode, data?.error ?? res.body);
     if ((data as Partial<Me>)?.csrf && typeof (data as Me).csrf === "string") this.csrf = (data as Me).csrf;
