@@ -276,7 +276,8 @@ export function uniquePaths(files: DraftFile[]) {
       const slash = path.lastIndexOf("/");
       const dot = path.lastIndexOf(".");
       const split = dot > slash + 1 ? dot : path.length;
-      next = `${path.slice(0, split)} (${n})${path.slice(split)}`;
+      // Trimmed, so " (2)" can't make a longer run of spaces than a name may have.
+      next = `${path.slice(0, split).trimEnd()} (${n})${path.slice(split)}`;
     }
     used.add(pathKey(next));
     return { file, path: next };

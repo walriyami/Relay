@@ -7,6 +7,7 @@ import { ShareAccess } from "../../components/ShareAccess";
 import { Button, IconButton, Modal, confirmDialog, toast } from "../../components/ui";
 import { until } from "../../lib/format";
 import { reloadPresence } from "../../lib/nearby/presence";
+import { UserText } from "../../components/UserText";
 
 /**
  * The member's Nearby code: someone without an account opens its link (or enters the code) and can
@@ -107,7 +108,9 @@ export function InviteDialog({ invite, onClose }: { invite: NearbyInvite | null;
                 {invite.guests.map((guest) => (
                   <li key={guest.id}>
                     <DeviceIcon device={{ kind: guest.kind }} size={16} />
-                    <span className="nearby-guest-name">{guest.name}</span>
+                    <span className="nearby-guest-name">
+                      <UserText>{guest.name}</UserText>
+                    </span>
                     <span className="muted">
                       {guest.present ? (
                         <>

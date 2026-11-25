@@ -23,6 +23,7 @@ import {
   timeZoneOffset,
   type FlowKey,
 } from "./charts";
+import { UserText } from "../../components/UserText";
 
 export function UsagePage() {
   const { me } = useSession();
@@ -115,7 +116,9 @@ function Report({ report, range, admin }: { report: UsageReport; range: UsageRan
                 {report.largest.map((item) => (
                   <li key={item.id}>
                     <PageLink to={`/files/${item.id}`} className="usage-largest-link">
-                      <span className="usage-largest-name">{item.name}</span>
+                      <span className="usage-largest-name">
+                        <UserText>{item.name}</UserText>
+                      </span>
                       <span className="usage-largest-size">{bytes(item.bytes)}</span>
                       <span className="usage-largest-bar" aria-hidden>
                         <span style={{ width: `${(item.bytes / biggest) * 100}%` }} />

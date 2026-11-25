@@ -1,5 +1,5 @@
 import { LIMITS } from "../../shared/model.ts";
-import { oneLine } from "../../shared/text.ts";
+import { fileNameHides, MAX_SPACES, oneLine } from "../../shared/text.ts";
 import { fail } from "./errors.ts";
 
 /** A single path segment: a file, folder or item name. */
@@ -13,13 +13,15 @@ export function cleanName(value: string): string {
     Buffer.byteLength(name) > 255 ||
     // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
     /[\x00-\x1f\x7f-\x9f\u2028\u2029/\\]/.test(name) ||
-    // Bidirectional controls can disguise a name (e.g. "…exe.txt" shown as "…txt.exe").
-    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name) ||
     // Keep names valid UTF-8. Lone surrogates make encodeURIComponent throw and are not valid
     // filesystem or ZIP path characters.
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(name)
   )
     fail(400, `Choose a name without slashes, up to ${LIMITS.nameLength} characters.`);
+  // A name must show what it is: direction marks could show "…exe.txt" as "…txt.exe", and hidden
+  // characters or a long run of spaces could push ".exe" out of sight. Names stored earlier stay.
+  if (fileNameHides(name))
+    fail(400, `Choose a name without hidden characters or more than ${MAX_SPACES} spaces in a row.`);
   return name;
 }
 

@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { Download, Eye, FolderInput, KeyRound, LogIn, ShieldCheck, ShieldOff, UserPlus, X } from "lucide-react";
 import type { ActivityEntry, Delivery, SignInMethod } from "../../api";
 import { bytes, plural } from "../../lib/format";
+import { UserText } from "../../components/UserText";
 
-export type Described = { icon: ReactNode; title: string; detail: string; tone?: "warn" };
+export type Described = { icon: ReactNode; title: ReactNode; detail: ReactNode; tone?: "warn" };
 
 const METHOD: Record<SignInMethod, string> = {
   sso: "Signed in with Walriyami",
@@ -28,13 +29,23 @@ export function describeEntry(e: ActivityEntry): Described {
       return e.news
         ? {
             icon: <LogIn size={16} />,
-            title: `New sign-in on ${e.device}`,
+            title: (
+              <>
+                New sign-in on <UserText>{e.device}</UserText>
+              </>
+            ),
             detail: `${METHOD[e.method]} · Not you? Sign it out in Settings`,
             tone: "warn",
           }
         : {
             icon: <LogIn size={16} />,
-            title: e.self ? "This device signed in" : `${e.device} signed in`,
+            title: e.self ? (
+              "This device signed in"
+            ) : (
+              <>
+                <UserText>{e.device}</UserText> signed in
+              </>
+            ),
             detail: METHOD[e.method],
           };
     case "password":
@@ -48,29 +59,64 @@ export function describeEntry(e: ActivityEntry): Described {
         : {
             icon: <KeyRound size={16} />,
             title: "Your password was changed",
-            detail: e.self ? "On this device · Your other devices were signed out" : `On ${e.device}`,
+            detail: e.self ? (
+              "On this device · Your other devices were signed out"
+            ) : (
+              <>
+                On <UserText>{e.device}</UserText>
+              </>
+            ),
             tone: e.self ? undefined : "warn",
           };
     case "passkey":
       return {
         icon: e.change === "added" ? <ShieldCheck size={16} /> : <ShieldOff size={16} />,
-        title: e.change === "added" ? `Passkey “${e.name}” added` : `Passkey “${e.name}” removed`,
+        title: (
+          <>
+            Passkey “<UserText>{e.name}</UserText>” {e.change === "added" ? "added" : "removed"}
+          </>
+        ),
         detail: e.self ? "On this device" : "On another device",
       };
     case "upload":
       return {
         icon: <FolderInput size={16} />,
-        title: `${e.sender || "Someone"} sent ${!e.files && e.text ? "text" : "files"} to “${e.request}”`,
+        title: (
+          <>
+            {e.sender ? <UserText>{e.sender}</UserText> : "Someone"} sent {!e.files && e.text ? "text" : "files"} to “
+            <UserText>{e.request}</UserText>”
+          </>
+        ),
         detail: contents(e.files, e.bytes, e.text),
       };
     case "link":
       // One entry per person: when they first open the link, and when they first download from it.
       return e.action === "opened"
-        ? { icon: <Eye size={16} />, title: `Your link to “${e.item}” was opened`, detail: `On ${e.device}` }
+        ? {
+            icon: <Eye size={16} />,
+            title: (
+              <>
+                Your link to “<UserText>{e.item}</UserText>” was opened
+              </>
+            ),
+            detail: (
+              <>
+                On <UserText>{e.device}</UserText>
+              </>
+            ),
+          }
         : {
             icon: <Download size={16} />,
-            title: `“${e.item}” was downloaded with your link`,
-            detail: `On ${e.device}`,
+            title: (
+              <>
+                “<UserText>{e.item}</UserText>” was downloaded with your link
+              </>
+            ),
+            detail: (
+              <>
+                On <UserText>{e.device}</UserText>
+              </>
+            ),
           };
     case "joined":
       return {
@@ -78,18 +124,28 @@ export function describeEntry(e: ActivityEntry): Described {
         title: e.walriyami
           ? `${e.username} joined by signing in with Walriyami`
           : `${e.username} joined with your invitation`,
-        detail: e.note ? `Invitation: ${e.note}` : "New member",
+        detail: e.note ? (
+          <>
+            Invitation: <UserText>{e.note}</UserText>
+          </>
+        ) : (
+          "New member"
+        ),
       };
   }
 }
 
 /** A delivery this device answered, as a line in the Activity list. */
 export function describeAnswered(d: Delivery): Described {
-  const from = d.from?.name || "another device";
+  const from = d.from?.name ? <UserText>{d.from.name}</UserText> : "another device";
   const accepted = d.state === "accepted";
   return {
     icon: accepted ? <Download size={16} /> : <X size={16} />,
-    title: `“${d.item?.name || "Removed item"}” from ${from}`,
+    title: (
+      <>
+        “<UserText>{d.item?.name || "Removed item"}</UserText>” from {from}
+      </>
+    ),
     detail: accepted ? "Accepted" : "Declined · still in your Files",
   };
 }

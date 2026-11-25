@@ -6,6 +6,7 @@ import { usePresence } from "../../lib/nearby/presence";
 import { touch } from "../../lib/nearby/save";
 import { notifySystem } from "../activity/ActivityProvider";
 import { contents, save, unsaved } from "./NearbyTransfers";
+import { UserText } from "../../components/UserText";
 
 const LISTED = 5;
 
@@ -67,7 +68,11 @@ function Offer({ t, more, onLater }: { t: NearbyTransfer; more: number; onLater:
   return (
     <Modal
       size="sm"
-      title={`${t.peerName} wants to send you ${t.files.length ? plural(t.files.length) : "text"}`}
+      title={
+        <>
+          <UserText>{t.peerName}</UserText> wants to send you {t.files.length ? plural(t.files.length) : "text"}
+        </>
+      }
       subtitle={`${t.files.length ? `${contents(t)}. ` : ""}It comes straight from their device and isn’t saved to Relay.`}
       onClose={onLater}
       footer={

@@ -7,6 +7,7 @@ import { addPasskey, passkeyDismissed, passkeysSupported } from "../auth/passkey
 import { browserName } from "../auth/device-name";
 import { Button, InlineEmpty, Menu, confirmDialog, Field, Modal, toast } from "../../components/ui";
 import { Section } from "./Section";
+import { UserText } from "../../components/UserText";
 
 export function PasskeysSection() {
   // Browsers without WebAuthn can't create or use passkeys, so there's nothing to offer here.
@@ -48,7 +49,11 @@ function Passkeys() {
   }
   async function remove(p: Passkey) {
     const ok = await confirmDialog({
-      title: `Remove “${p.name}”?`,
+      title: (
+        <>
+          Remove “<UserText>{p.name}</UserText>”?
+        </>
+      ),
       body: "You won’t be able to sign in with this passkey anymore. Delete it from your password manager too.",
       confirm: "Remove",
       danger: true,
@@ -77,7 +82,9 @@ function Passkeys() {
                 <KeyRound size={18} aria-hidden />
               </span>
               <span className="device-text">
-                <strong>{p.name}</strong>
+                <strong>
+                  <UserText>{p.name}</UserText>
+                </strong>
                 <span className="muted">
                   Added {date(p.created)} · {p.lastUsed ? `Last used ${ago(p.lastUsed)}` : "Not used yet"}
                 </span>

@@ -13,6 +13,7 @@ import { NearbyAlerts } from "./NearbyAlerts";
 import { NearbyComposer, TEXT_CHARS, takeSelection } from "./NearbyComposer";
 import { TransferCard, TransferList } from "./NearbyTransfers";
 import { PeerRow } from "./Peers";
+import { UserText } from "../../components/UserText";
 
 const NAME_KEY = "relay.nearby-name";
 function savedName() {
@@ -93,10 +94,12 @@ function Join({ host }: { host: string }) {
           <span className="nearby-join-icon" aria-hidden>
             <Radar size={22} />
           </span>
-          <h1>Nearby with {host}</h1>
+          <h1>
+            Nearby with <UserText>{host}</UserText>
+          </h1>
           <p className="muted">
-            Send files and text straight to {host}’s devices on this network, and get theirs, while this page is open.
-            Nothing is stored on Relay.
+            Send files and text straight to <UserText>{host}</UserText>’s devices on this network, and get theirs, while
+            this page is open. Nothing is stored on Relay.
           </p>
         </div>
         <form className="stack" onSubmit={(e) => void submit(e)}>
@@ -112,7 +115,9 @@ function Join({ host }: { host: string }) {
             maxLength={NEARBY.guestNameLength}
             onChange={(e) => setName(e.target.value)}
           />
-          <p className="field-hint">{host} sees this name next to what you send.</p>
+          <p className="field-hint">
+            <UserText>{host}</UserText> sees this name next to what you send.
+          </p>
           {error && (
             <p className="field-error" role="alert">
               {error}
@@ -172,9 +177,11 @@ function Joined() {
       <div className="page">
         <div className="page-head">
           <div>
-            <h1>Nearby with {info.host}</h1>
+            <h1>
+              Nearby with <UserText>{info.host}</UserText>
+            </h1>
             <p className="muted">
-              You’re {info.self?.name}. Keep this page open to send and receive.
+              You’re <UserText>{info.self?.name}</UserText>. Keep this page open to send and receive.
               {!guest.connected && <span className="waiting"> Connecting to Relay…</span>}
             </p>
           </div>
@@ -199,7 +206,9 @@ function Joined() {
           <aside className="send-panel card-surface" aria-label="Send to">
             <h2 className="send-panel-title">Send to</h2>
             {!ready && <p className="send-panel-summary">Add something, then choose who gets it.</p>}
-            <h3 className="send-panel-heading">{info.host}’s devices</h3>
+            <h3 className="send-panel-heading">
+              <UserText>{info.host}</UserText>’s devices
+            </h3>
             {info.peers.length ? (
               info.peers.map((peer) => (
                 <PeerRow
@@ -211,7 +220,9 @@ function Joined() {
                 />
               ))
             ) : (
-              <p className="send-panel-empty">{info.host}’s devices show up here while Relay is open on them.</p>
+              <p className="send-panel-empty">
+                <UserText>{info.host}</UserText>’s devices show up here while Relay is open on them.
+              </p>
             )}
           </aside>
           <div className="send-below">

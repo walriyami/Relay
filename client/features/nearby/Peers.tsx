@@ -3,6 +3,7 @@ import { DeviceIcon } from "../../app/devices";
 import { Button } from "../../components/ui";
 import type { PeerStatus } from "../../lib/nearby/engine";
 import { DestinationRow } from "../send/Composer";
+import { UserText } from "../../components/UserText";
 
 /** Who a peer is, as its row names it: a person for other members' devices, a device otherwise. */
 export function peerLabel(peer: NearbyPeer) {
@@ -13,7 +14,16 @@ export function peerLabel(peer: NearbyPeer) {
 function statusLine(peer: NearbyPeer, status: PeerStatus) {
   // A member's device is named by its owner, so the line says which device; a host's devices are
   // listed under their owner's name already.
-  const who = peer.kind === "member" ? `${peer.name} · ` : peer.kind === "guest" ? "Guest · " : "";
+  const who =
+    peer.kind === "member" ? (
+      <>
+        <UserText>{peer.name}</UserText> ·{" "}
+      </>
+    ) : peer.kind === "guest" ? (
+      "Guest · "
+    ) : (
+      ""
+    );
   if (!peer.present) return <>{who}Open Relay on it to send</>;
   if (status === "ready")
     return (

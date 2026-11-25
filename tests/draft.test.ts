@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { addSelection, clearDraft, draftFiles, getDraft, removeItem, setText } from "../client/lib/draft.ts";
 import { pathKey } from "../client/lib/path-key.ts";
+import { fileNameHides } from "../shared/text.ts";
 
 const textFile = (name: string, contents = "x") => new File([contents], name, { lastModified: 1 });
 
@@ -131,4 +132,23 @@ test("path identity matches NFC and the server's ASCII case rule", () => {
   assert.equal(pathKey("A\u030a.txt"), pathKey("Å.txt"));
   assert.notEqual(pathKey("ẞ.txt"), pathKey("ß.txt"));
   assert.deepEqual([pathKey("ẞ.txt"), pathKey("ß.txt")], ["ẞ.txt", "ß.txt"]);
+});
+
+test("names from disk that would hide their real ending are cleaned, not refused later", () => {
+  clearDraft();
+  const padded = textFile(`invoice.pdf${" ".repeat(30)}.exe`);
+  const filler = textFile("photoㅤ.jpg");
+  const spaced = textFile("notes   .txt");
+  addSelection([
+    { file: padded, path: padded.name },
+    { file: filler, path: `Trip‮/${filler.name}` },
+    { file: spaced, path: spaced.name },
+    { file: spaced, path: spaced.name },
+  ]);
+  const { files } = draftFiles(getDraft().items);
+  assert.deepEqual(
+    files.map(({ path }) => path),
+    ["invoice.pdf .exe", "notes   .txt", "notes (2).txt", "Trip/photo.jpg"],
+  );
+  for (const { path } of files) for (const part of path.split("/")) assert.equal(fileNameHides(part), false, part);
 });

@@ -1,3 +1,4 @@
+import { cleanFileName } from "../../../shared/text.ts";
 import { crcsOf } from "./crc";
 import { zip } from "./zip";
 
@@ -28,12 +29,12 @@ export async function share(files: File[]) {
   }
 }
 
-/** Downloads one file under its own name. */
+/** Downloads one file under its own name, made to hide nothing (Safari saves a name as given). */
 export function downloadFile(file: Blob, name: string) {
   const url = URL.createObjectURL(file);
   const a = document.createElement("a");
   a.href = url;
-  a.download = name;
+  a.download = cleanFileName(name) || "File";
   a.rel = "noopener";
   document.body.append(a);
   a.click();
@@ -61,5 +62,5 @@ export async function downloadZip(
 /** A name every file system takes. */
 function safeName(name: string) {
   // eslint-disable-next-line no-control-regex -- control characters are exactly what's replaced.
-  return name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim() || "Nearby";
+  return cleanFileName(name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")) || "Nearby";
 }

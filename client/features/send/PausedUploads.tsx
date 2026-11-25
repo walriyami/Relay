@@ -4,6 +4,7 @@ import type { PausedTransfer } from "../../../shared/model";
 import { Button, confirmDialog } from "../../components/ui";
 import { bytes, plural, until } from "../../lib/format";
 import { continueUpload, discardPaused, match, usePaused, type Match } from "../../lib/paused";
+import { UserText } from "../../components/UserText";
 
 /**
  * Uploads an earlier page left unfinished (a reload, a closed tab, a phone that slept), each offered
@@ -72,7 +73,9 @@ function PausedUpload({ p, onView }: { p: PausedTransfer; onView: (itemId: strin
     <div className="stopped-notice" role="status" aria-busy={busy || undefined}>
       <History size={18} aria-hidden />
       <div>
-        <strong>{p.name} is paused</strong>
+        <strong>
+          <UserText>{p.name}</UserText> is paused
+        </strong>
         {found ? (
           <p className="muted">
             {`Found ${found.chosen.size} of ${unfinished.length}. Not found: ${names(found.missing.map((f) => f.path.slice(f.path.lastIndexOf("/") + 1)))}.`}

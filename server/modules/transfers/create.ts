@@ -77,7 +77,8 @@ function textName(taken: TakenNames) {
 function uniqueName(name: string, taken: TakenNames, preserveExtension = false) {
   if (!taken.names.has(foldCase(name))) return name;
   const dot = preserveExtension ? name.lastIndexOf(".") : -1;
-  const stem = dot > 0 ? name.slice(0, dot) : name;
+  // Trimmed, so " (2)" can't make a longer run of spaces than a name may have.
+  const stem = (dot > 0 ? name.slice(0, dot) : name).trimEnd();
   const extension = dot > 0 ? name.slice(dot) : "";
   const key = foldCase(`${stem}\0${extension}`);
   for (let n = taken.next.get(key) ?? 2; ; n++) {
@@ -194,7 +195,9 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       const now = Date.now();
       const named = typeof options.itemName === "function" ? options.itemName(plan) : options.itemName;
       const itemName = named ?? input.name?.normalize("NFC") ?? null;
-      const safeItemName = itemName === null ? null : cleanName(itemName);
+      // Adding to an item keeps its name, so the one sent along isn't checked: an item named before
+      // today's rules can still be added to.
+      const safeItemName = itemName === null || options.itemId ? null : cleanName(itemName);
       let itemId = options.itemId;
       if (itemId) ctx.library.owned(options.owner, itemId, { live: true });
       else {

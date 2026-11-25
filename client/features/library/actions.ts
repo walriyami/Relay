@@ -2,6 +2,7 @@ import {
   ApiError,
   api,
   call,
+  cleanFileName,
   stableId,
   type Device,
   type ItemDetail,
@@ -127,7 +128,8 @@ export async function renameItem(c: Pick<ItemSummary, "id" | "name" | "autoName"
     optional: true,
     confirm: "Rename",
     apply: async (value) => {
-      const name = value.trim() || null;
+      // What the server would refuse as hiding something (pasted hidden characters, a run of spaces) is left out.
+      const name = cleanFileName(value) || null;
       if (name === (c.autoName ? null : c.name)) return;
       await call(api.items.update, { params: { id: c.id }, body: { name } });
       notifyChange("items");
