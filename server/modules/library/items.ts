@@ -7,6 +7,7 @@ import {
 } from "../../../shared/model.ts";
 import type { api, Body, Query } from "../../../shared/api.ts";
 import type { Context, ItemRow } from "../../context.ts";
+import { deleteNodeTree } from "../../db/tree.ts";
 import { fail, notFound } from "../../lib/errors.ts";
 import { cleanName } from "../../lib/names.ts";
 import { DAY_MS } from "../../lib/time.ts";
@@ -368,13 +369,37 @@ export async function emptyTrash(ctx: Context, owner: string) {
     .all<{ id: string }>("SELECT id FROM items WHERE owner = ? AND trashed IS NOT NULL", owner)
     .map((r) => r.id);
   let removed = 0;
+  const failures: unknown[] = [];
+  const purgeEach = (batch: string[]) => batch.filter((id) => purgeRows(ctx, id, { trashedOnly: true })).length;
   for (let i = 0; i < ids.length; i += PURGE_BATCH) {
-    ctx.db.tx(() => {
-      for (const id of ids.slice(i, i + PURGE_BATCH)) if (purgeRows(ctx, id, { trashedOnly: true })) removed++;
-    });
+    const batch = ids.slice(i, i + PURGE_BATCH);
+    try {
+      removed += ctx.db.tx(() => purgeEach(batch));
+    } catch {
+      // One item that can't go must not keep the rest in Trash: retry this batch an item at a time.
+      for (const id of batch)
+        try {
+          removed += ctx.db.tx(() => purgeEach([id]));
+        } catch (error) {
+          failures.push(error);
+        }
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
   purged(ctx, owner);
+  if (failures.length) {
+    // Nothing went: let the error handler report it (a full disk, say) the way it reports any other.
+    if (!removed) throw failures[0];
+    ctx.log.error({ err: failures[0], owner, failed: failures.length }, "some items could not be deleted from Trash");
+    const left =
+      failures.length === 1
+        ? "1 item couldn’t be deleted and is"
+        : `${failures.length} items couldn’t be deleted and are`;
+    fail(
+      500,
+      `${removed === 1 ? "1 item was" : `${removed} items were`} deleted, but ${left} still in Trash. Try again later.`,
+    );
+  }
   return { removed };
 }
 
@@ -391,6 +416,8 @@ function purgeRows(ctx: Context, itemId: string, { trashedOnly = false } = {}) {
       .map((r) => r.blob),
   );
   ctx.transfers.cancelForItem(itemId);
+  // Folders inside folders go leaves first, so no depth of tree is too deep to delete.
+  deleteNodeTree(ctx.db, itemId);
   ctx.db.run("DELETE FROM items WHERE id = ?", itemId);
   // The intent commits with the deletion, so a crash before the files go leaves work, not orphans.
   ctx.db.run(

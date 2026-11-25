@@ -4,6 +4,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "./database.ts";
+import { deleteNodeTree } from "./tree.ts";
 
 /** Transfers and everything shared or counted from them. Accounts and settings survive. */
 export const CONTENT_TABLES = [
@@ -69,6 +70,8 @@ export function resetContent(root: string) {
   try {
     db.tx(() => {
       db.sqlite.exec("PRAGMA defer_foreign_keys = ON");
+      // Deleting items would cascade down each folder tree, which SQLite refuses past ~1,000 levels.
+      deleteNodeTree(db, null);
       for (const table of CONTENT_TABLES) db.run(`DELETE FROM ${table}`);
       db.run("UPDATE users SET bytes_used = 0, activity_seen = 0");
       if (db.all("PRAGMA foreign_key_check").length) throw new Error("Reset would leave broken references.");

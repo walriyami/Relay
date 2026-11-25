@@ -286,38 +286,70 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
   };
   route(app, ctx, api.admin.removal, ({ params }) => removalOf(member(params.id)));
 
+  /** Members whose removal is running, so a second click waits for the first instead of racing it. */
+  const removing = new Set<string>();
+
   /**
    * Deletes the account and everything it owns: files (Trash too), links, requests, devices and
    * sessions. Each item goes through the library's purge so open transfers stop and stored bytes
-   * are freed the same way as emptying Trash.
+   * are freed the same way as emptying Trash, one item at a time with other requests in between.
+   * If an item can't be deleted, the account stays suspended with what's left, and removing it
+   * again picks up where this stopped.
    */
-  route(app, ctx, api.admin.removeMember, ({ member: administrator, params }) => {
+  route(app, ctx, api.admin.removeMember, async ({ member: administrator, params }) => {
     const target = member(params.id);
     if (target.id === administrator.userId) fail(409, "You can't remove your own account.");
     if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
-    const freed = removalOf(target);
-    // Sign the member out first so nothing new arrives while their files are deleted.
-    ctx.db.tx(() => {
-      ctx.db.run("UPDATE users SET disabled = 1 WHERE id = ?", target.id);
-      ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
-    });
-    streamsOf(ctx).recheck();
-    for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM requests WHERE owner = ?", target.id))
-      ctx.transfers.cancelForRequest(id);
-    for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", target.id)) purge(ctx, id);
-    ctx.db.tx(() => {
-      if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
-      ctx.db.run("DELETE FROM users WHERE id = ?", target.id);
-      recordHistory(ctx, {
-        kind: "removed",
-        username: target.username,
-        by: usernameOf(ctx, administrator.userId),
-        items: freed.items,
-        bytes: freed.bytes,
+    if (removing.has(target.id)) fail(409, `${target.username} is already being removed.`);
+    removing.add(target.id);
+    try {
+      const freed = removalOf(target);
+      // Sign the member out first so nothing new arrives while their files are deleted.
+      ctx.db.tx(() => {
+        ctx.db.run("UPDATE users SET disabled = 1 WHERE id = ?", target.id);
+        ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);
       });
-    });
+      streamsOf(ctx).recheck();
+      for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM requests WHERE owner = ?", target.id))
+        ctx.transfers.cancelForRequest(id);
+      const failures: unknown[] = [];
+      for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", target.id)) {
+        try {
+          purge(ctx, id);
+        } catch (error) {
+          failures.push(error);
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      ctx.db.tx(() => {
+        if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
+        const left = ctx.db.value<number>("SELECT COUNT(*) FROM items WHERE owner = ?", target.id)!;
+        if (left) {
+          ctx.log.error(
+            { err: failures[0], member: target.id, failed: failures.length, left },
+            "member removal stopped: items could not be deleted",
+          );
+          fail(
+            500,
+            `${left === 1 ? "1 of their items" : `${left} of their items`} couldn’t be deleted, so ${target.username} ` +
+              "is suspended but not removed yet. Try removing them again.",
+          );
+        }
+        ctx.db.run("DELETE FROM users WHERE id = ?", target.id);
+        recordHistory(ctx, {
+          kind: "removed",
+          username: target.username,
+          by: usernameOf(ctx, administrator.userId),
+          items: freed.items,
+          bytes: freed.bytes,
+        });
+      });
+    } finally {
+      removing.delete(target.id);
+      // Removed, or suspended with what's left: either way the members list has changed.
+      ctx.events.broadcast("account");
+    }
     ctx.log.info({ member: target.id, by: administrator.userId }, "member removed");
-    ctx.events.broadcast("account");
     return { ok: true as const };
   });
 
