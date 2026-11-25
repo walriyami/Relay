@@ -194,6 +194,18 @@ export function currentMember(ctx: Context, req: FastifyRequest): Member | null 
 }
 
 /**
+ * Refuses, as the route's own check would, unless the request still acts for `member`'s session
+ * and, for `admin`, still for an administrator. For a write that follows an await, during which the
+ * session may have been signed out or the role taken away.
+ */
+export function stillActing(ctx: Context, req: FastifyRequest, member: Member, auth: "member" | "admin"): Member {
+  const current = currentMember(ctx, req);
+  if (current?.sessionHash !== member.sessionHash) fail(401, "Sign in to continue.");
+  if (auth === "admin" && !current.admin) fail(403, "Administrator access required.");
+  return current;
+}
+
+/**
  * Read credentials afresh after asynchronous work: revocation can happen during an await. Guest
  * grants are looked up when first asked for, so routes that never use them don't pay for them.
  */

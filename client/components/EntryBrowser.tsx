@@ -5,6 +5,8 @@ import { bytes, plural } from "../lib/format";
 import type { ContentSource } from "../lib/source";
 import { Thumbnail } from "./Thumbnail";
 import { Button, InlineEmpty } from "./ui";
+import { UserText } from "./UserText";
+import { shownText } from "../../shared/text";
 
 /** A folder with the files anywhere beneath it. */
 export type FolderInfo = { node: Node; files: number; size: number };
@@ -99,8 +101,8 @@ export function EntryBrowser({
                       </div>
                     </div>
                   </div>
-                  <span className="tile-name" title={node.name}>
-                    {node.name}
+                  <span className="tile-name" title={shownText(node.name)}>
+                    <UserText>{node.name}</UserText>
                   </span>
                   <span className="tile-meta">
                     {plural(total.files, "file")} · {bytes(total.size)}
@@ -116,8 +118,8 @@ export function EntryBrowser({
                 <div className="tile-media">
                   <Thumbnail entry={node} source={source} />
                 </div>
-                <span className="tile-name" title={node.name}>
-                  {node.name}
+                <span className="tile-name" title={shownText(node.name)}>
+                  <UserText>{node.name}</UserText>
                 </span>
                 {node.damaged ? (
                   <span className="tile-meta danger">Damaged · can’t be downloaded</span>
@@ -160,16 +162,18 @@ function Crumbs({
   return (
     <nav className="crumbs" aria-label="Folder">
       <button type="button" onClick={() => open(root)}>
-        {rootLabel}
+        <UserText>{rootLabel}</UserText>
       </button>
       {crumbs.map((node, i) => (
         <span key={node.id} className="crumb">
           <ChevronRight size={14} aria-hidden />
           {i === crumbs.length - 1 ? (
-            <span aria-current="page">{node.name}</span>
+            <span aria-current="page">
+              <UserText>{node.name}</UserText>
+            </span>
           ) : (
             <button type="button" onClick={() => open(node.id)}>
-              {node.name}
+              <UserText>{node.name}</UserText>
             </button>
           )}
         </span>

@@ -17,6 +17,7 @@ import {
   displayName,
   setCsrf,
   setPrincipal,
+  shownText,
   stamped,
   type ChangeStamp,
   type Me,
@@ -66,6 +67,7 @@ import { NAV, isCurrent, sectionOf } from "./nav";
 import { storageOf } from "../components/StorageMeter";
 import { PageBoundary, pageRetries } from "./PageBoundary";
 import type { SettingsPage as SettingsPageComponent } from "../features/settings/SettingsPage";
+import { UserText } from "../components/UserText";
 
 // Settings and Admin are visited rarely (Admin by one person), so they load on first visit.
 // A load that failed (offline, a deploy replaced the chunk) is forgotten, so the next visit tries again.
@@ -301,7 +303,7 @@ function Private() {
       expired = true;
       const reason = (event as CustomEvent<SessionEnded | undefined>).detail?.reason;
       // Name what the sign-out interrupted: those uploads can't continue under another sign-in.
-      const stopped = transfers.filter((t) => isBusy(t) && !t.guest).map((t) => t.name);
+      const stopped = transfers.filter((t) => isBusy(t) && !t.guest).map((t) => shownText(t.name));
       void abandonAll();
       disconnectLive();
       stopPresence();
@@ -562,7 +564,9 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
       {open && (
         <Popover anchor={button} onClose={() => setOpen(false)} label="Account" className="account-popover">
           <div className="account-head">
-            <strong>{displayName(me.user)}</strong>
+            <strong>
+              <UserText>{displayName(me.user)}</UserText>
+            </strong>
             {me.user.name && <span className="muted">{me.user.username}</span>}
           </div>
           <div className="menu-list" role="menu" ref={list} onKeyDown={menuKeys(list, button, () => setOpen(false))}>
@@ -610,7 +614,9 @@ function AccountMenu({ onSignedOut, active }: { onSignedOut: () => void; active:
             >
               <DeviceIcon device={device} size={16} />
               <span className="account-device-body">
-                <span className="account-device-name">{device.name}</span>
+                <span className="account-device-name">
+                  <UserText>{device.name}</UserText>
+                </span>
                 <span className="muted">This device</span>
               </span>
               <Pencil className="account-device-edit" size={14} aria-hidden />

@@ -7,6 +7,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { api } from "../../../shared/api.ts";
 import type { ActivityEvent } from "../../../shared/model.ts";
+import { shownText } from "../../../shared/text.ts";
 import type { Context, Push } from "../../context.ts";
 import { fail } from "../../lib/errors.ts";
 import { route } from "../../lib/http.ts";
@@ -93,8 +94,8 @@ export function createPush(ctx: Context): Push {
       notify(
         rows,
         {
-          title: `From ${row.from_name || "your other device"}`,
-          body: `“${name}” is waiting on this device.`,
+          title: `From ${shownText(row.from_name || "your other device")}`,
+          body: `“${shownText(name)}” is waiting on this device.`,
           url: "/",
           tag: `delivery:${deliveryId}`,
         },
@@ -124,8 +125,8 @@ function messageFor(
     return {
       group: "requests",
       message: {
-        title: `New ${textOnly ? "text" : "files"} for “${event.request}”`,
-        body: `${event.sender || "Someone"} sent ${what}.`,
+        title: `New ${textOnly ? "text" : "files"} for “${shownText(event.request)}”`,
+        body: `${shownText(event.sender || "Someone")} sent ${what}.`,
         url: `/requests/${encodeURIComponent(event.requestId)}`,
         tag: `request:${event.requestId}`,
       },
@@ -143,8 +144,8 @@ function messageFor(
     return {
       group: "links",
       message: {
-        title: `“${event.item}” was downloaded`,
-        body: `Someone on ${event.device} downloaded it with your link. Later downloads show in Activity.`,
+        title: `“${shownText(event.item)}” was downloaded`,
+        body: `Someone on ${shownText(event.device)} downloaded it with your link. Later downloads show in Activity.`,
         url: `/links/${encodeURIComponent(event.linkId)}`,
         tag: `link:${event.linkId}`,
       },

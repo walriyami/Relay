@@ -12,7 +12,7 @@ import {
   type PendingInvite,
 } from "../../../shared/model.ts";
 import { fail, notFound } from "../../lib/errors.ts";
-import { currentMember } from "../../lib/auth.ts";
+import { stillActing } from "../../lib/auth.ts";
 import { route } from "../../lib/http.ts";
 import { localStatus } from "../local/index.ts";
 import { uuidv7 } from "../../../shared/ids.ts";
@@ -304,7 +304,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
    * If an item can't be deleted, the account stays suspended with what's left, and removing it
    * again picks up where this stopped.
    */
-  route(app, ctx, api.admin.removeMember, async ({ member: administrator, params }) => {
+  route(app, ctx, api.admin.removeMember, async ({ member: administrator, params, req }) => {
     const target = member(params.id);
     if (target.id === administrator.userId) fail(409, "You can't remove your own account.");
     if (target.admin && admins() <= 1) fail(409, LAST_ADMIN);
@@ -323,6 +323,18 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
       streamsOf(ctx).recheck();
       for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM requests WHERE owner = ?", target.id))
         ctx.transfers.cancelForRequest(id);
+      // A removal that stops part way leaves them suspended rather than coming back: some of their
+      // files may already be gone, and the administrator meant them to go. The members list says so
+      // until they're removed after all.
+      const suspended = () =>
+        ctx.db.tx(() => {
+          ctx.db.run("UPDATE users SET removal_stopped = ? WHERE id = ?", Date.now(), target.id);
+          recordHistory(
+            ctx,
+            { kind: "suspended", username: target.username, by: usernameOf(ctx, administrator.userId) },
+            target.id,
+          );
+        });
       const failures: unknown[] = [];
       for (const { id } of ctx.db.all<{ id: string }>("SELECT id FROM items WHERE owner = ?", target.id)) {
         try {
@@ -331,6 +343,13 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
           failures.push(error);
         }
         await new Promise((resolve) => setImmediate(resolve));
+        // An administrator signed out or demoted meanwhile deletes nothing more; the member stays suspended.
+        try {
+          stillActing(ctx, req, administrator, "admin");
+        } catch (error) {
+          suspended();
+          throw error;
+        }
       }
       const by = usernameOf(ctx, administrator.userId);
       // No await from here on, so nothing can arrive between this count and the deletion.
@@ -340,12 +359,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
           { err: failures[0], member: target.id, failed: failures.length, left },
           "member removal stopped: items could not be deleted",
         );
-        // They stay suspended rather than coming back: some of their files are already gone, and the
-        // administrator meant them to go. The members list says so until they're removed after all.
-        ctx.db.tx(() => {
-          ctx.db.run("UPDATE users SET removal_stopped = ? WHERE id = ?", Date.now(), target.id);
-          recordHistory(ctx, { kind: "suspended", username: target.username, by }, target.id);
-        });
+        suspended();
         fail(
           500,
           `${left === 1 ? "1 of their items" : `${left} of their items`} couldn’t be deleted, so ${target.username} ` +
@@ -369,9 +383,7 @@ export function registerAdmin(app: FastifyInstance, ctx: Context) {
     const target = member(params.id);
     const hash = await hashPassword(body.password);
     ctx.db.tx(() => {
-      const current = currentMember(ctx, req);
-      if (current?.sessionHash !== administrator.sessionHash) fail(401, "Sign in to continue.");
-      if (!current.admin) fail(403, "Administrator access required.");
+      stillActing(ctx, req, administrator, "admin");
       ctx.db.run("UPDATE users SET password_hash = ? WHERE id = ?", hash, target.id);
       ctx.db.run("DELETE FROM passkeys WHERE user_id = ?", target.id);
       ctx.db.run("DELETE FROM sessions WHERE user_id = ?", target.id);

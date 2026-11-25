@@ -30,6 +30,7 @@ import { StatusRow } from "../../components/StatusRow";
 import { CollectionModal } from "../library/CollectionModal";
 import { LinkDialog } from "../../components/LinkDialog";
 import { itemMeta } from "../library/actions";
+import { UserText } from "../../components/UserText";
 
 const requestUrl = (token: string) => urls.requestLink(location.origin, token);
 
@@ -593,14 +594,16 @@ function Submissions({
             <li key={s.id}>
               <button type="button" className="list-row submission-row" onClick={() => setOpen(s.id)}>
                 <span className="list-text">
-                  <strong>{s.name}</strong>
+                  <strong>
+                    <UserText>{s.name}</UserText>
+                  </strong>
                   <span className="muted">
-                    {[
-                      s.sender ? `From ${s.sender}` : "",
-                      itemMeta(s),
-                      bytes(s.bytes),
-                      s.uploading ? "Uploading…" : `Received ${ago(s.created)}`,
-                    ]
+                    {s.sender && (
+                      <>
+                        From <UserText>{s.sender}</UserText> ·{" "}
+                      </>
+                    )}
+                    {[itemMeta(s), bytes(s.bytes), s.uploading ? "Uploading…" : `Received ${ago(s.created)}`]
                       .filter(Boolean)
                       .join(" · ")}
                   </span>

@@ -25,6 +25,7 @@ import { DevicesStep } from "../setup/DevicesStep";
 import { DoneScene, RelayScene } from "../setup/scenes";
 import { Point, StepTitle, Walkthrough } from "../setup/Walkthrough";
 import { YoursStep } from "../setup/YoursStep";
+import { UserText } from "../../components/UserText";
 
 type Step = "welcome" | "account" | "yours" | "devices" | "done";
 /** The steps that ask something, shown as progress. Welcome and done frame them. */
@@ -182,8 +183,8 @@ function Welcome({
       <RelayScene />
       <StepTitle>You’re invited to Relay</StepTitle>
       <p className="setup-lead">
-        {invite.invitedBy} invited you to join. Relay is a private place to move files between your devices and share
-        them with anyone.
+        <UserText>{invite.invitedBy}</UserText> invited you to join. Relay is a private place to move files between your
+        devices and share them with anyone.
       </p>
       <ul className="setup-points">
         <Point icon={<Smartphone size={18} />} title="Send to any of your devices">

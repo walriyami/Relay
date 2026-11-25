@@ -14,6 +14,7 @@ import { acceptDelivery, declineDelivery } from "../incoming/answer";
 import { describeAnswered, describeDelivery, describeEntry, type Described } from "./describe";
 import { useActivity } from "./ActivityProvider";
 import { PushOffer } from "./Notifications";
+import { UserText } from "../../components/UserText";
 
 /** The list shows at most this many lines; older ones are still in the feed's own limit. */
 const SHOWN = 50;
@@ -194,9 +195,18 @@ function PendingRow({ d, onOpen }: { d: Delivery; onOpen: () => void }) {
           )}
         </span>
         <span className="activity-text">
-          <strong>{name}</strong>
+          <strong>
+            <UserText>{name}</UserText>
+          </strong>
           {/* Beside Accept and Decline there is less room, so who and when, then what, each on a line. */}
-          <span className="muted">{[d.from && `From ${d.from.name}`, ago(d.created)].filter(Boolean).join(" · ")}</span>
+          <span className="muted">
+            {d.from && (
+              <>
+                From <UserText>{d.from.name}</UserText> ·{" "}
+              </>
+            )}
+            {ago(d.created)}
+          </span>
           {d.item && <span className="muted">{describeDelivery(d)}</span>}
         </span>
       </button>

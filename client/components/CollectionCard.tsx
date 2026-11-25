@@ -29,6 +29,8 @@ import {
 import { ItemShareDialog } from "../features/library/ItemShareDialog";
 import { Thumbnail } from "./Thumbnail";
 import { Menu, type MenuItem } from "./ui";
+import { UserText } from "./UserText";
+import { shownText } from "../../shared/text";
 
 /** "Gone in 12 days": Trash keeps items for the owner's chosen number of days. */
 function trashLeft(purgeAt: number) {
@@ -76,12 +78,17 @@ function Marked({ text, query }: { text: string; query?: string }) {
 /** Why a search found this item, when its name alone doesn't say. */
 function MatchLine({ match, query }: { match: SearchMatch; query?: string }) {
   return match.in === "text" ? (
-    <span className="card-meta card-match card-match-text" title={match.text}>
-      <Marked text={match.text} query={query} />
+    <span className="card-meta card-match card-match-text" title={shownText(match.text)}>
+      <bdi>
+        <Marked text={shownText(match.text)} query={query} />
+      </bdi>
     </span>
   ) : (
-    <span className="card-meta card-match" title={match.text}>
-      Contains <Marked text={match.text} query={query} />
+    <span className="card-meta card-match" title={shownText(match.text)}>
+      Contains{" "}
+      <bdi>
+        <Marked text={shownText(match.text)} query={query} />
+      </bdi>
     </span>
   );
 }
@@ -225,12 +232,15 @@ export function CollectionCard({
         ]
           .filter(Boolean)
           .join(". ")}
-        title={selecting ? undefined : item.name}
+        title={selecting ? undefined : shownText(item.name)}
       >
         {/* The spaces keep the lines apart as words when the card's text is read as one string (as
             the accessibility check reads it); in a column they take no room. */}
         <div className="card-body">
-          <span className="card-title">{item.name}</span> <span className="card-meta">{meta}</span>{" "}
+          <span className="card-title">
+            <UserText>{item.name}</UserText>
+          </span>{" "}
+          <span className="card-meta">{meta}</span>{" "}
           <span className={`card-meta${left?.soon ? " danger" : ""}`}>{detail}</span>
           {listed.match && (
             <>

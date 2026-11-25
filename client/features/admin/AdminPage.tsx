@@ -38,6 +38,7 @@ import {
 import { ByteSizeField, changedBytes, toDraft } from "./ByteSize";
 import { AdminOverview, HealthNotice } from "./AdminOverview";
 import { InviteDialog, LimitsFields, limitsSummary, useLimitsForm } from "./Limits";
+import { UserText } from "../../components/UserText";
 
 const errorToast = (e: unknown) => toast((e as Error).message, { tone: "error" });
 
@@ -171,7 +172,9 @@ function Members({ data, onChanged }: { data: Overview; onChanged: () => void })
               </span>
               <span className="list-text static">
                 <span className="member-name">
-                  <strong>{displayName(u)}</strong>
+                  <strong>
+                    <UserText>{displayName(u)}</UserText>
+                  </strong>
                   {u.id === me.user.id && <span className="muted"> (you)</span>}
                   {u.admin && <span className="pill">Administrator</span>}
                   {u.disabled && (
@@ -264,9 +267,17 @@ function Invitations({
           {invites.map((i) => (
             <li key={i.id} className="list-row invite-row">
               <span className="list-text static">
-                <strong>{i.note ? `For ${i.note}` : "Invitation"}</strong>
+                <strong>
+                  {i.note ? (
+                    <>
+                      For <UserText>{i.note}</UserText>
+                    </>
+                  ) : (
+                    "Invitation"
+                  )}
+                </strong>
                 <span className="muted">
-                  Expires {dateTime(i.expires)} · created {ago(i.created)} by {i.createdBy}
+                  Expires {dateTime(i.expires)} · created {ago(i.created)} by <UserText>{i.createdBy}</UserText>
                 </span>
                 <span className="member-limits">{limitsSummary(i.limits)}</span>
                 {i.code && (

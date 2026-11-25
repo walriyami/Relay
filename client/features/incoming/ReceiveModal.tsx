@@ -10,6 +10,7 @@ import { downloadLabel, errorToast, hasDownloads, singleFile } from "../library/
 import { itemAddress } from "../library/CollectionModal";
 import { acceptDelivery, declineDelivery } from "./answer";
 import { ShareNote, ShareUnlock, contentSummary, downloadAllLabel, shareSummary, useShare } from "./ReceiveView";
+import { UserText } from "../../components/UserText";
 
 export type Received = { token: string } | { delivery: Delivery };
 
@@ -32,7 +33,17 @@ function PickedUp({ token, onClose }: { token: string; onClose: () => void }) {
       // A dead link is one sentence: a small dialog, not an empty item window.
       size={error || locked ? "sm" : "xl"}
       className={error || locked ? "" : `item-window${single ? " is-single" : ""}`}
-      title={data?.name || (error ? "Link unavailable" : locked ? "Enter the password" : "Opening…")}
+      title={
+        data?.name ? (
+          <UserText>{data.name}</UserText>
+        ) : error ? (
+          "Link unavailable"
+        ) : locked ? (
+          "Enter the password"
+        ) : (
+          "Opening…"
+        )
+      }
       subtitle={data ? shareSummary(data) : undefined}
       onClose={onClose}
       footer={
@@ -84,13 +95,22 @@ function Delivered({ delivery, onClose }: { delivery: Delivery; onClose: () => v
     !delivery.available || !!cached?.trashed || (errorStatus !== null && [401, 403, 404, 410].includes(errorStatus));
   const data = gone ? null : cached;
   const single = !!data && isSingleFile(data.nodes);
-  const from = delivery.from ? `From ${delivery.from.name}` : "";
+  const contents = data ? contentSummary(data) : "";
   return (
     <Modal
       size={gone ? "sm" : "xl"}
       className={gone ? "" : `item-window${single ? " is-single" : ""}`}
-      title={data?.name || delivery.item?.name || "Received"}
-      subtitle={[from, data ? contentSummary(data) : ""].filter(Boolean).join(" · ") || undefined}
+      title={<UserText>{data?.name || delivery.item?.name || "Received"}</UserText>}
+      subtitle={
+        delivery.from ? (
+          <>
+            From <UserText>{delivery.from.name}</UserText>
+            {contents && ` · ${contents}`}
+          </>
+        ) : (
+          contents || undefined
+        )
+      }
       onClose={onClose}
       footer={gone ? <DoneButton /> : data ? <DeliveryFooter delivery={delivery} /> : undefined}
     >

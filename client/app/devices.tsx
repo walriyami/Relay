@@ -4,6 +4,7 @@ import { Check, Laptop, Pencil, Smartphone, Tablet } from "lucide-react";
 import { api, ApiError, call, LIMITS, oneLine, type Device, type DeviceKind } from "../api";
 import { Button, Field, Modal, toast } from "../components/ui";
 import { useSession } from "./session";
+import { UserText } from "../components/UserText";
 
 const ICONS = { phone: Smartphone, tablet: Tablet, computer: Laptop };
 const KINDS: { value: DeviceKind; label: string }[] = [
@@ -62,7 +63,9 @@ export function ThisDeviceName() {
         }}
       >
         <DeviceIcon device={device} size={14} />
-        <span className="this-device-label">{device.name}</span>
+        <span className="this-device-label">
+          <UserText>{device.name}</UserText>
+        </span>
         <Pencil className="this-device-edit" size={12} aria-hidden />
       </button>
     </p>

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { LIMITS } from "../../shared/model.ts";
+import { cleanFileName } from "../../shared/text.ts";
 import { pathKey } from "./path-key.ts";
 import type { DraftFile } from "./transfers";
 
@@ -81,12 +82,17 @@ const withinNameLimits = (name: string) =>
   name.length <= LIMITS.nameLength && new TextEncoder().encode(name).length <= 255;
 const dropLastCodePoint = (value: string) => Array.from(value).slice(0, -1).join("");
 
-/** Fit a source name and collision suffix inside the same limits enforced by cleanName on the server. */
+/**
+ * Fit a source name and collision suffix inside the same rules and limits cleanName enforces on the
+ * server: a name from disk with hidden characters or a long run of spaces is sent without them, and
+ * shows in the list of renames like any other.
+ */
 function boundedName(name: string, suffix: string, file: boolean) {
-  let normalized = name.trim().normalize("NFC");
+  let normalized = cleanFileName(name);
   if (!normalized || normalized === "." || normalized === "..") normalized = file ? "File" : "Folder";
   let [stem, extension] = file ? splitFileName(normalized) : [normalized, ""];
-  const compose = () => `${stem}${suffix}${extension}`;
+  // " (2)" after a stem ending in spaces would make a longer run of them than a name may have.
+  const compose = () => `${suffix ? stem.trimEnd() : stem}${suffix}${extension}`;
   while (!withinNameLimits(compose()) && stem) stem = dropLastCodePoint(stem);
   while (!withinNameLimits(compose()) && extension) {
     const points = Array.from(extension);

@@ -7,6 +7,7 @@ import type { ContentSource } from "../lib/source";
 import { PdfPreview } from "./PdfPreview";
 import { FileTypeIcon } from "./Thumbnail";
 import { Button, CopyButton, IconButton, Modal, Spinner } from "./ui";
+import { UserText } from "./UserText";
 
 const TEXT_LIMIT = 1024 * 1024;
 const ORIGINAL_IMAGE_LIMIT = 20 * 1024 ** 2;
@@ -203,7 +204,9 @@ function NoPreview({ entry, message }: { entry: NodeRef; message?: string }) {
   return (
     <div className="preview-none">
       <FileTypeIcon path={entry.path} mime={entry.mime} size={48} />
-      <strong>{entry.name}</strong>
+      <strong>
+        <UserText>{entry.name}</UserText>
+      </strong>
       <span className="muted">
         {kindLabel(entry.path)} · {bytes(entry.size)}
       </span>
@@ -231,7 +234,9 @@ export function FilePreview({ entry, source }: { entry: NodeRef; source: Content
     return (
       <div className="preview-none">
         <FileTypeIcon path={entry.path} mime={entry.mime} size={48} />
-        <strong>{entry.name}</strong>
+        <strong>
+          <UserText>{entry.name}</UserText>
+        </strong>
         <audio src={inline} controls preload="metadata" />
       </div>
     );

@@ -12,6 +12,7 @@ import { requestAddress } from "../requests/address";
 import { ReceiveModal, type Received } from "../incoming/ReceiveModal";
 import { answerDelivery, isPending } from "../incoming/answer";
 import { offerPushAfterArrival } from "./Notifications";
+import { shownText } from "../../api";
 
 type Activity = {
   /** Deliveries waiting for this device to accept or decline them, newest first. */
@@ -62,7 +63,8 @@ export function notifySystem(body: string, tag: string, onClick?: () => void) {
     Notification.permission !== "granted"
   )
     return;
-  const notice = new Notification("Relay", { body, tag });
+  // Relay's own words hold no direction overrides, so only what people chose loses any.
+  const notice = new Notification("Relay", { body: shownText(body), tag });
   notice.onclick = () => {
     window.focus();
     onClick?.();

@@ -3,6 +3,7 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { cleanFileName } from "../../../shared/text.ts";
 
 export type Segment = { length: number } & ({ file: string } | { data: Buffer });
 export type Body = {
@@ -62,9 +63,12 @@ export function safePreviewMime(mime: string, name: string): string | null {
   return null;
 }
 
-/** RFC 6266 / RFC 5987 filename parameter. */
+/**
+ * RFC 6266 / RFC 5987 filename parameter. Browsers save under it, so a name stored before today's
+ * rules (cleanName) is given without hidden characters or long runs of spaces; others are unchanged.
+ */
 export const contentDisposition = (kind: "inline" | "attachment", name: string) =>
-  `${kind}; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())}`;
+  `${kind}; filename*=UTF-8''${encodeURIComponent(cleanFileName(name) || "download").replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())}`;
 
 const PDF_CSP = "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
 const SANDBOX_CSP = "sandbox; default-src 'none'; frame-ancestors 'self'";
