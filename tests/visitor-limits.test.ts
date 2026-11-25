@@ -8,6 +8,8 @@ import { api, urls } from "../shared/api.ts";
 import { DEFAULTS, LIMITS } from "../shared/model.ts";
 import { GUEST_STREAMS_PER_ADDRESS } from "../server/modules/auth/streams.ts";
 import { UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
+import { OPEN_PER_NETWORK } from "../server/modules/transfers/create.ts";
+import { VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
 import { receiversOf } from "../server/modules/transfers/receivers.ts";
 import { DISK_HEADROOM } from "../server/modules/transfers/room.ts";
 import { ApiError, Client, admin, member, patchUpload, start, type Instance } from "./support/harness.ts";
@@ -142,14 +144,76 @@ test("starting new visits doesn't reset how many sends one network may hold open
     const request = await owner.call(api.requests.create, {
       body: { id: crypto.randomUUID(), name: "Open", description: "", days: 5, maxBytes: 1000 },
     });
-    for (let i = 0; i < 10; i++)
-      await sendTo(await visit(instance, request.token), request.token, [{ path: "a", size: 1 }]);
-    const refused = await sendTo(await visit(instance, request.token), request.token, [{ path: "a", size: 1 }]).catch(
-      (error: ApiError) => error,
-    );
-    assert.equal((refused as ApiError).status, 429);
-    const elsewhere = await visit(instance, request.token, "203.0.113.9");
-    assert.ok(await sendTo(elsewhere, request.token, [{ path: "a", size: 1 }]), "another network still can");
+    const one = (address: string) =>
+      visit(instance, request.token, address).then((guest) =>
+        status(sendTo(guest, request.token, [{ path: "a", size: 1 }])),
+      );
+    // Each from its own address in one IPv4 /24, and in one IPv6 /56.
+    for (let i = 1; i <= OPEN_PER_NETWORK; i++) assert.equal(await one(`198.51.100.${i}`), 200);
+    assert.equal(await one("198.51.100.200"), 429, "the next address along is the same network");
+    for (let i = 1; i <= OPEN_PER_NETWORK; i++) assert.equal(await one(`2001:db8:0:${i}::1`), 200);
+    assert.equal(await one("2001:db8:0:ff::1"), 429, "so is another /64 in the same /56");
+    assert.equal(await one("198.51.101.1"), 200, "another network still can");
+    assert.equal(await one("2001:db8:0:100::1"), 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("visits without a cookie don't pile up: a network keeps a bounded number, and those in use stay", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "piling-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Piles", description: "", days: 5, maxBytes: 1000 },
+    });
+    const visits = (network: string) =>
+      instance.ctx.db.value<number>(
+        "SELECT count(*) FROM guest_grants WHERE request_id = ? AND address = ?",
+        request.id,
+        network,
+      );
+    const file = [{ path: "a", size: 1 }];
+    const idle = await visit(instance, request.token, "198.51.100.1");
+    const sending = await visit(instance, request.token, "198.51.100.2");
+    await sendTo(sending, request.token, file);
+    // Cancelled, but its page is still open.
+    const looking = await visit(instance, request.token, "198.51.100.3");
+    await looking.call(api.transfers.cancel, { params: { id: (await sendTo(looking, request.token, file)).id } });
+    for (let i = 4; i < VISITS_PER_NETWORK + 20; i++) await visit(instance, request.token, `198.51.100.${i}`);
+    assert.equal(visits("198.51.100.0/24"), VISITS_PER_NETWORK);
+
+    // The oldest idle visit made room; one with a send open, or a page open, did not.
+    assert.equal(await status(sendTo(idle, request.token, file)), 401);
+    assert.equal(await status(sendTo(sending, request.token, file)), 200);
+    assert.equal(await status(sendTo(looking, request.token, file)), 200);
+    // Coming back is simply a new visit.
+    await idle.call(api.requests.start, { params: { token: request.token } });
+    assert.equal(await status(sendTo(idle, request.token, file)), 200);
+    // Another network is untouched.
+    await visit(instance, request.token, "203.0.113.1");
+    assert.equal(visits("203.0.113.0/24"), 1);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("closing pages a visit never used leaves only a few records", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "closing-tabs-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Tabs", description: "", days: 5, maxBytes: 1000 },
+    });
+    const guest = await visit(instance, request.token);
+    for (let i = 0; i < 40; i++)
+      await guest.call(api.transfers.closeTab, { params: { id: crypto.randomUUID().replaceAll("-", "") } });
+    const recorded = instance.ctx.db.value<number>("SELECT count(*) FROM tabs WHERE principal LIKE 'grant:%'")!;
+    assert.ok(recorded > 0 && recorded <= 8, `${recorded} tabs recorded`);
+    // A member's are kept: closing first still refuses a send that was on its way.
+    const tab = crypto.randomUUID().replaceAll("-", "");
+    await owner.call(api.transfers.closeTab, { params: { id: tab } });
+    assert.equal(instance.ctx.db.value("SELECT closed IS NOT NULL FROM tabs WHERE id = ?", tab), 1);
   } finally {
     await instance.close();
   }
@@ -332,12 +396,15 @@ test("one network can hold only a few visitors' live-update streams per request;
       return stream.events[0].split("\n")[0];
     };
     for (let i = 0; i < GUEST_STREAMS_PER_ADDRESS; i++) assert.equal(await open(request.token), "event: ready");
-    // Asking again past the cap costs no query per open stream.
+    // Asking again past the cap costs no query per open stream, and leaves no record of the page.
+    const tabs = () => instance.ctx.db.value<number>("SELECT count(*) FROM tabs");
+    const before = tabs();
     const get = t.mock.method(instance.ctx.db, "get");
     assert.equal(await open(request.token), "event: limited");
     const grantChecks = get.mock.calls.filter((call) => String(call.arguments[0]).includes("JOIN requests r")).length;
     assert.ok(grantChecks <= 1, `${grantChecks} grant checks for one refused stream`);
     get.mock.restore();
+    assert.equal(tabs(), before, "a refused stream adds no tab");
     // The same network still gets live updates on another request.
     assert.equal(await open((await create("Other")).token), "event: ready");
   } finally {

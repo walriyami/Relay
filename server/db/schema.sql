@@ -297,6 +297,8 @@ CREATE TABLE tabs (
 ) STRICT;
 -- The sweep removes tabs whose lease ended a day ago, closed or not.
 CREATE INDEX tabs_lease ON tabs(lease_expires);
+-- A request-link visit's pages, which are limited (see closeTab) and keep the visit in use.
+CREATE INDEX tabs_principal ON tabs(principal);
 
 CREATE TABLE guest_grants (
   token_hash TEXT PRIMARY KEY,
@@ -306,10 +308,12 @@ CREATE TABLE guest_grants (
   item TEXT REFERENCES items(id) ON DELETE SET NULL,
   created INTEGER NOT NULL,
   expires INTEGER NOT NULL,
-  -- The visitor's address group (see addressKey), so starting a new visit can't reset per-visitor limits.
+  -- The visitor's network (an IPv4 /24 or IPv6 /56, see codeNetworkOf), so starting a new visit can't
+  -- reset per-visitor limits. Visits made before 2026-11 hold the single address instead.
   address TEXT
 ) STRICT;
-CREATE INDEX guest_grants_request ON guest_grants(request_id);
+-- A request's visits from one network, oldest first: limited, and the oldest idle one makes room.
+CREATE INDEX guest_grants_request ON guest_grants(request_id, address, created);
 CREATE INDEX guest_grants_item ON guest_grants(item) WHERE item IS NOT NULL;
 CREATE INDEX guest_grants_expires ON guest_grants(expires);
 
@@ -328,6 +332,8 @@ CREATE TABLE transfers (
   finished INTEGER
 ) STRICT;
 CREATE INDEX transfers_open ON transfers(tab) WHERE state = 'open';
+-- A visit's open sends, counted against its limits and keeping the visit in use.
+CREATE INDEX transfers_open_principal ON transfers(principal) WHERE state = 'open';
 -- Every transfer of a tab, for deleting the tab once none is left.
 CREATE INDEX transfers_tab ON transfers(tab);
 CREATE INDEX transfers_item ON transfers(item);

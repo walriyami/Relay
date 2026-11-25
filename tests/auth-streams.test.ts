@@ -326,7 +326,8 @@ test("one browser shares four stream slots across its member session and distinc
     const overflowTab = crypto.randomUUID();
     await connect(urls.guestEvents(requests[2].token, overflowTab), false);
     await connect(urls.events(crypto.randomUUID()), false);
-    assert.ok(instance.ctx.db.value("SELECT lease_expires FROM tabs WHERE id = ?", overflowTab));
+    // Refused, a visitor's ask for a page Relay hasn't seen leaves no record; a member's polls keep one.
+    assert.ok(!instance.ctx.db.value("SELECT lease_expires FROM tabs WHERE id = ?", overflowTab));
     assert.equal(
       streams.slice(0, 4).some((stream) => stream.events.includes("<closed>")),
       false,
@@ -613,6 +614,15 @@ test("overflow probes renew leases only when due and cannot renew after member o
         assert.equal(stream.status, status);
         if (status === 200) assert.ok(stream.events.some((event) => event.startsWith("event: limited")));
       };
+      if (client === guest) {
+        // A visitor's page asks only while it sends: a refused ask for a page Relay hasn't seen adds none.
+        await probe();
+        assert.ok(!instance.ctx.db.value("SELECT 1 FROM tabs WHERE id = ?", tab));
+        await guest.call(api.requests.transfer, {
+          params: { token: request.token },
+          body: { id: crypto.randomUUID(), tab, folders: [], files: [{ path: "a", size: 1, mime: "" }] },
+        });
+      }
       await probe();
       const first = lease();
       t.mock.timers.tick(20_000);

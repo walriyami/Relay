@@ -175,8 +175,11 @@ class Streams {
     }
   }
 
-  /** Initial admission and overflow probes share the durable cadence without caching auth. */
-  renew(spec: Pick<Stream, "lease" | "deviceId">) {
+  /**
+   * Initial admission and overflow probes share the durable cadence without caching auth. `start`
+   * says whether a tab Relay hasn't seen gets a lease; otherwise only one that exists is renewed.
+   */
+  renew(spec: Pick<Stream, "lease" | "deviceId">, start: boolean) {
     const now = Date.now();
     const tab = spec.lease?.tab;
     const lease = tab
@@ -187,7 +190,8 @@ class Streams {
       : undefined;
     if (lease && (lease.closed !== null || lease.principal !== principalKey(spec.lease!.principal)))
       fail(409, TAB_CLOSED);
-    const renewTab = tab && (!lease || lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs);
+    const renewTab =
+      tab && (lease ? lease.lease_expires <= now + this.ctx.config.tabLeaseMs - this.durableMs : start);
     const renewDevice =
       spec.deviceId &&
       (this.ctx.db.value<number>("SELECT seen FROM devices WHERE id = ?", spec.deviceId) ?? 0) <= now - this.durableMs;
@@ -359,8 +363,11 @@ export function openStream(
   subscribe: boolean,
 ): Channel | null {
   const streams = streamsOf(ctx);
-  streams.renew(spec);
   const admitted = streams.canAdd(spec);
+  // A member's page that only polls still holds its tab. A request-link visitor's page asks for
+  // updates only while it sends, when its tab already exists, so a refused one adds no row: anyone
+  // with the link could otherwise make one for each made-up tab name.
+  streams.renew(spec, admitted || spec.lease?.principal.kind === "member");
   reply.hijack();
   const res = reply.raw;
   res.writeHead(200, {

@@ -7,7 +7,8 @@ import { fail, notFound } from "../../lib/errors.ts";
 import { cleanLabel } from "../../lib/names.ts";
 import { route } from "../../lib/http.ts";
 import { randomToken, sha256 } from "../../lib/secrets.ts";
-import { addressKey, perAddress } from "../auth/limits.ts";
+import { perAddress } from "../auth/limits.ts";
+import { codeNetworkOf } from "../../lib/pickup-code-guard.ts";
 import { autoName } from "../library/summary.ts";
 import { ensureTransferAvailability } from "../transfers/availability.ts";
 import { visitorStorageRoom } from "../transfers/room.ts";
@@ -111,6 +112,42 @@ function submissionName(
   return name.join("").trim();
 }
 
+/**
+ * Visits (grants) one network may keep to one request. Each lasts as long as the request, so without
+ * a limit every cookie-less `/start` would add a row for up to a year. A visit is in use while it
+ * has a send open or its page's lease is live (the page keeps it only while sending, and for a few
+ * minutes after), and a network may keep only 10 sends open, so the limit is far above what one
+ * network has in use and a visit in use isn't pushed out.
+ */
+export const VISITS_PER_NETWORK = 64;
+
+/**
+ * Makes room for one more visit from `network` by forgetting its oldest idle one: no open send and
+ * no page still open. Its visitor, if they come back, is simply given a new visit.
+ */
+function makeRoomForVisit(ctx: Context, requestId: string, network: string) {
+  const held = ctx.db.value<number>(
+    "SELECT count(*) FROM (SELECT 1 FROM guest_grants WHERE request_id = ? AND address = ? LIMIT ?)",
+    requestId,
+    network,
+    VISITS_PER_NETWORK,
+  )!;
+  if (held < VISITS_PER_NETWORK) return;
+  const idle = ctx.db.value<string>(
+    `SELECT g.token_hash FROM guest_grants g WHERE g.request_id = ? AND g.address = ?
+       AND NOT EXISTS (SELECT 1 FROM transfers t WHERE t.principal = 'grant:' || g.token_hash AND t.state = 'open')
+       AND NOT EXISTS (SELECT 1 FROM tabs b
+         WHERE b.principal = 'grant:' || g.token_hash AND b.closed IS NULL AND b.lease_expires > ?)
+     ORDER BY g.created LIMIT 1`,
+    requestId,
+    network,
+    Date.now(),
+  );
+  if (idle === undefined)
+    fail(429, "Too many people on your network have this request open. Try again in a few minutes.");
+  ctx.db.run("DELETE FROM guest_grants WHERE token_hash = ?", idle);
+}
+
 export function registerGuests(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.requests.open, ({ params }): PublicRequest => {
     const request = openRequest(ctx, params.token);
@@ -148,15 +185,19 @@ export function registerGuests(app: FastifyInstance, ctx: Context) {
       }
       const token = randomToken();
       const csrf = randomToken();
-      ctx.db.run(
-        "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address) VALUES(?, ?, ?, ?, ?, ?)",
-        sha256(token),
-        request.id,
-        csrf,
-        Date.now(),
-        request.expires,
-        addressKey(req.ip),
-      );
+      const network = codeNetworkOf(req.ip);
+      ctx.db.tx(() => {
+        makeRoomForVisit(ctx, request.id, network);
+        ctx.db.run(
+          "INSERT INTO guest_grants(token_hash, request_id, csrf, created, expires, address) VALUES(?, ?, ?, ?, ?, ?)",
+          sha256(token),
+          request.id,
+          csrf,
+          Date.now(),
+          request.expires,
+          network,
+        );
+      });
       reply.setCookie(cookie, token, options);
       return { csrf };
     },
