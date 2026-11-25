@@ -303,10 +303,11 @@ test("existing data directories are made private at startup", async () => {
 test("a named proxy that moves is followed at once, and a resolver hiccup doesn't turn visitors away", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const answers = new Map<string, string[] | { code: string }>([["proxy", ["192.0.2.5"]]]);
-  const resolve = async (name: string) => {
+  const resolve = (name: string) => {
     const answer = answers.get(name)!;
-    if (!Array.isArray(answer)) throw Object.assign(new Error("lookup failed"), answer);
-    return answer;
+    return Array.isArray(answer)
+      ? Promise.resolve(answer)
+      : Promise.reject(Object.assign(new Error("lookup failed"), answer));
   };
   const settle = () => new Promise((done) => setImmediate(done));
   const proxy = new ProxyTrust(["proxy"], resolve);
