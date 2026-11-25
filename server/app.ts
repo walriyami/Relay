@@ -126,7 +126,12 @@ export async function buildApp(config: Config): Promise<App> {
         const reported = req.headers[header];
         if (typeof reported === "string" && isIP(reported.trim())) req.headers["x-forwarded-for"] = reported.trim();
         else delete req.headers["x-forwarded-for"];
-      }
+      } else if (
+        req.headers[header ?? "x-forwarded-for"] !== undefined &&
+        proxies.awaitingProxy(req.socket.remoteAddress)
+      )
+        // A proxy listed by name that Relay hasn't found yet: wait rather than count every visitor as one.
+        return done(new HttpError(503, "Relay is starting up. Try again in a few seconds."));
       done();
     });
     await app.register(cookie);
