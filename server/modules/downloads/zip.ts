@@ -6,6 +6,7 @@
 // entry: an item of any size can be downloaded without holding its whole directory in memory.
 import { createReadStream } from "node:fs";
 import { crc32 } from "node:zlib";
+import { cleanFileName } from "../../../shared/text.ts";
 
 export type ZipEntry = {
   /** Path inside the archive, "/"-separated, without a trailing slash. */
@@ -131,6 +132,60 @@ function partAt(starts: Float64Array, count: number, at: number) {
   return low;
 }
 
+/** "photo.jpg" → "photo (2).jpg"; folders and names without an extension get the number at the end. */
+function numbered(name: string, n: number, folder: boolean) {
+  const dot = folder ? -1 : name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)} (${n})${name.slice(dot)}` : `${name} (${n})`;
+}
+
+/**
+ * The paths that must be written differently, by entry: names stored before Relay's name rules may
+ * hide what they are (a direction override showing "…gpj.exe" as "…exe.jpg", 50 spaces before
+ * ".exe"), and an unzip tool shows them as they are. Each such name is cleaned as a downloaded
+ * file's is, and a folder's new name carries over to everything inside it. A cleaned name that
+ * now matches another in its folder, ignoring case as macOS and Windows do, gets a number; names
+ * that needed no cleaning keep theirs. Null when nothing needs it, as for nearly every archive.
+ */
+function cleanedPaths(entries: readonly ZipEntry[]): Map<number, string> | null {
+  const changed: number[] = [];
+  for (let i = 0; i < entries.length; i++) if (cleanFileName(entries[i].path) !== entries[i].path) changed.push(i);
+  if (!changed.length) return null;
+  // Every name already in use, with the folders above it, claims its place first.
+  const taken = new Set<string>();
+  const isChanged = new Set(changed);
+  for (let i = 0; i < entries.length; i++) {
+    if (isChanged.has(i)) continue;
+    let path = entries[i].path;
+    while (path && !taken.has(path.toLowerCase())) {
+      taken.add(path.toLowerCase());
+      path = path.slice(0, Math.max(path.lastIndexOf("/"), 0));
+    }
+  }
+  // Each original path (a folder's, or an entry's) and what it's written as.
+  const written = new Map<string, string>();
+  const write = (path: string, folder: boolean): string => {
+    const known = written.get(path);
+    if (known !== undefined) return known;
+    const slash = path.lastIndexOf("/");
+    const parent = slash < 0 ? "" : path.slice(0, slash);
+    const name = slash < 0 ? path : path.slice(slash + 1);
+    const into = parent ? `${write(parent, true)}/` : "";
+    // Spaces at either end hide nothing, so a folder isn't split from its contents over them.
+    const cleanName = cleanFileName(name);
+    const clean = cleanName && cleanName === name.trim() ? name : cleanName || "Untitled";
+    let result = into + clean;
+    if (result !== path) {
+      for (let n = 2; taken.has(result.toLowerCase()); n++) result = into + numbered(clean, n, folder);
+      taken.add(result.toLowerCase());
+    }
+    written.set(path, result);
+    return result;
+  };
+  const paths = new Map<number, string>();
+  for (const i of changed) paths.set(i, write(entries[i].path, entries[i].kind === "folder"));
+  return paths;
+}
+
 export function zipLayout(
   entries: readonly ZipEntry[],
   content: (index: number) => ZipContent,
@@ -148,12 +203,15 @@ export function zipPlan(entries: readonly ZipEntry[], content: (index: number) =
   // Where each entry's local header starts, and where its record starts within the directory.
   const headerAt = new Float64Array(count + 1);
   const recordAt = new Float64Array(count + 1);
+  const cleaned = cleanedPaths(entries);
+  const pathOf = (i: number) => cleaned?.get(i) ?? entries[i].path;
   let offset = 0;
   let directory = 0;
   for (let i = 0; i < count; i++) {
     const entry = entries[i];
-    nameLength[i] = Buffer.byteLength(entry.path) + (entry.kind === "folder" ? 1 : 0);
-    if (nameLength[i] > U16_MAX) throw new Error(`A path in this archive is too long: ${entry.path.slice(0, 80)}…`);
+    const path = pathOf(i);
+    nameLength[i] = Buffer.byteLength(path) + (entry.kind === "folder" ? 1 : 0);
+    if (nameLength[i] > U16_MAX) throw new Error(`A path in this archive is too long: ${path.slice(0, 80)}…`);
     if (entry.kind === "text" && entry.crc32 === null) {
       const { data } = content(i) as { data: Buffer };
       sizes[i] = data.length;
@@ -180,8 +238,7 @@ export function zipPlan(entries: readonly ZipEntry[], content: (index: number) =
     // Written as each header goes out: a body costs nothing until bytes are asked for.
     const shift = wallClock(timeZone);
     const stamp = (i: number) => dosDateTime(shift(entries[i].created));
-    const name = (i: number) =>
-      Buffer.from(entries[i].kind === "folder" ? `${entries[i].path}/` : entries[i].path, "utf8");
+    const name = (i: number) => Buffer.from(entries[i].kind === "folder" ? `${pathOf(i)}/` : pathOf(i), "utf8");
     const timestamp = (w: Writer, i: number) => w.u16(0x5455).u16(5).u8(1).u32(seconds[i]);
     const localHeader = (i: number) => {
       const dos = stamp(i);

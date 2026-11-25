@@ -130,6 +130,43 @@ test("zipLayout keeps ZIP64 sizes and offsets above 4 GiB", async () => {
   assert.equal(second.offset, BigInt(local.length + hugeSize));
 });
 
+test("zipLayout: names stored before the name rules are written as they'd download, each unique in its folder", async () => {
+  const text = Buffer.from("x");
+  const entry = (path: string, kind: "folder" | "text" = "text") => ({
+    path,
+    created: Date.UTC(2026, 0, 1),
+    kind,
+    size: 0,
+    crc32: null,
+  });
+  const entries = [
+    entry("Reports", "folder"),
+    // An override that shows "photo‮gpj.exe" as "photoexe.jpg", beside the name it cleans to.
+    entry("Reports/photo‮gpj.exe"),
+    entry("Reports/photogpj.exe"),
+    entry("old", "folder"),
+    entry("Old‮", "folder"),
+    entry("Old‮/a.txt"),
+    entry("​"),
+  ];
+  const zip = await read(
+    zipLayout(entries, () => ({ data: text })),
+    0,
+  );
+  const result = inspect(zip);
+  assert.equal(result.bad, null);
+  if (result.unzip !== null) assert.equal(result.unzip, 0);
+  assert.deepEqual(result.names, [
+    "Reports/",
+    "Reports/photogpj (2).exe",
+    "Reports/photogpj.exe",
+    "old/",
+    "Old (2)/",
+    "Old (2)/a.txt",
+    "Untitled",
+  ]);
+});
+
 test("zipLayout: any range of an archive with a large directory is the same slice of the whole", async () => {
   const texts = Array.from({ length: 50 }, (_, i) => Buffer.from(`text ${i} `.repeat(i)));
   const entries = Array.from({ length: 3000 }, (_, i) => ({
