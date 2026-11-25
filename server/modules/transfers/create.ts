@@ -31,6 +31,7 @@ export const OPEN_PER_NETWORK = 10;
 
 /** NUL, and half of a surrogate pair on its own: characters a text can't be stored with. */
 const UNSTORABLE = /\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 /**
  * The request's room, the owner's quota, service capacity and free disk space must all hold the new
@@ -98,6 +99,82 @@ function uniqueName(name: string, taken: TakenNames, preserveExtension = false) 
       taken.next.set(key, n + 1);
       return candidate;
     }
+  }
+}
+
+/**
+ * What a new transfer's nodes and uploads add to the running totals, worked out as they are inserted
+ * and written in a few statements at the end. It must match, row for row, what the insert triggers
+ * it stands in for would have added (nodes_insert, nodes_ready_insert, request_held_nodes_insert,
+ * held_nodes_insert and held_uploads_insert in schema.sql). Every upload it is told of belongs to
+ * the new, open transfer, credited to the same owner as the nodes; a pending file is never empty.
+ */
+class Totals {
+  private readonly visitor: boolean;
+  private entries = 0;
+  private bytes = 0;
+  private ready = 0;
+  private readyBytes = 0;
+  private pendingBytes = 0;
+  private readonly types = new Map<string, { bytes: number; files: number }>();
+  constructor(visitor: boolean) {
+    this.visitor = visitor;
+  }
+
+  node(kind: "file" | "folder" | "text", state: "pending" | "ready", size: number, mime: string) {
+    this.entries++;
+    this.bytes += size;
+    if (state === "pending") {
+      this.pendingBytes += size;
+      return;
+    }
+    this.ready++;
+    this.readyBytes += size;
+    if (kind === "folder") return;
+    const type = this.types.get(mime) ?? { bytes: 0, files: 0 };
+    type.bytes += size;
+    if (kind === "file") type.files++;
+    this.types.set(mime, type);
+  }
+
+  apply(ctx: Context, owner: string, item: string) {
+    if (!this.entries) return;
+    // A pending file's upload is unfinished and has its node, so all of its bytes are still to come.
+    const unsent = this.pendingBytes;
+    if (this.readyBytes || this.pendingBytes)
+      ctx.db.run(
+        `UPDATE users SET bytes_used = bytes_used + ?, reserved_bytes = reserved_bytes + ?,
+           reserved_visitor_unsent = reserved_visitor_unsent + ?, unsent_member = unsent_member + ?,
+           unsent_visitor = unsent_visitor + ?
+         WHERE id = ?`,
+        this.readyBytes,
+        this.pendingBytes,
+        this.visitor ? unsent : 0,
+        this.visitor ? 0 : unsent,
+        this.visitor ? unsent : 0,
+        owner,
+      );
+    ctx.db.run(
+      "UPDATE items SET summary_dirty = 1, content_version = content_version + ? WHERE id = ?",
+      this.ready,
+      item,
+    );
+    ctx.db.run(
+      `UPDATE requests SET held_entries = held_entries + ?, held_bytes = held_bytes + ?
+       WHERE id = (SELECT request_id FROM items WHERE id = ?)`,
+      this.entries,
+      this.bytes,
+      item,
+    );
+    for (const [mime, type] of this.types)
+      ctx.db.run(
+        `INSERT INTO stored_types(owner, mime, bytes, files) VALUES(?, ?, ?, ?)
+         ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files`,
+        owner,
+        mime,
+        type.bytes,
+        type.files,
+      );
   }
 }
 
@@ -196,6 +273,7 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
       visitorEntries(plan.length);
       if (options.limit && plan.length + (text === null ? 0 : 1) > options.limit.entries)
         fail(413, "This request cannot take that many more files.");
+      options.planned?.(plan.length + (text === null ? 0 : 1));
 
       const now = Date.now();
       const named = typeof options.itemName === "function" ? options.itemName(plan) : options.itemName;
@@ -238,13 +316,6 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
 
       const appending = options.itemId !== undefined;
       let position = ctx.db.value<number>("SELECT coalesce(max(position) + 1, 0) FROM nodes WHERE item = ?", itemId)!;
-      const insertNode = ctx.db.sqlite.prepare(
-        `INSERT INTO nodes(id, item, owner, parent, name, kind, state, size, mime, blob, text, created, position)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      const insertUpload = ctx.db.sqlite.prepare(
-        "INSERT INTO uploads(id, transfer, node, size, created, touched, completed) VALUES(?, ?, ?, ?, ?, ?, ?)",
-      );
       const findSibling = ctx.db.sqlite.prepare(
         "SELECT id, kind FROM nodes WHERE item = ? AND ifnull(parent, '') = ? AND name = ? COLLATE NOCASE",
       );
@@ -257,91 +328,101 @@ export function createTransfer(ctx: Context, input: TransferInput, options: Crea
           itemId,
         ))
           topTaken.names.add(foldCase(row.name));
-      try {
-        for (const node of plan) {
-          const parent = node.parentKey === null ? null : ids.get(node.parentKey)!;
-          // Appending submissions are independent top-level entries. A collision gets a suffix,
-          // while the upload response below continues to expose the client's original path.
-          const name =
-            appending && node.parentKey === null ? uniqueName(node.name, topTaken, node.kind === "file") : node.name;
-          if (node.parentKey === null) topTaken.names.add(foldCase(name));
-          if (node.kind === "folder") {
-            const sibling =
-              appending && node.parentKey !== null
-                ? (findSibling.get(itemId, parent ?? "", node.name) as { id: string; kind: string } | undefined)
-                : undefined;
-            if (sibling && sibling.kind !== "folder") fail(409, NAME_TAKEN);
-            if (sibling) {
-              ids.set(node.key, sibling.id);
-              continue;
-            }
-            const id = uuidv7();
-            insertNode.run(
-              id,
-              itemId,
-              options.owner,
-              parent,
-              name,
-              "folder",
-              "ready",
-              0,
-              "",
-              null,
-              null,
-              now,
-              position++,
-            );
-            ids.set(node.key, id);
+      // Every node and every upload goes in with one statement. A statement for each row cost several
+      // times as much, mostly in work SQLite does once per statement, and a long list held up everyone
+      // else using Relay. The rows are worked out first; nothing is written until they all are.
+      // [id, parent, name, kind, state, size, mime, blob, position]
+      const nodeRows: (string | number | null)[][] = [];
+      // [id, node, size, completed]
+      const uploadRows: (string | number | null)[][] = [];
+      // The insert triggers stand aside while the rows go in (see deferred_totals in schema.sql);
+      // `totals` adds up what they would have, and is applied once all of them are in.
+      const totals = new Totals(options.principal.kind === "grant");
+      for (const node of plan) {
+        const parent = node.parentKey === null ? null : ids.get(node.parentKey)!;
+        // Appending submissions are independent top-level entries. A collision gets a suffix,
+        // while the upload response below continues to expose the client's original path.
+        const name =
+          appending && node.parentKey === null ? uniqueName(node.name, topTaken, node.kind === "file") : node.name;
+        if (node.parentKey === null) topTaken.names.add(foldCase(name));
+        if (node.kind === "folder") {
+          // A folder this list makes is empty until the rows go in, so only an existing one is looked in.
+          const sibling =
+            appending && node.parentKey !== null
+              ? (findSibling.get(itemId, parent ?? "", node.name) as { id: string; kind: string } | undefined)
+              : undefined;
+          if (sibling && sibling.kind !== "folder") fail(409, NAME_TAKEN);
+          if (sibling) {
+            ids.set(node.key, sibling.id);
             continue;
           }
-          const file = input.files[node.file!];
           const id = uuidv7();
-          const blob = file.size === 0 ? EMPTY_SHA256 : null;
-          // A type is a label for the browser; one with control characters is no type at all.
-          // A type with control characters (a line break, say) is no type at all.
-          // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
-          const mime = /[\0-\x1f\x7f]/.test(file.mime) ? "" : file.mime.slice(0, 120);
-          insertNode.run(
-            id,
+          nodeRows.push([id, parent, name, "folder", "ready", 0, "", null, position++]);
+          totals.node("folder", "ready", 0, "");
+          ids.set(node.key, id);
+          continue;
+        }
+        const file = input.files[node.file!];
+        const id = uuidv7();
+        const blob = file.size === 0 ? EMPTY_SHA256 : null;
+        // A type is a label for the browser; one with control characters (a line break, say) is no
+        // type at all. Half a surrogate pair becomes U+FFFD, as it did when each row was bound itself.
+        // eslint-disable-next-line no-control-regex -- control characters are exactly what's refused.
+        const mime = /[\0-\x1f\x7f]/.test(file.mime) ? "" : file.mime.slice(0, 120).replace(LONE_SURROGATE, "�");
+        const state = blob ? "ready" : "pending";
+        nodeRows.push([id, parent, name, "file", state, file.size, mime, blob, position++]);
+        const upload = uuidv7();
+        uploadRows.push([upload, id, file.size, blob ? now : null]);
+        totals.node("file", state, file.size, mime);
+        uploads[node.file!] = upload;
+        ids.set(node.key, id);
+      }
+      ctx.db.run("INSERT INTO deferred_totals(id) VALUES(1)");
+      try {
+        if (nodeRows.length)
+          ctx.db.run(
+            `INSERT INTO nodes(id, item, owner, parent, name, kind, state, size, mime, blob, text, created, position)
+             SELECT value->>0, ?, ?, value->>1, value->>2, value->>3, value->>4, value->>5, value->>6, value->>7,
+               NULL, ?, value->>8
+             FROM json_each(?)`,
             itemId,
             options.owner,
-            parent,
-            name,
-            "file",
-            blob ? "ready" : "pending",
-            file.size,
-            mime,
-            blob,
-            null,
             now,
-            position++,
+            JSON.stringify(nodeRows),
           );
-          const upload = uuidv7();
-          insertUpload.run(upload, input.id, id, file.size, now, now, blob ? now : null);
-          uploads[node.file!] = upload;
-          ids.set(node.key, id);
-        }
+        if (uploadRows.length)
+          ctx.db.run(
+            `INSERT INTO uploads(id, transfer, node, size, created, touched, completed)
+             SELECT value->>0, ?, value->>1, value->>2, ?, ?, value->>3 FROM json_each(?)`,
+            input.id,
+            now,
+            now,
+            JSON.stringify(uploadRows),
+          );
+        // A text is bound as it is rather than passed through JSON.
         if (text !== null) {
-          insertNode.run(
+          ctx.db.run(
+            `INSERT INTO nodes(id, item, owner, parent, name, kind, state, size, mime, blob, text, created, position)
+             VALUES(?, ?, ?, NULL, ?, 'text', 'ready', ?, 'text/plain', NULL, ?, ?, ?)`,
             uuidv7(),
             itemId,
             options.owner,
-            null,
             textName(topTaken),
-            "text",
-            "ready",
             Buffer.byteLength(text),
-            "text/plain",
-            null,
             text,
             now,
             position++,
           );
+          totals.node("text", "ready", Buffer.byteLength(text), "text/plain");
         }
       } catch (error) {
         if (isUniqueViolation(error)) fail(409, NAME_TAKEN);
         throw error;
+      } finally {
+        // Left in place, the row would switch the triggers off for good.
+        ctx.db.run("DELETE FROM deferred_totals");
       }
+      totals.apply(ctx, options.owner, itemId);
       assertTransferAvailability(ctx, { ...target, item: itemId });
       if (text !== null || input.files.some((f) => f.size === 0) || (!input.files.length && plan.length))
         startRetention(ctx, itemId);

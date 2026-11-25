@@ -124,6 +124,31 @@ test("opens and downloads are traced per person, never for the owner", async () 
   }
 });
 
+test("a download asked for as a range from the first byte to the last is counted", async () => {
+  const { instance, owner, link } = await setup();
+  try {
+    const visitor = new Client(instance);
+    const share = await openShare(visitor, link.token);
+    const file = share.nodes[0];
+    assert.equal((await download(visitor, link.token, file.id, { range: "bytes=0-3" })).statusCode, 206);
+    assert.equal((await owner.call(api.links.list))[0].downloads, 0, "the first bytes only are a page reading");
+    const whole = await download(visitor, link.token, file.id, { range: `bytes=0-${file.size - 1}` });
+    assert.equal(whole.statusCode, 206);
+    assert.equal(whole.body, "alpha");
+    assert.equal((await owner.call(api.links.list))[0].downloads, 1);
+
+    const zip = urls.shareZip(link.token);
+    const length = Number((await visitor.raw({ method: "HEAD", url: zip })).headers["content-length"]);
+    assert.equal((await owner.call(api.links.list))[0].downloads, 1, "a HEAD takes nothing");
+    const part = await visitor.raw({ method: "GET", url: zip, headers: { range: `bytes=0-${length - 1}` } });
+    assert.equal(part.statusCode, 206);
+    assert.equal(part.rawPayload.length, length);
+    assert.equal((await owner.call(api.links.list))[0].downloads, 2);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("a password locks the content until entered; changing it locks everyone out again", async () => {
   const { instance, owner, link } = await setup({ password: "open sesame" });
   try {

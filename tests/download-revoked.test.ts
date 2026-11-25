@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { request, type IncomingMessage } from "node:http";
 import { api, urls } from "../shared/api.ts";
-import { RECHECK_GAP_MS, RECHECK_MS } from "../server/modules/downloads/serve.ts";
+import { RECHECK_MS } from "../server/modules/downloads/serve.ts";
 import { admin, Client, member, openShare, send, start, type Instance } from "./support/harness.ts";
 
 const FILE = 16 * 1024 * 1024;
@@ -49,12 +49,10 @@ function begin(url: string, client: Client, headers: Record<string, string> = {}
   });
 }
 
-/**
- * Reads the rest: how many more bytes came, and whether the body reached its Content-Length. It
- * waits out the shortest gap between checks first, so the next megabyte is always checked.
- */
-async function finish(res: IncomingMessage) {
-  await new Promise((resolve) => setTimeout(resolve, RECHECK_GAP_MS));
+/** Reads the rest at once: how many more bytes came, and whether the body reached its Content-Length. */
+function finish(res: IncomingMessage) {
+  // A download cut while the test was reading another one may already have closed.
+  if (res.closed) return Promise.resolve({ bytes: 0, complete: res.complete });
   return new Promise<{ bytes: number; complete: boolean }>((resolve) => {
     let bytes = 0;
     res.on("data", (chunk: Buffer) => (bytes += chunk.length));
@@ -92,6 +90,45 @@ test("turning a link off stops its downloads already running", async () => {
     assert.ok(!rest.complete, "cut short");
     assert.ok(first + rest.bytes < length);
   }
+});
+
+test("a file download is cut short even when its link is turned off the moment it starts", async () => {
+  const link = await newLink();
+  const visitor = new Client(instance);
+  const share = await openShare(visitor, link.token);
+  const node = share.nodes.find((n) => n.kind === "file")!;
+  const { res, first, length } = await begin(urls.shareContent(link.token, node.id), visitor);
+  // As the owner's request would, but without its own time: within a few milliseconds of the start.
+  instance.ctx.db.run("UPDATE links SET revoked = ? WHERE id = ?", Date.now(), link.id);
+  const rest = await finish(res);
+  assert.ok(!rest.complete, "cut short");
+  assert.ok(first + rest.bytes < length, `${first + rest.bytes} bytes of ${length}`);
+});
+
+test("a password put on a link stops the downloads of people who never entered it", async () => {
+  const link = await newLink();
+  const visitor = new Client(instance);
+  await openShare(visitor, link.token);
+  const { res, first, length } = await begin(urls.shareZip(link.token), visitor);
+  await owner.call(api.links.update, { params: { id: link.id }, body: { password: "A-new-password-1" } });
+  const rest = await finish(res);
+  assert.ok(!rest.complete, "cut short");
+  assert.ok(first + rest.bytes < length);
+});
+
+test("a running share download asks again without letting the visitor in again each time", async (t) => {
+  const link = await newLink();
+  const visitor = new Client(instance);
+  await openShare(visitor, link.token);
+  const content = t.mock.method(instance.ctx.links, "content");
+  const still = t.mock.method(instance.ctx.links, "still");
+  const { res, length } = await begin(urls.shareZip(link.token), visitor);
+  const rest = await finish(res);
+  assert.ok(rest.complete);
+  assert.ok(length > 32 * 1024 * 1024);
+  // Once for the request and once just before its bytes go; every later check is the light one.
+  assert.ok(content.mock.callCount() <= 2, `${content.mock.callCount()} full checks`);
+  assert.ok(still.mock.callCount() >= 2, `${still.mock.callCount()} light checks`);
 });
 
 test("signing a device out stops its downloads already running, the export of everything too", async () => {

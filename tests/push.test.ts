@@ -303,6 +303,13 @@ test("a link notifies its owner on its first download only", async () => {
     await visit();
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(service.received.length, 1, "later downloads stay in Activity");
+    // A link keeps only its latest visits; those who downloaded being forgotten doesn't make the
+    // next download its first, even once the hour that shares one Activity entry has passed.
+    instance.ctx.db.run("DELETE FROM link_visits WHERE link = ?", link.id);
+    instance.ctx.db.run("UPDATE activity SET created = created - 7200000");
+    await visit();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(service.received.length, 1, "still the first download only");
   } finally {
     await instance.close();
     await service.close();
@@ -353,7 +360,7 @@ test("telling an owner about a link's first download costs the same however much
     await download();
     assert.deepEqual(readsActivity(plans()), []);
 
-    // With them, the owner hears of the first download only, found through the link's own visitors.
+    // With them, the owner hears of the first download only, found from the link's own count.
     const browser = await subscribe(owner, `${service.origin}/ivy`);
     const second = await owner.call(api.links.create, {
       body: { id: crypto.randomUUID(), item: result.itemId, days: 7 },
@@ -367,7 +374,11 @@ test("telling an owner about a link's first download costs the same however much
     assert.equal(browser.decrypt(service.received[0].body).title, "“Notes” was downloaded");
     const plan = plans();
     assert.deepEqual(readsActivity(plan), []);
-    assert.ok(plan.some((step) => /SEARCH link_visits USING (COVERING )?INDEX link_visits_downloaded/.test(step)));
+    assert.ok(
+      plan.some((step) =>
+        /^SEARCH links USING INDEX sqlite_autoindex_links_1 \(id=\?\) {2}<- {2}SELECT downloads FROM links/.test(step),
+      ),
+    );
     db.prepare = prepare;
   } finally {
     await instance.close();

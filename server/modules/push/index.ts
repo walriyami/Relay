@@ -133,13 +133,10 @@ function messageFor(
     };
   }
   if (event.kind === "link" && event.action === "downloaded") {
-    // Only the link's first download: later ones are in Activity and on the link. Its visitors who
-    // downloaded, counted no further than two, so a link with many costs no more than a new one.
-    const downloaders = ctx.db.value<number>(
-      "SELECT count(*) FROM (SELECT 1 FROM link_visits WHERE link = ? AND downloads > 0 LIMIT 2)",
-      event.linkId,
-    );
-    if (downloaders !== 1) return null;
+    // Only the link's first download: later ones are in Activity and on the link. The link's own
+    // count keeps everyone who ever downloaded, unlike its visits, of which the oldest are forgotten.
+    const downloads = ctx.db.value<number>("SELECT downloads FROM links WHERE id = ?", event.linkId);
+    if (downloads !== 1) return null;
     return {
       group: "links",
       message: {

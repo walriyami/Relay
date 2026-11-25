@@ -27,6 +27,8 @@ export const GUARD_STEP = 1024 ** 2;
  * its connection is simply cut.
  */
 const STOP_GRACE_MS = 2_000;
+/** Parts of discarded uploads removed straight away in one turn; a longer list's go in the background. */
+const UNLINKED_AT_ONCE = 64;
 
 const registry = new WeakMap<Context, Receivers>();
 /** The receivers of an app, once its transfers module made them. */
@@ -97,6 +99,11 @@ export class Receivers {
   private readonly closing = new AbortController();
   private rebuilding = 0;
   private readonly rebuildQueue: (() => void)[] = [];
+  /** Parts of discarded uploads still to remove (see discard). */
+  private readonly unlinking: string[] = [];
+  private draining = false;
+  /** Parts of discarded uploads removed at once in this turn of the event loop (see discard). */
+  private unlinkedNow = 0;
   /** Bytes committed per minute over the last hour, for the admin overview. */
   private readonly perMinute = new Map<number, number>();
 
@@ -627,6 +634,21 @@ export class Receivers {
     receiver?.cancelled.abort();
     receiver?.inflight?.stop();
     this.receivers.delete(id);
+    // An upload nothing has written to since Relay started usually has no part at all. Looking for
+    // thousands of those one after another, as cancelling a long list does, held everyone else up:
+    // a short send's are removed at once, as before, and the rest of a long list a few at a time
+    // in the background.
+    if (!receiver) {
+      if (this.unlinkedNow === 0) setImmediate(() => (this.unlinkedNow = 0));
+      if (++this.unlinkedNow > UNLINKED_AT_ONCE) {
+        this.unlinking.push(this.partPath(id));
+        if (!this.draining) {
+          this.draining = true;
+          void this.track(this.drainUnlinking());
+        }
+        return;
+      }
+    }
     try {
       unlinkIfPresent(this.partPath(id));
     } catch (error) {
@@ -637,6 +659,25 @@ export class Receivers {
       } catch {
         // The durable cancelled/deleted upload remains the source of truth for recovery.
       }
+    }
+  }
+
+  private async drainUnlinking() {
+    try {
+      while (this.unlinking.length) {
+        const batch = this.unlinking.splice(0, 32);
+        await Promise.all(
+          batch.map((path) =>
+            unlink(path).catch((error: NodeJS.ErrnoException) => {
+              // Startup recovery removes any part left behind.
+              if (error.code !== "ENOENT")
+                this.ctx.log.error({ err: error, path }, "Upload part removal pending; recovery will retry");
+            }),
+          ),
+        );
+      }
+    } finally {
+      this.draining = false;
     }
   }
 

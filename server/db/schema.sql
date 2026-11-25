@@ -259,16 +259,25 @@ CREATE TABLE stored_types (
   PRIMARY KEY (owner, mime)
 ) STRICT, WITHOUT ROWID;
 
+-- Holds one row only inside the transaction that creates or cancels a transfer, and never once it
+-- commits. While it does, the triggers that keep the running totals as nodes and uploads are added
+-- or removed leave them alone, and the create or cancel changes them itself in a few statements
+-- (see Totals in transfers/create.ts and cancelTransfer in transfers/lifecycle.ts). Run once per
+-- file, the triggers were much of the work of a long file list, which held up everyone using Relay.
+CREATE TABLE deferred_totals (
+  id INTEGER PRIMARY KEY CHECK (id = 1)
+) STRICT;
+
 -- Rows that would not change are left alone: a folder of thousands of files marks its item once,
 -- not once per file, and a change that moves no bytes does not rewrite its owner.
-CREATE TRIGGER nodes_insert AFTER INSERT ON nodes BEGIN
+CREATE TRIGGER nodes_insert AFTER INSERT ON nodes WHEN NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET bytes_used = bytes_used + NEW.size WHERE id = NEW.owner AND NEW.state = 'ready' AND NEW.size <> 0;
   UPDATE items SET summary_dirty = 1 WHERE id = NEW.item AND summary_dirty = 0;
   INSERT INTO stored_types(owner, mime, bytes, files)
     SELECT NEW.owner, NEW.mime, NEW.size, NEW.kind = 'file' WHERE NEW.state = 'ready' AND NEW.kind <> 'folder'
     ON CONFLICT(owner, mime) DO UPDATE SET bytes = bytes + excluded.bytes, files = files + excluded.files;
 END;
-CREATE TRIGGER nodes_delete AFTER DELETE ON nodes BEGIN
+CREATE TRIGGER nodes_delete AFTER DELETE ON nodes WHEN NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET bytes_used = bytes_used - OLD.size WHERE id = OLD.owner AND OLD.state = 'ready' AND OLD.size <> 0;
   UPDATE items SET summary_dirty = 1 WHERE id = OLD.item AND summary_dirty = 0;
   UPDATE stored_types SET bytes = bytes - OLD.size, files = files - (OLD.kind = 'file')
@@ -295,7 +304,8 @@ END;
 
 -- What a download can see is the ready nodes, so only they move an item's content_version: a
 -- folder or text saved, a file finishing, or anything about a ready node changing or going.
-CREATE TRIGGER nodes_ready_insert AFTER INSERT ON nodes WHEN NEW.state = 'ready' BEGIN
+CREATE TRIGGER nodes_ready_insert AFTER INSERT ON nodes
+WHEN NEW.state = 'ready' AND NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE items SET content_version = content_version + 1 WHERE id = NEW.item;
 END;
 CREATE TRIGGER nodes_ready_update AFTER UPDATE ON nodes WHEN OLD.state = 'ready' OR NEW.state = 'ready' BEGIN
@@ -336,6 +346,18 @@ CREATE TABLE guest_grants (
 CREATE INDEX guest_grants_request ON guest_grants(request_id, network, address, created);
 CREATE INDEX guest_grants_item ON guest_grants(item) WHERE item IS NOT NULL;
 CREATE INDEX guest_grants_expires ON guest_grants(expires);
+
+-- Each new send a request link's visitors started in the last hour, with how many files and folders
+-- it listed and the network (an IPv4 /24 or IPv6 /56) it came from. Cancelled sends stay counted:
+-- a send that is started and cancelled over and over costs the server as much as one kept.
+CREATE TABLE visitor_sends (
+  request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  network TEXT NOT NULL,
+  entries INTEGER NOT NULL,
+  created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX visitor_sends_request ON visitor_sends(request_id, created);
+CREATE INDEX visitor_sends_created ON visitor_sends(created);
 
 CREATE TABLE transfers (
   id TEXT PRIMARY KEY,
@@ -385,11 +407,11 @@ CREATE INDEX uploads_node ON uploads(node) WHERE node IS NOT NULL;
 -- nothing, so the uploads that cascade after it change nothing more.
 -- requests.held_entries and held_bytes. An item about to be deleted takes its nodes off its request
 -- first; the nodes that cascade after it no longer find their item, so they change nothing more.
-CREATE TRIGGER request_held_nodes_insert AFTER INSERT ON nodes BEGIN
+CREATE TRIGGER request_held_nodes_insert AFTER INSERT ON nodes WHEN NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE requests SET held_entries = held_entries + 1, held_bytes = held_bytes + NEW.size
     WHERE id = (SELECT request_id FROM items WHERE id = NEW.item);
 END;
-CREATE TRIGGER request_held_nodes_delete AFTER DELETE ON nodes BEGIN
+CREATE TRIGGER request_held_nodes_delete AFTER DELETE ON nodes WHEN NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE requests SET held_entries = held_entries - 1, held_bytes = held_bytes - OLD.size
     WHERE id = (SELECT request_id FROM items WHERE id = OLD.item);
 END;
@@ -418,13 +440,16 @@ WHEN OLD.request_id IS NOT NEW.request_id BEGIN
     WHERE id = NEW.request_id;
 END;
 
-CREATE TRIGGER held_nodes_insert AFTER INSERT ON nodes WHEN NEW.state = 'pending' AND NEW.size <> 0 BEGIN
+CREATE TRIGGER held_nodes_insert AFTER INSERT ON nodes
+WHEN NEW.state = 'pending' AND NEW.size <> 0 AND NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET reserved_bytes = reserved_bytes + NEW.size WHERE id = NEW.owner;
 END;
-CREATE TRIGGER held_nodes_delete AFTER DELETE ON nodes WHEN OLD.state = 'pending' AND OLD.size <> 0 BEGIN
+CREATE TRIGGER held_nodes_delete AFTER DELETE ON nodes
+WHEN OLD.state = 'pending' AND OLD.size <> 0 AND NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET reserved_bytes = reserved_bytes - OLD.size WHERE id = OLD.owner;
 END;
-CREATE TRIGGER held_nodes_before_delete BEFORE DELETE ON nodes WHEN OLD.state = 'pending' BEGIN
+CREATE TRIGGER held_nodes_before_delete BEFORE DELETE ON nodes
+WHEN OLD.state = 'pending' AND NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (
       SELECT sum(OLD.size - u.offset) FROM uploads u JOIN transfers t ON t.id = u.transfer
       WHERE u.node = OLD.id AND t.principal LIKE 'grant:%' AND t.owner = users.id)
@@ -445,7 +470,7 @@ WHEN OLD.state IS NOT NEW.state OR OLD.size IS NOT NEW.size OR OLD.owner IS NOT 
     WHERE id IN (SELECT t.owner FROM uploads u JOIN transfers t ON t.id = u.transfer
       WHERE u.node = NEW.id AND t.principal LIKE 'grant:%');
 END;
-CREATE TRIGGER held_uploads_insert AFTER INSERT ON uploads BEGIN
+CREATE TRIGGER held_uploads_insert AFTER INSERT ON uploads WHEN NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent + (SELECT size - NEW.offset FROM nodes WHERE id = NEW.node)
     WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = NEW.node
       WHERE t.id = NEW.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
@@ -466,8 +491,9 @@ CREATE TRIGGER held_uploads_delete AFTER DELETE ON uploads BEGIN
       AND id = (SELECT owner FROM transfers WHERE id = OLD.transfer AND state = 'open');
 END;
 CREATE TRIGGER held_uploads_update AFTER UPDATE OF node, transfer, size, offset, completed ON uploads
-WHEN OLD.node IS NOT NEW.node OR OLD.transfer IS NOT NEW.transfer OR OLD.size IS NOT NEW.size
-  OR OLD.offset IS NOT NEW.offset OR (OLD.completed IS NULL) IS NOT (NEW.completed IS NULL) BEGIN
+WHEN (OLD.node IS NOT NEW.node OR OLD.transfer IS NOT NEW.transfer OR OLD.size IS NOT NEW.size
+  OR OLD.offset IS NOT NEW.offset OR (OLD.completed IS NULL) IS NOT (NEW.completed IS NULL))
+  AND NOT EXISTS (SELECT 1 FROM deferred_totals) BEGIN
   UPDATE users SET reserved_visitor_unsent = reserved_visitor_unsent - (SELECT size - OLD.offset FROM nodes WHERE id = OLD.node)
     WHERE id = (SELECT t.owner FROM transfers t JOIN nodes n ON n.id = OLD.node
       WHERE t.id = OLD.transfer AND t.principal LIKE 'grant:%' AND n.state = 'pending');
@@ -583,9 +609,6 @@ CREATE TRIGGER link_visits_update AFTER UPDATE OF downloads, last ON link_visits
       last_visit = max(ifnull(last_visit, 0), NEW.last)
     WHERE id = NEW.link;
 END;
-
--- Whether a link has been downloaded before, however many people only opened it.
-CREATE INDEX link_visits_downloaded ON link_visits(link) WHERE downloads > 0;
 
 -- An item sent to one of the owner's devices. The device needn't have Relay open: the delivery waits
 -- until it does (see delivery_receipts). The receiving device answers it: accepted (downloaded there)

@@ -10,16 +10,25 @@ import { MAX_GUEST_COOKIES } from "../server/lib/auth.ts";
 import { randomToken } from "../server/lib/secrets.ts";
 import { MAX_LARGE_GUEST_BODIES, MAX_LARGE_GUEST_BODIES_EACH } from "../server/lib/http.ts";
 import { Client, admin, member, start, type Instance } from "./support/harness.ts";
+import { startProvider } from "./support/sso-provider.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
 /**
- * Sends the headers of a POST declaring a body of `size` bytes, then only its first bytes. `answer`
- * is whatever Relay answers before the rest: it can't have parsed a body it never got.
+ * Sends the headers of a POST (or `method`) declaring a body of `size` bytes, then only its first
+ * bytes. `answer` is whatever Relay answers before the rest: it can't have parsed a body it never got.
  */
 function postUnfinished(
   address: string,
   path: string,
-  { cookie = "", csrf = "", size = LIMITS.manifestBytes - 1024, from = "" } = {},
+  {
+    cookie = "",
+    csrf = "",
+    size = LIMITS.manifestBytes - 1024,
+    from = "",
+    method = "POST",
+    host = "relay.test",
+    extra = [] as string[],
+  } = {},
 ) {
   const { hostname, port } = new URL(address);
   const socket = connect(Number(port), hostname);
@@ -36,9 +45,10 @@ function postUnfinished(
   });
   socket.write(
     [
-      `POST ${path} HTTP/1.1`,
-      "Host: relay.test",
+      `${method} ${path} HTTP/1.1`,
+      `Host: ${host}`,
       "Content-Type: application/json",
+      ...extra,
       `Content-Length: ${size}`,
       ...(cookie ? [`Cookie: ${cookie}`] : []),
       ...(csrf ? [`X-Relay-CSRF: ${csrf}`] : []),
@@ -108,6 +118,32 @@ test("a stranger's large upload manifest is refused before Relay reads it", asyn
     });
   } finally {
     await instance.close();
+  }
+});
+
+test("an upload's chunks and Walriyami's link and sign-out are refused to a stranger before their body is read", async () => {
+  const provider = await startProvider();
+  const instance = await start({ origin: "http://localhost", sso: provider.config });
+  try {
+    const address = await listen(instance);
+    const early = (path: string, options: Parameters<typeof postUnfinished>[2] = {}) =>
+      refusedEarly(address, path, { host: "localhost", size: 1000, ...options });
+    // As a chunk of an upload, but with a body Relay would parse.
+    const chunk = { method: "PATCH", extra: ["Tus-Resumable: 1.0.0", "Upload-Offset: 0"] };
+    const anonymous = await early(`/uploads/${crypto.randomUUID()}`, chunk);
+    assert.equal(statusOf(anonymous), 401, anonymous);
+    assert.equal(statusOf(await early("/api/sso/link")), 401);
+    assert.equal(statusOf(await early("/api/sso/logout")), 401);
+
+    // Someone signed in is let through to the route's own checks, as before.
+    const owner = await admin(instance);
+    const signedIn = { cookie: cookieHeader(owner), csrf: owner.csrf };
+    assert.equal(statusOf(await early(`/uploads/${crypto.randomUUID()}`, { ...chunk, ...signedIn })), 415);
+    const linked = await owner.raw({ method: "POST", url: "/api/sso/link", payload: { password: "wrong-password!" } });
+    assert.equal(linked.statusCode, 403);
+  } finally {
+    await instance.close();
+    await provider.close();
   }
 });
 

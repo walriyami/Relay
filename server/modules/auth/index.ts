@@ -28,6 +28,8 @@ export async function sweepAuth(ctx: Context, now: number) {
   await ctx.db.deleteBatched("login_codes", "revoked IS NOT NULL");
   await ctx.db.deleteBatched("invites", "expires <= ?", now);
   await ctx.db.deleteBatched("guest_grants", "expires <= ?", now);
+  // Only the last hour's sends count towards a request link's limits (see VISITOR_SENDS).
+  await ctx.db.deleteBatched("visitor_sends", "created <= ?", now - 3_600_000);
   // Their guests go with them.
   await ctx.db.deleteBatched("nearby_invites", "expires <= ?", now);
 }

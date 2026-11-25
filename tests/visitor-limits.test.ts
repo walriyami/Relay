@@ -7,12 +7,13 @@ import { test } from "node:test";
 import { api, urls } from "../shared/api.ts";
 import { DEFAULTS, LIMITS } from "../shared/model.ts";
 import { GUEST_STREAMS_PER_ADDRESS } from "../server/modules/auth/streams.ts";
-import { UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
+import { GUEST_TABS_KEPT, UNSTARTED_GUEST_MS } from "../server/modules/transfers/lifecycle.ts";
 import { OPEN_PER_NETWORK } from "../server/modules/transfers/create.ts";
-import { VISITS_PER_ADDRESS, VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
+import { VISITOR_SENDS, VISITS_PER_ADDRESS, VISITS_PER_NETWORK } from "../server/modules/requests/guests.ts";
 import { receiversOf } from "../server/modules/transfers/receivers.ts";
 import { DISK_HEADROOM } from "../server/modules/transfers/room.ts";
 import { ApiError, Client, admin, member, patchUpload, start, type Instance } from "./support/harness.ts";
+import type { Grant, Principal } from "../server/context.ts";
 import { eventually, listen, Stream } from "./support/event-stream.ts";
 
 const MiB = 1024 ** 2;
@@ -155,6 +156,90 @@ test("starting new visits doesn't reset how many sends one network may hold open
     assert.equal(await one("2001:db8:0:ff::1"), 429, "so is another /64 in the same /56");
     assert.equal(await one("198.51.101.1"), 200, "another network still can");
     assert.equal(await one("2001:db8:0:100::1"), 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("cancelled sends still count towards how much a network and a link may send in an hour", async (t) => {
+  // Small limits stand in for the real ones; what matters is what counts and what doesn't.
+  t.mock.property(VISITOR_SENDS, "network", { sends: 3, entries: 8 });
+  t.mock.property(VISITOR_SENDS, "link", { sends: 5, entries: 100 });
+  const instance = await start();
+  try {
+    const owner = await member(instance, "send-limits-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Open", description: "", days: 5, maxBytes: 1000 },
+    });
+    const guest = await visit(instance, request.token, "198.51.100.7");
+    const sendAndCancel = async (client: Client, count = 1) => {
+      const sent = await sendTo(
+        client,
+        request.token,
+        Array.from({ length: count }, (_, i) => ({ path: `f${i}`, size: 1 })),
+      );
+      await client.call(api.transfers.cancel, { params: { id: sent.id } });
+      return sent;
+    };
+    // A retry of a send already made is not another send.
+    const files = [{ mime: "", path: "kept", size: 1 }];
+    const first = await sendTo(guest, request.token, files);
+    const retried = await guest.call(api.requests.transfer, {
+      params: { token: request.token },
+      body: { id: first.id, tab: guest.tab, folders: [], files },
+    });
+    assert.equal(retried.id, first.id);
+    await guest.call(api.transfers.cancel, { params: { id: first.id } });
+    await sendAndCancel(guest);
+    await sendAndCancel(guest);
+    const refused = await guest.raw({
+      method: "POST",
+      url: `/api/r/${request.token}/transfers`,
+      payload: { id: crypto.randomUUID(), tab: guest.tab, folders: [], files: [{ path: "a", size: 1, mime: "" }] },
+    });
+    assert.equal(refused.statusCode, 429);
+    assert.match(refused.json<{ error: string }>().error, /from your network in the last hour/);
+    assert.ok(Number(refused.headers["retry-after"]) >= 60);
+    // A new visit from the same network is the same network.
+    const again = await visit(instance, request.token, "198.51.100.8");
+    assert.equal(await status(sendTo(again, request.token, [{ path: "a", size: 1 }])), 429);
+
+    // Entries count as well as sends: another network may list 8 in all.
+    const other = await visit(instance, request.token, "203.0.113.7");
+    await sendAndCancel(other, 6);
+    assert.equal(
+      await status(
+        sendTo(other, request.token, [
+          { path: "a", size: 1 },
+          { path: "b", size: 1 },
+          { path: "c", size: 1 },
+        ]),
+      ),
+      429,
+    );
+    // The folders a path implies are entries too: one file two folders down is three.
+    assert.equal(await status(sendTo(other, request.token, [{ path: "x/y/deep", size: 1 }])), 429);
+    assert.equal(
+      instance.ctx.db.value(
+        "SELECT entries FROM visitor_sends WHERE network = ? ORDER BY created DESC LIMIT 1",
+        "203.0.113.0/24",
+      ),
+      6,
+    );
+    await sendAndCancel(other, 2);
+
+    // Five sends in all reach the link's own limit, whichever network the next one comes from.
+    const third = await visit(instance, request.token, "192.0.2.7");
+    assert.equal(await status(sendTo(third, request.token, [{ path: "a", size: 1 }])), 429);
+
+    // An hour later the limits are back.
+    instance.ctx.db.run("UPDATE visitor_sends SET created = created - ?", VISITOR_SENDS.windowMs);
+    assert.equal(await status(sendTo(third, request.token, [{ path: "a", size: 1 }])), 200);
+    assert.equal(
+      instance.ctx.db.value("SELECT count(*) FROM visitor_sends"),
+      1,
+      "a send clears the link's sends from before the hour",
+    );
   } finally {
     await instance.close();
   }
@@ -444,6 +529,58 @@ test("a session that ended in this browser doesn't hold a new one's live updates
     assert.equal(await open(after), "event: ready");
   } finally {
     await Promise.all(streams.map((stream) => stream.close()));
+    await instance.close();
+  }
+});
+
+test("a visitor naming new pages again and again keeps only a few on record", async () => {
+  const instance = await start();
+  try {
+    const owner = await member(instance, "tab-owner");
+    const request = await owner.call(api.requests.create, {
+      body: { id: crypto.randomUUID(), name: "Tabs", description: "", days: 5, maxBytes: 1000 },
+    });
+    const guest = await visit(instance, request.token);
+    const sent = await sendTo(guest, request.token, [{ path: "kept", size: 1 }]);
+    const { db } = instance.ctx;
+    const tokenHash = db.value<string>("SELECT token_hash FROM guest_grants WHERE request_id = ?", request.id)!;
+    const grant: Grant = {
+      kind: "grant",
+      tokenHash,
+      requestId: request.id,
+      owner: "",
+      itemId: null,
+      csrf: "",
+      expires: 0,
+    };
+    // As an update stream opened under a made-up page name would.
+    const names = Array.from({ length: GUEST_TABS_KEPT * 3 }, () => crypto.randomUUID());
+    for (const name of names) assert.equal(instance.ctx.transfers.renewTab(name, grant), true);
+    const kept = (name: string) => !!db.get("SELECT 1 FROM tabs WHERE id = ?", name);
+    assert.equal(db.value("SELECT count(*) FROM tabs WHERE principal = ?", `grant:${tokenHash}`), GUEST_TABS_KEPT + 1);
+    assert.deepEqual(
+      names.filter(kept),
+      names.slice(-GUEST_TABS_KEPT),
+      "the latest pages stay, and the page that sent something",
+    );
+    assert.ok(kept(guest.tab));
+    // A page closed just now is kept over ones used before it, so a create still on its way from
+    // it is refused rather than starting the page again.
+    const closing = crypto.randomUUID();
+    assert.equal(instance.ctx.transfers.renewTab(closing, grant), true);
+    db.run("UPDATE tabs SET closed = ? WHERE id = ?", Date.now(), closing);
+    assert.equal(instance.ctx.transfers.renewTab(crypto.randomUUID(), grant), true);
+    assert.ok(kept(closing));
+    assert.equal(instance.ctx.transfers.renewTab(closing, grant), false);
+    // The page that sent goes on as before.
+    await guest.call(api.transfers.cancel, { params: { id: sent.id } });
+    // A member's pages are theirs to name, and aren't limited this way.
+    const memberTabs = Array.from({ length: GUEST_TABS_KEPT + 4 }, () => crypto.randomUUID());
+    const ownerId = db.value<string>("SELECT id FROM users WHERE username = 'tab-owner'")!;
+    for (const name of memberTabs)
+      instance.ctx.transfers.renewTab(name, { kind: "member", userId: ownerId } as Principal);
+    assert.equal(memberTabs.filter(kept).length, memberTabs.length);
+  } finally {
     await instance.close();
   }
 });

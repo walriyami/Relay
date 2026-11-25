@@ -139,8 +139,20 @@ export function exportEntries(ctx: Context, owner: string) {
   return { rows, placed, wrappers };
 }
 
+/**
+ * An export worked out a moment ago, kept for EXPORT_KEPT_MS so the HEAD a browser or download
+ * manager sends first, a resumed download or several ranges don't check every file on disk again.
+ * It is used only while what it lists (`etag`) and the server's list of damaged copies are the same.
+ */
+type Exported = { etag: string; degraded: number; made: number; layout: ReturnType<typeof zipLayout> };
+export const EXPORT_KEPT_MS = 60_000;
+/** Exports larger than this are worked out each time rather than kept in memory. */
+const EXPORT_KEPT_ENTRIES = 100_000;
+
 export function registerAccountData(app: FastifyInstance, ctx: Context) {
   route(app, ctx, api.storage, ({ member }) => storageOverview(ctx, member.userId));
+  const exported = new Map<string, Exported>();
+  const degradedCopies = () => ctx.db.value<number>("SELECT count(*) FROM blobs WHERE integrity <> 'ok'") ?? 0;
 
   const signedIn = (req: FastifyRequest) => currentMember(ctx, req) ?? fail(401, "Sign in to continue.");
   // GET and HEAD share a handler, as in downloads: the automatic HEAD route would drop the length.
@@ -153,6 +165,17 @@ export function registerAccountData(app: FastifyInstance, ctx: Context) {
       // the few places for that; sending the archive afterwards doesn't hold one.
       const { layout, etag } = await preparing(ctx, reply, member.userId, async () => {
         const { rows, placed, wrappers } = exportEntries(ctx, member.userId);
+        // MS-DOS times have no time zone, so they are written in the downloader's, as for any other ZIP.
+        const timeZone = validTimeZone((req.query as { tz?: string }).tz);
+        const etag = createHash("sha256")
+          .update(timeZone ?? "")
+          .update(JSON.stringify(placed.map(({ row, path }) => [row.id, path, row.blob, row.size, row.created])))
+          .digest("hex");
+        const degraded = degradedCopies();
+        const now = Date.now();
+        for (const [key, kept] of exported) if (now - kept.made >= EXPORT_KEPT_MS) exported.delete(key);
+        const kept = exported.get(member.userId);
+        if (kept && kept.etag === etag && kept.degraded === degraded) return kept;
         for (const { row } of placed) if (row.kind === "file") await ctx.blobs.verify(row.blob!, row.size);
         const textRows = rows.filter((row) => row.kind === "text");
         const texts = new Map(
@@ -176,15 +199,21 @@ export function registerAccountData(app: FastifyInstance, ctx: Context) {
             return { ...base, content: { file: ctx.blobs.path(row.blob!) } };
           }),
         ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-        // MS-DOS times have no time zone, so they are written in the downloader's, as for any other ZIP.
-        const timeZone = validTimeZone((req.query as { tz?: string }).tz);
-        return {
+        const made: Exported = {
+          etag,
+          degraded,
+          // Kept from when the checks finished, so a slow export is still there for the GET after it.
+          made: Date.now(),
           layout: zipLayout(entries, (index) => entries[index].content!, timeZone),
-          etag: createHash("sha256")
-            .update(timeZone ?? "")
-            .update(JSON.stringify(placed.map(({ row, path }) => [row.id, path, row.blob, row.size, row.created])))
-            .digest("hex"),
         };
+        // One per member: the last one asked for, which is the one a HEAD is followed by.
+        if (entries.length <= EXPORT_KEPT_ENTRIES) {
+          exported.set(member.userId, made);
+          setTimeout(() => {
+            if (exported.get(member.userId) === made) exported.delete(member.userId);
+          }, EXPORT_KEPT_MS).unref();
+        } else exported.delete(member.userId);
+        return made;
       });
       const date = new Date().toISOString().slice(0, 10);
       reply

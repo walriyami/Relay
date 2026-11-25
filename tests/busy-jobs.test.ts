@@ -3,8 +3,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { api, urls } from "../shared/api.ts";
-import { JOBS_PER_MEMBER, JOBS_TOTAL, MEMBER_BUSY, SERVER_BUSY } from "../server/lib/jobs.ts";
-import { admin, member, send, start, type Client } from "./support/harness.ts";
+import {
+  JOBS_PER_MEMBER,
+  JOBS_SHARED_TOTAL,
+  JOBS_TOTAL,
+  MEMBER_BUSY,
+  SERVER_BUSY,
+  SHARED_BUSY,
+} from "../server/lib/jobs.ts";
+import { EXPORT_KEPT_MS } from "../server/modules/account-data/index.ts";
+import { Client, admin, member, openShare, send, start } from "./support/harness.ts";
 
 test("only a few archives are prepared at once, and a busy one says to try again", async () => {
   const instance = await start();
@@ -46,10 +54,183 @@ test("only a few archives are prepared at once, and a busy one says to try again
     for (const res of await Promise.all(waiting)) assert.equal(res.statusCode, 200);
     // The places are given back, refused or not.
     assert.equal((await exportZip(cy)).statusCode, 200);
+    // Something new to list, so the export just made isn't used again.
+    await send(ana, [{ path: "more.txt", data: "more" }]);
     instance.ctx.blobs.verify = () => Promise.reject(new Error("disk failed"));
     for (let i = 0; i <= JOBS_TOTAL; i++) assert.equal((await exportZip(ana)).statusCode, 500);
     instance.ctx.blobs.verify = verify;
     assert.equal((await exportZip(ana)).statusCode, 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("a HEAD before the export doesn't make the files be checked twice", async () => {
+  const instance = await start();
+  try {
+    const ana = await member(instance, "ana");
+    await send(ana, [{ path: "a.txt", data: "a" }]);
+    const verify = instance.ctx.blobs.verify.bind(instance.ctx.blobs);
+    let checks = 0;
+    instance.ctx.blobs.verify = (...args) => {
+      checks++;
+      return verify(...args);
+    };
+    const head = await ana.raw({ method: "HEAD", url: urls.exportZip() });
+    const get = await ana.raw({ method: "GET", url: urls.exportZip() });
+    assert.equal(head.statusCode, 200);
+    assert.equal(get.statusCode, 200);
+    assert.equal(head.headers["content-length"], get.headers["content-length"]);
+    assert.equal(head.headers.etag, get.headers.etag);
+    assert.equal(checks, 1);
+    // Anything new is listed, and checked.
+    await send(ana, [{ path: "b.txt", data: "b" }]);
+    const after = await ana.raw({ method: "GET", url: urls.exportZip() });
+    assert.notEqual(after.headers.etag, get.headers.etag);
+    assert.equal(checks, 3);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("an export whose checks took a while is still reused by the download after it", async () => {
+  const instance = await start();
+  const now = Date.now;
+  try {
+    const ana = await member(instance, "ana");
+    await send(ana, [{ path: "a.txt", data: "a" }]);
+    const verify = instance.ctx.blobs.verify.bind(instance.ctx.blobs);
+    let checks = 0;
+    let later = 0;
+    Date.now = () => now() + later;
+    instance.ctx.blobs.verify = async (...args) => {
+      checks++;
+      await verify(...args);
+      // Checking a large account's files can take longer than an export is kept.
+      later += EXPORT_KEPT_MS + 1_000;
+    };
+    const head = await ana.raw({ method: "HEAD", url: urls.exportZip() });
+    const get = await ana.raw({ method: "GET", url: urls.exportZip() });
+    assert.equal(head.statusCode, 200);
+    assert.equal(get.statusCode, 200);
+    assert.equal(checks, 1);
+  } finally {
+    Date.now = now;
+    await instance.close();
+  }
+});
+
+test("archives of items and of share links take the same few places, a link's visitors their own", async () => {
+  const instance = await start();
+  try {
+    const ana = await member(instance, "ana");
+    const ben = await member(instance, "ben");
+    const items: string[] = [];
+    // Two files each, so every archive is one to prepare.
+    for (let i = 0; i < 5; i++)
+      items.push(
+        (
+          await send(ana, [
+            { path: `a${i}.txt`, data: `a${i}` },
+            { path: `b${i}.txt`, data: `b${i}` },
+          ])
+        ).result.itemId,
+      );
+    const benItem = (
+      await send(ben, [
+        { path: "c.txt", data: "c" },
+        { path: "d.txt", data: "d" },
+      ])
+    ).result.itemId;
+    const visitor = new Client(instance);
+    const links = [];
+    for (const item of items.slice(2)) {
+      const link = await ana.call(api.links.create, { body: { id: crypto.randomUUID(), item, days: 7 } });
+      await openShare(visitor, link.token);
+      links.push(link);
+    }
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const verify = instance.ctx.blobs.verify.bind(instance.ctx.blobs);
+    instance.ctx.blobs.verify = async (...args) => {
+      await held;
+      return verify(...args);
+    };
+    const zip = (client: Client, url: string) => client.raw({ method: "GET", url });
+    // Two for everyone opening Ana's links, then her own two, which those visitors don't take.
+    const waiting = [
+      zip(visitor, urls.shareZip(links[0].token)),
+      zip(visitor, urls.shareZip(links[1].token)),
+      zip(ana, urls.itemZip(items[0])),
+      zip(ana, urls.itemZip(items[1])),
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The same archive asked for again waits for the one being prepared rather than taking a place.
+    waiting.push(zip(visitor, urls.shareZip(links[0].token)));
+    const shared = await zip(visitor, urls.shareZip(links[2].token));
+    assert.equal(shared.statusCode, 503);
+    assert.equal(shared.headers["retry-after"], "5");
+    assert.equal(shared.json<{ error: string }>().error, SHARED_BUSY);
+    const own = await zip(ana, urls.itemZip(items[4]));
+    assert.equal(own.statusCode, 503);
+    assert.equal(own.json<{ error: string }>().error, MEMBER_BUSY);
+    const server = await zip(ben, urls.itemZip(benItem));
+    assert.equal(server.statusCode, 503);
+    assert.equal(server.json<{ error: string }>().error, SERVER_BUSY);
+    release();
+    for (const res of await Promise.all(waiting)) assert.equal(res.statusCode, 200);
+    // The places are given back.
+    assert.equal((await zip(ben, urls.itemZip(benItem))).statusCode, 200);
+    assert.equal((await zip(visitor, urls.shareZip(links[2].token))).statusCode, 200);
+  } finally {
+    await instance.close();
+  }
+});
+
+test("visitors of several members' links leave members places for their own archives", async () => {
+  const instance = await start();
+  try {
+    const ana = await member(instance, "ana");
+    const ben = await member(instance, "ben");
+    // Two files each, so every archive is one to prepare.
+    const item = async (client: Client, name: string) =>
+      (
+        await send(client, [
+          { path: `${name}-1.txt`, data: name },
+          { path: `${name}-2.txt`, data: name },
+        ])
+      ).result.itemId;
+    const visitor = new Client(instance);
+    const share = async (client: Client, item: string) => {
+      const link = await client.call(api.links.create, { body: { id: crypto.randomUUID(), item, days: 7 } });
+      await openShare(visitor, link.token);
+      return link.token;
+    };
+    const anaLink = await share(ana, await item(ana, "a"));
+    const benLinks = [await share(ben, await item(ben, "b")), await share(ben, await item(ben, "c"))];
+    const anaOwn = await item(ana, "d");
+    const benOwn = await item(ben, "e");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const verify = instance.ctx.blobs.verify.bind(instance.ctx.blobs);
+    instance.ctx.blobs.verify = async (...args) => {
+      await held;
+      return verify(...args);
+    };
+    const zip = (client: Client, url: string) => client.raw({ method: "GET", url });
+    const waiting = [zip(visitor, urls.shareZip(anaLink)), zip(visitor, urls.shareZip(benLinks[0]))];
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(JOBS_SHARED_TOTAL, 2);
+    const third = await zip(visitor, urls.shareZip(benLinks[1]));
+    assert.equal(third.statusCode, 503);
+    assert.equal(third.headers["retry-after"], "5");
+    assert.equal(third.json<{ error: string }>().error, SERVER_BUSY);
+    // Both members still get a place for their own.
+    waiting.push(zip(ana, urls.itemZip(anaOwn)), zip(ben, urls.itemZip(benOwn)));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    for (const res of await Promise.all(waiting)) assert.equal(res.statusCode, 200);
+    assert.equal((await zip(visitor, urls.shareZip(benLinks[1]))).statusCode, 200);
   } finally {
     await instance.close();
   }

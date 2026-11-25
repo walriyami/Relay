@@ -457,3 +457,31 @@ test("expiry detected inside the publication transaction rolls back publication 
     await instance.close();
   }
 });
+
+test("a send that fails while its rows go in leaves the running totals working", async (t) => {
+  const instance = await start();
+  try {
+    const client = await member(instance, "rows-fail");
+    const first = await create(client, { files: [{ path: "x/a.txt", size: 0, mime: "" }] });
+    await save(client, first.id);
+    const { db } = instance.ctx;
+    // The totals are added up separately while the rows go in; a send that fails part way, such as
+    // one whose name was just taken by another, must not leave them switched off.
+    const run = db.run.bind(db);
+    t.mock.method(db, "run", (sql: string, ...args: Parameters<typeof run>[1][]) => {
+      if (sql.includes("INSERT INTO uploads")) throw new Error("disk I/O error");
+      return run(sql, ...args);
+    });
+    await assert.rejects(create(client, { files: [{ path: "b.txt", size: 1, mime: "" }] }));
+    t.mock.restoreAll();
+    assert.equal(db.value("SELECT count(*) FROM deferred_totals"), 0);
+    // The triggers keep the totals again: removing the file takes it off what its owner stores.
+    const ownerId = owner(instance, first.itemId);
+    const files = () => db.value<number>("SELECT coalesce(sum(files), 0) FROM stored_types WHERE owner = ?", ownerId);
+    assert.equal(files(), 1);
+    db.run("DELETE FROM nodes WHERE item = ? AND kind = 'file'", first.itemId);
+    assert.equal(files(), 0);
+  } finally {
+    await instance.close();
+  }
+});

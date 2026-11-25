@@ -103,14 +103,31 @@ export function registerTus(app: FastifyInstance, ctx: Context, receivers: Recei
   app.route({
     method: "PATCH",
     url: "/uploads/:id",
+    // Before any of the body is read, as for every other route: a body of another type isn't a
+    // chunk (and would be parsed), and someone with neither a session nor a request link has no upload.
+    preParsing: (req, reply, payload, done) => {
+      try {
+        tus(reply);
+        const auth = currentAuth(ctx, req);
+        if (!auth.member && !auth.grants.length) {
+          // As the handler would first: an upload whose visit has ended is given up, refused or not.
+          const upload = uploadRow(ctx, (req.params as { id: string }).id);
+          if (upload) settleTransferAvailability(ctx, upload);
+          fail(401, "Sign in to continue.");
+        }
+        if (req.headers["tus-resumable"] !== TUS_VERSION) {
+          reply.header("Tus-Version", TUS_VERSION);
+          fail(412, "This server speaks tus 1.0.0.");
+        }
+        if (req.headers["content-type"]?.split(";")[0].trim() !== TUS_TYPE)
+          fail(415, `Upload chunks must be sent as ${TUS_TYPE}.`);
+        done(null, payload);
+      } catch (error) {
+        done(error as Error);
+      }
+    },
     handler: async (req, reply) => {
       tus(reply);
-      if (req.headers["tus-resumable"] !== TUS_VERSION) {
-        reply.header("Tus-Version", TUS_VERSION);
-        fail(412, "This server speaks tus 1.0.0.");
-      }
-      if (req.headers["content-type"]?.split(";")[0].trim() !== TUS_TYPE)
-        fail(415, `Upload chunks must be sent as ${TUS_TYPE}.`);
       const header = req.headers["upload-offset"];
       if (typeof header !== "string" || !/^\d+$/.test(header)) fail(400, "Upload-Offset is required.");
       const offset = Number(header);

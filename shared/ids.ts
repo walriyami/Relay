@@ -1,14 +1,47 @@
+/** Two hexadecimal digits for each byte value. */
+const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, "0"));
+/**
+ * Random bytes drawn in one go and handed out ten per id. Asking the system for ten bytes at a
+ * time, and building the text a character at a time, made a long file list's ids a noticeable part
+ * of creating it; every id still gets bytes no other id had.
+ */
+const pool = new Uint8Array(4096);
+let used = pool.length;
+
 /** RFC 9562 UUIDv7: time-ordered, so ids sort by creation and index well. */
 export function uuidv7(now = Date.now()): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
+  if (used + 10 > pool.length) {
+    crypto.getRandomValues(pool);
+    used = 0;
+  }
+  const r = used;
+  used += 10;
+  const time: string[] = [];
   let t = now;
   for (let i = 5; i >= 0; i--) {
-    bytes[i] = t % 256;
+    time[i] = HEX[t % 256];
     t = Math.floor(t / 256);
   }
-  bytes[6] = (bytes[6] & 0x0f) | 0x70;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return (
+    time[0] +
+    time[1] +
+    time[2] +
+    time[3] +
+    "-" +
+    time[4] +
+    time[5] +
+    "-" +
+    HEX[(pool[r] & 0x0f) | 0x70] +
+    HEX[pool[r + 1]] +
+    "-" +
+    HEX[(pool[r + 2] & 0x3f) | 0x80] +
+    HEX[pool[r + 3]] +
+    "-" +
+    HEX[pool[r + 4]] +
+    HEX[pool[r + 5]] +
+    HEX[pool[r + 6]] +
+    HEX[pool[r + 7]] +
+    HEX[pool[r + 8]] +
+    HEX[pool[r + 9]]
+  );
 }

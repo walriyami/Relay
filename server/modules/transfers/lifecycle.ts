@@ -37,6 +37,9 @@ const stored = (destination: Destination): StoredDestination => {
 export const transferRow = (ctx: Context, id: string) =>
   ctx.db.get<TransferRow>("SELECT id, principal, owner, item, tab, state, result FROM transfers WHERE id = ?", id);
 
+/** Pages that sent nothing one request-link visit keeps on record; a new one forgets the oldest. */
+export const GUEST_TABS_KEPT = 16;
+
 export function renewTab(ctx: Context, tab: string, principal: Principal): boolean {
   const key = principalKey(principal);
   const lease = Date.now() + ctx.config.tabLeaseMs;
@@ -45,6 +48,19 @@ export function renewTab(ctx: Context, tab: string, principal: Principal): boole
     tab,
   );
   if (!row) {
+    // A request-link visit names its own pages, so each new name would otherwise add a row until
+    // the daily sweep. It keeps the few that sent nothing and were used (or closed) most recently,
+    // so a page just closed still refuses a create on its way; pages that sent something stay, and
+    // there are only as many of those as the visit may send.
+    if (principal.kind === "grant")
+      ctx.db.run(
+        `DELETE FROM tabs WHERE id IN (SELECT id FROM tabs WHERE principal = ?
+           AND NOT EXISTS (SELECT 1 FROM transfers WHERE tab = tabs.id)
+           ORDER BY coalesce(closed, lease_expires - ?) DESC, rowid DESC LIMIT -1 OFFSET ?)`,
+        key,
+        ctx.config.tabLeaseMs,
+        GUEST_TABS_KEPT - 1,
+      );
     ctx.db.run("INSERT INTO tabs(id, principal, lease_expires) VALUES(?, ?, ?)", tab, key, lease);
     return true;
   }
@@ -63,10 +79,53 @@ function cancelTransfer(ctx: Context, receivers: Receivers, transferId: string):
       "SELECT id FROM uploads WHERE transfer = ? AND completed IS NULL AND node IS NOT NULL",
       transferId,
     );
+    // The triggers that keep the running totals stand aside while the pending files go (see
+    // deferred_totals in schema.sql). What they would have taken away file by file is taken away
+    // here in three statements, worked out the same way: reserved bytes by each file's owner, the
+    // unsent bytes of every upload into those files by its transfer's owner, and the request each
+    // file's item belongs to. A pending file is a file, so nothing sits below it.
+    const doomed = `WITH doomed AS (SELECT id, owner, item, size FROM nodes WHERE state = 'pending'
+      AND id IN (SELECT node FROM uploads WHERE transfer = ? AND completed IS NULL))`;
     ctx.db.run(
-      "DELETE FROM nodes WHERE state = 'pending' AND id IN (SELECT node FROM uploads WHERE transfer = ? AND completed IS NULL)",
+      `${doomed} UPDATE users SET reserved_bytes = reserved_bytes - h.reserved,
+         reserved_visitor_unsent = reserved_visitor_unsent - h.visitor,
+         unsent_member = unsent_member - h.member, unsent_visitor = unsent_visitor - h.unsent
+       FROM (SELECT owner, sum(reserved) AS reserved, sum(visitor) AS visitor, sum(member) AS member,
+           sum(unsent) AS unsent
+         FROM (SELECT owner, size AS reserved, 0 AS visitor, 0 AS member, 0 AS unsent FROM doomed
+           UNION ALL
+           SELECT t.owner, 0,
+             CASE WHEN t.principal LIKE 'grant:%' THEN d.size - u.offset ELSE 0 END,
+             CASE WHEN u.completed IS NULL AND t.state = 'open' AND t.principal NOT LIKE 'grant:%'
+               THEN u.size - u.offset ELSE 0 END,
+             CASE WHEN u.completed IS NULL AND t.state = 'open' AND t.principal LIKE 'grant:%'
+               THEN u.size - u.offset ELSE 0 END
+           FROM doomed d JOIN uploads u ON u.node = d.id JOIN transfers t ON t.id = u.transfer)
+         GROUP BY owner) AS h
+       WHERE users.id = h.owner`,
       transferId,
     );
+    ctx.db.run(
+      `${doomed} UPDATE items SET summary_dirty = 1 WHERE summary_dirty = 0 AND id IN (SELECT item FROM doomed)`,
+      transferId,
+    );
+    ctx.db.run(
+      `${doomed} UPDATE requests SET held_entries = held_entries - h.entries, held_bytes = held_bytes - h.bytes
+       FROM (SELECT i.request_id, count(*) AS entries, sum(d.size) AS bytes FROM doomed d JOIN items i ON i.id = d.item
+         WHERE i.request_id IS NOT NULL GROUP BY i.request_id) AS h
+       WHERE requests.id = h.request_id`,
+      transferId,
+    );
+    ctx.db.run("INSERT INTO deferred_totals(id) VALUES(1)");
+    try {
+      ctx.db.run(
+        "DELETE FROM nodes WHERE state = 'pending' AND id IN (SELECT node FROM uploads WHERE transfer = ? AND completed IS NULL)",
+        transferId,
+      );
+    } finally {
+      // Left in place, the row would switch the triggers off for good.
+      ctx.db.run("DELETE FROM deferred_totals");
+    }
     ctx.db.run(
       "UPDATE transfers SET state = 'cancelled', finished = ? WHERE id = ? AND state = 'open'",
       Date.now(),
