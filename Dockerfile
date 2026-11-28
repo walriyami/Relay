@@ -1,6 +1,6 @@
 # The base is pinned by digest, so the same commit always builds the same image. Operating-system and
 # Node security fixes arrive by moving this digest to a newer one (Dependabot proposes it weekly).
-FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS dependencies
+FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530 AS dependencies
 WORKDIR /app
 COPY package*.json ./
 COPY vendor ./vendor
@@ -19,7 +19,7 @@ ARG RELAY_COMMIT=""
 RUN node server/build-stamp.ts "$RELAY_COMMIT"
 RUN npm run build
 
-FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
 # Relay starts with node directly; npm, Yarn and corepack are only needed in the build stage. bash and
 # perl aren't needed at all: nothing in Relay, its health check, deploy/*.sh or Walriyami Control runs
 # them, so a bug that let someone run a program in here finds fewer tools. /bin/sh (dash), tar and find
